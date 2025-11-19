@@ -281,46 +281,12 @@ export default class SnakeGame extends Phaser.Scene {
     let foodPos;
     let validPosition = false;
 
-    // 임시: 테스트용 - 벽에만 생성
-    const TEST_MODE = true;
-
     while (!validPosition) {
-      if (TEST_MODE) {
-        // 벽 근처에만 생성 (4면 중 랜덤)
-        const wallSide = Phaser.Math.Between(0, 3);
-        switch (wallSide) {
-          case 0: // 왼쪽 벽
-            foodPos = {
-              x: 0,
-              y: Phaser.Math.Between(0, this.rows - 1)
-            };
-            break;
-          case 1: // 오른쪽 벽
-            foodPos = {
-              x: this.cols - 1,
-              y: Phaser.Math.Between(0, this.rows - 1)
-            };
-            break;
-          case 2: // 위쪽 벽
-            foodPos = {
-              x: Phaser.Math.Between(0, this.cols - 1),
-              y: 0
-            };
-            break;
-          case 3: // 아래쪽 벽
-            foodPos = {
-              x: Phaser.Math.Between(0, this.cols - 1),
-              y: this.rows - 1
-            };
-            break;
-        }
-      } else {
-        // 원래 로직: 전체 영역에 랜덤 생성
-        foodPos = {
-          x: Phaser.Math.Between(0, this.cols - 1),
-          y: Phaser.Math.Between(0, this.rows - 1)
-        };
-      }
+      // 맵 전체 영역에 랜덤 생성
+      foodPos = {
+        x: Phaser.Math.Between(0, this.cols - 1),
+        y: Phaser.Math.Between(0, this.rows - 1)
+      };
 
       validPosition = !this.snake.some(segment =>
         segment.x === foodPos.x && segment.y === foodPos.y
@@ -402,27 +368,146 @@ export default class SnakeGame extends Phaser.Scene {
     let textOffsetY = 0;
 
     if (isOnLeftWall) {
-      // 왼쪽 벽: 좌우 반전 (꼬리가 먹이를 향함)
-      offsetX = 70; // 먹이 오른쪽에 배치 (22 -> 28로 증가)
-      offsetY = -30; // 우측상단 위치
-      originX = 1; // 말풍선 오른쪽 끝(꼬리)이 기준점
-      originY = 0.5;
-      textOffsetX = -35; // 텍스트를 말풍선 중앙으로 (반전했으므로 음수)
-      textOffsetY = -5;
-      flipX = true; // 좌우 반전
+      // 왼쪽 벽
+      if (isOnTopWall) {
+        // 왼쪽 위 모서리: 말풍선을 오른쪽 아래로
+        offsetY = 30; // 아래쪽으로 변경
+        originX = 1;
+        originY = 0.5;
+        textOffsetX = 38;
+        textOffsetY = 2;
+        rotation = -Math.PI;
+      } else if (foodPos.x === 0 && foodPos.y === 1) {
+        // 왼쪽 위 모서리 한 칸 아래 (0, 1)
+        offsetY = 30; // 아래쪽으로 변경
+        originX = 1;
+        originY = 0.5;
+        textOffsetX = 38;
+        textOffsetY = 2;
+        rotation = -Math.PI;
+      } else if (foodPos.x === 0 && foodPos.y === 2) {
+        // 왼쪽 위 모서리 한 칸 아래 (0, 1)
+        offsetY = 30; // 아래쪽으로 변경
+        originX = 1;
+        originY = 0.5;
+        textOffsetX = 38;
+        textOffsetY = 2;
+        rotation = -Math.PI;
+      } else if (isOnBottomWall) {
+        // 왼쪽 아래 모서리: 말풍선을 오른쪽 위로
+        offsetX = 70;
+        offsetY = -30;
+        originX = 1;
+        originY = 0.5;
+        textOffsetX = -35;
+        textOffsetY = -5;
+        flipX = true;
+      } else {
+        // 왼쪽 벽 중간: 기본값 (오른쪽 위로)
+        offsetX = 70;
+        offsetY = -30;
+        originX = 1;
+        originY = 0.5;
+        textOffsetX = -35;
+        textOffsetY = -5;
+        flipX = true;
+      }
     } else if (isOnRightWall) {
-      // 오른쪽 벽: 좌우 반전 (꼬리가 오른쪽)
-      offsetX = -30;
-      flipX = true;
+      // 오른쪽 벽
+      if (isOnTopWall) {
+        // 오른쪽 위 모서리: 말풍선을 왼쪽 아래로
+        offsetX = 5;
+        offsetY = 30; // 아래쪽으로 변경
+        originX = 0;
+        originY = 0.5;
+        textOffsetX = -35;
+        textOffsetY = 5;
+        rotation = -Math.PI;
+        flipX = true;
+      } else if (foodPos.x === this.cols - 1 && foodPos.y === 1) {
+        offsetX = 5;
+        offsetY = 30; // 아래쪽으로 변경
+        originX = 0;
+        originY = 0.5;
+        textOffsetX = -35;
+        textOffsetY = 5;
+        rotation = -Math.PI;
+        flipX = true;
+      } else if (foodPos.x === this.cols - 1 && foodPos.y === 2) {
+        offsetX = 5;
+        offsetY = 30; // 아래쪽으로 변경
+        originX = 0;
+        originY = 0.5;
+        textOffsetX = -35;
+        textOffsetY = 5;
+        rotation = -Math.PI;
+        flipX = true;
+      } else if (isOnBottomWall) {
+        // 오른쪽 아래 모서리: 말풍선을 왼쪽 위로
+        offsetX = -70;
+        offsetY = -30;
+        originX = 0;
+        originY = 0.5;
+        textOffsetX = 35;
+        textOffsetY = -5;
+        flipX = false;
+      } else {
+        // 오른쪽 벽 중간: 기본값 (왼쪽 위로)
+        offsetX = -70;
+        offsetY = -30;
+        originX = 0;
+        originY = 0.5;
+        textOffsetX = 35;
+        textOffsetY = -5;
+        flipX = false;
+      }
     } else if (isOnTopWall) {
-      // 위쪽 벽: -90도 회전 (꼬리가 위)
-      offsetY = 30;
-      rotation = -Math.PI / 2;
+      // 위쪽 벽
+      if (foodPos.x === this.cols - 2 && foodPos.y === 0) {
+        // 오른쪽 위 모서리 한 칸 왼쪽 (cols-2, 0)
+        offsetY = 30;
+        offsetX = -28;
+        textOffsetY = 5;
+        rotation = -Math.PI;
+        flipX = true;
+      } else if (foodPos.x === this.cols - 3 && foodPos.y === 0) {
+        // 오른쪽 위 모서리 두 칸 왼쪽 (cols-2, 0)
+        offsetY = 30;
+        offsetX = -28;
+        textOffsetY = 5;
+        rotation = -Math.PI;
+        flipX = true;
+      } else {
+        // 위쪽 벽 나머지: -180도 회전 (꼬리가 위)
+        offsetY = 30;
+        offsetX = 32;
+        textOffsetY = 5;
+        rotation = -Math.PI;
+      }
     } else if (isOnBottomWall) {
-      // 아래쪽 벽: 회전 없이 위에 표시
-      offsetY = -30;
-      rotation = 0;
-      flipX = false;
+      // 아래쪽 벽
+      if (foodPos.x === 1 && foodPos.y === this.rows - 1) {
+        // 왼쪽 아래 모서리 오른쪽 한 칸 (1, rows-1)
+        offsetY = -35;
+        offsetX = 20;
+        textOffsetY = -5;
+        rotation = 0;
+        flipX = true;
+      } else if (foodPos.x === 2 && foodPos.y === this.rows - 1) {
+        // 왼쪽 아래 모서리 오른쪽 두 칸 (2, rows-1)
+        offsetY = -35;
+        offsetX = 20;
+        textOffsetY = -5;
+        rotation = 0;
+        flipX = true;
+      } else {
+        // 아래쪽 벽 나머지: 회전 없이 위에 표시
+        offsetY = -30;
+        offsetX = -25;
+        textOffsetY = -5;
+        rotation = 0;
+        flipX = false;
+      }
     }
 
     bubbleX = foodX + offsetX;
