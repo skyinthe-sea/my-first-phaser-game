@@ -79,6 +79,10 @@ export default class SnakeGame extends Phaser.Scene {
     this.direction = 'RIGHT';
     this.inputQueue = []; // 입력 큐 (최대 2개까지 저장)
 
+    // 데드존 시스템 (stage 3부터) - generateFood()보다 먼저 초기화!
+    this.deadZones = []; // 밟으면 죽는 칸들 [{x, y, rect}]
+    this.deadZoneGraphics = this.add.graphics(); // 데드존 그리기용
+
     // 먹이
     this.food = this.generateFood();
     // this.foodBubble은 generateFood()에서 checkAndShowFoodBubble()을 통해 자동으로 설정됨
@@ -153,7 +157,7 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 먹이 텔레포트 시스템 (21번째부터)
     this.foodTeleportEnabled = false;
-    this.currentFoodTeleported = false; // 현재 먹이가 이미 텔레포트되었는지
+    this.currentFoodTeleportCount = 0; // 현재 먹이가 몇 번 텔레포트되었는지 (최대 2번)
     this.nextTeleportStep = 0; // 다음 텔레포트까지 남은 스텝
 
     // 콤보 시스템
@@ -284,16 +288,37 @@ export default class SnakeGame extends Phaser.Scene {
     let foodPos;
     let validPosition = false;
 
-    while (!validPosition) {
-      // 맵 전체 영역에 랜덤 생성
-      foodPos = {
-        x: Phaser.Math.Between(0, this.cols - 1),
-        y: Phaser.Math.Between(0, this.rows - 1)
-      };
+    // 10번째 먹이(foodCount === 9)는 중앙 부근에 생성
+    const shouldSpawnCenter = this.foodCount === 9;
 
-      validPosition = !this.snake.some(segment =>
+    while (!validPosition) {
+      if (shouldSpawnCenter) {
+        // 중앙 부근에 생성 (화면 중앙 ±5칸 범위)
+        const centerX = Math.floor(this.cols / 2);
+        const centerY = Math.floor(this.rows / 2);
+        foodPos = {
+          x: Phaser.Math.Between(Math.max(5, centerX - 5), Math.min(this.cols - 6, centerX + 5)),
+          y: Phaser.Math.Between(Math.max(5, centerY - 5), Math.min(this.rows - 6, centerY + 5))
+        };
+      } else {
+        // 맵 전체 영역에 랜덤 생성
+        foodPos = {
+          x: Phaser.Math.Between(0, this.cols - 1),
+          y: Phaser.Math.Between(0, this.rows - 1)
+        };
+      }
+
+      // 뱀과 겹치지 않는지 체크
+      const notOnSnake = !this.snake.some(segment =>
         segment.x === foodPos.x && segment.y === foodPos.y
       );
+
+      // 데드존과 겹치지 않는지 체크
+      const notOnDeadZone = !this.deadZones.some(dz =>
+        dz.x === foodPos.x && dz.y === foodPos.y
+      );
+
+      validPosition = notOnSnake && notOnDeadZone;
     }
 
     // 먹이가 벽에 붙어있으면 말풍선 표시
@@ -706,12 +731,18 @@ export default class SnakeGame extends Phaser.Scene {
   moveSnake() {
     if (this.gameOver) return;
 
-    // 먹이 텔레포트 체크 (각 먹이마다 1번씩)
-    if (this.foodTeleportEnabled && !this.currentFoodTeleported && this.nextTeleportStep > 0) {
+    // 먹이 텔레포트 체크 (Stage 1: 1번, Stage 2+: 2번)
+    const maxTeleports = this.currentStage === 1 ? 1 : 2;
+    if (this.foodTeleportEnabled && this.currentFoodTeleportCount < maxTeleports && this.nextTeleportStep > 0) {
       this.nextTeleportStep--;
       if (this.nextTeleportStep === 0) {
         this.teleportFood();
-        this.currentFoodTeleported = true; // 이 먹이는 텔레포트 완료
+        this.currentFoodTeleportCount++;
+
+        // 최대 텔레포트 횟수가 아니면 다음 텔레포트 준비
+        if (this.currentFoodTeleportCount < maxTeleports) {
+          this.nextTeleportStep = Phaser.Math.Between(1, 5);
+        }
       }
     }
 
@@ -742,6 +773,15 @@ export default class SnakeGame extends Phaser.Scene {
     // 벽 충돌 체크
     if (newHead.x < 0 || newHead.x >= this.cols ||
         newHead.y < 0 || newHead.y >= this.rows) {
+      this.endGame();
+      return;
+    }
+
+    // 데드존 충돌 체크
+    const hitDeadZone = this.deadZones.some(dz =>
+      dz.x === newHead.x && dz.y === newHead.y
+    );
+    if (hitDeadZone) {
       this.endGame();
       return;
     }
@@ -800,7 +840,45 @@ export default class SnakeGame extends Phaser.Scene {
 
       this.foodCount++;
 
-      // 10번째 먹이 먹으면 아이템 생성
+      // 10번째 먹이 먹으면 데드존 생성 시퀀스 시작 (stage 3에만)
+      if (this.foodCount === 10 && this.currentStage === 3) {
+        // 먼저 새 먹이 생성 및 파티클 효과
+        this.playFoodEffect();
+
+        // 말풍선 제거 (새 먹이 생성 전)
+        if (this.foodBubble) {
+          if (this.foodBubble.image && this.foodBubble.text) {
+            this.tweens.killTweensOf([this.foodBubble.image, this.foodBubble.text]);
+          }
+          if (this.foodBubble.image) {
+            this.foodBubble.image.setVisible(false);
+            this.foodBubble.image.setAlpha(0);
+          }
+          if (this.foodBubble.text) {
+            this.foodBubble.text.setVisible(false);
+            this.foodBubble.text.setAlpha(0);
+          }
+          if (this.foodBubble.image) {
+            this.foodBubble.image.destroy();
+          }
+          if (this.foodBubble.text) {
+            this.foodBubble.text.destroy();
+          }
+        }
+        this.foodBubble = null;
+
+        // 새 먹이 생성
+        this.food = this.generateFood();
+
+        // 파티클 효과
+        this.createFoodParticles();
+
+        // 데드존 시퀀스 시작
+        this.startDeadZoneSequence();
+        return; // 시퀀스가 끝나면 게임이 재개되므로 여기서 리턴
+      }
+
+      // 아이템 생성 (데드존이 아닐 때)
       if (this.foodCount === 10) {
         this.spawnItem();
         // 다음 아이템 타이머 시작
@@ -905,7 +983,7 @@ export default class SnakeGame extends Phaser.Scene {
       if (this.foodCount >= 21 && this.foodCount < 25) {
         this.foodTeleportEnabled = true;
         // 새 먹이에 대한 텔레포트 준비
-        this.currentFoodTeleported = false; // 새 먹이는 아직 텔레포트 안됨
+        this.currentFoodTeleportCount = 0; // 새 먹이는 아직 텔레포트 안됨
         this.nextTeleportStep = Phaser.Math.Between(1, 5); // 1~5 스텝 랜덤
       } else {
         // 25번째 이후는 텔레포트 비활성화
@@ -1661,6 +1739,316 @@ export default class SnakeGame extends Phaser.Scene {
     }
   }
 
+  // ==================== 데드존 시스템 ====================
+
+  startDeadZoneSequence() {
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 랜덤 위치 선택 (뱀/먹이와 겹치지 않는 곳)
+    let deadZonePos;
+    let validPosition = false;
+
+    while (!validPosition) {
+      deadZonePos = {
+        x: Phaser.Math.Between(0, this.cols - 1),
+        y: Phaser.Math.Between(0, this.rows - 1)
+      };
+
+      // 뱀과 겹치지 않는지
+      const notOnSnake = !this.snake.some(segment =>
+        segment.x === deadZonePos.x && segment.y === deadZonePos.y
+      );
+
+      // 먹이와 겹치지 않는지
+      const notOnFood = !(deadZonePos.x === this.food.x && deadZonePos.y === this.food.y);
+
+      // 뱀의 진행방향 바로 앞에 생기지 않게 체크
+      const snakeHead = this.snake[0];
+      let nextX = snakeHead.x;
+      let nextY = snakeHead.y;
+      switch (this.direction) {
+        case 'LEFT': nextX -= 1; break;
+        case 'RIGHT': nextX += 1; break;
+        case 'UP': nextY -= 1; break;
+        case 'DOWN': nextY += 1; break;
+      }
+      const notInFrontOfSnake = !(deadZonePos.x === nextX && deadZonePos.y === nextY);
+
+      validPosition = notOnSnake && notOnFood && notInFrontOfSnake;
+    }
+
+    // 깜빡이는 사각형 생성
+    const rect = this.add.rectangle(
+      deadZonePos.x * this.gridSize + this.gridSize / 2,
+      deadZonePos.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
+      this.gridSize - 2,
+      this.gridSize - 2,
+      0x000000,
+      1
+    );
+    rect.setDepth(50);
+
+    // 깜빡임 애니메이션 (10번, 1.5초)
+    let blinkCount = 0;
+    const blinkTimer = this.time.addEvent({
+      delay: 150,
+      callback: () => {
+        rect.setVisible(!rect.visible);
+        blinkCount++;
+
+        if (blinkCount >= 10) {
+          blinkTimer.remove();
+          rect.setVisible(true);
+          rect.setFillStyle(0x000000, 1);
+
+          // 경고 메시지 표시
+          this.showDeadZoneWarning(rect, deadZonePos);
+        }
+      },
+      loop: true
+    });
+  }
+
+  showDeadZoneWarning(rect, deadZonePos) {
+    const { width, height } = this.cameras.main;
+
+    // 경고 텍스트
+    const warningText = this.add.text(width / 2, height / 2, '', {
+      fontSize: '32px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2000);
+
+    const message = 'THIS WILL KILL YOU!';
+    let charIndex = 0;
+
+    // 타이핑 효과
+    const typingTimer = this.time.addEvent({
+      delay: 50,
+      callback: () => {
+        if (charIndex < message.length) {
+          warningText.setText(message.substring(0, charIndex + 1));
+          charIndex++;
+        } else {
+          typingTimer.remove();
+          // 타이핑 완료 후 카운트다운
+          this.time.delayedCall(500, () => {
+            warningText.destroy();
+            this.startCountdownAndResume(rect, deadZonePos);
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  startCountdownAndResume(rect, deadZonePos) {
+    const { width, height } = this.cameras.main;
+
+    // 카운트다운 텍스트
+    const countdownText = this.add.text(width / 2, height / 2, '3', {
+      fontSize: '64px',
+      fill: '#ffff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2000);
+
+    let countdown = 3;
+    const countdownTimer = this.time.addEvent({
+      delay: 600,
+      callback: () => {
+        countdown--;
+        if (countdown > 0) {
+          countdownText.setText(countdown.toString());
+        } else {
+          countdownText.setText('GO!');
+          countdownTimer.remove();
+
+          // GO! 표시 후 게임 재개
+          this.time.delayedCall(400, () => {
+            countdownText.destroy();
+
+            // 데드존 저장
+            this.deadZones.push({
+              x: deadZonePos.x,
+              y: deadZonePos.y,
+              rect: rect
+            });
+
+            // 게임 재개
+            this.moveTimer.paused = false;
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  addDeadZonesForStage4() {
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 2개의 데드존 위치 찾기
+    const deadZonePositions = [];
+    for (let i = 0; i < 2; i++) {
+      let deadZonePos;
+      let validPosition = false;
+
+      while (!validPosition) {
+        deadZonePos = {
+          x: Phaser.Math.Between(0, this.cols - 1),
+          y: Phaser.Math.Between(0, this.rows - 1)
+        };
+
+        // 뱀과 겹치지 않는지
+        const notOnSnake = !this.snake.some(segment =>
+          segment.x === deadZonePos.x && segment.y === deadZonePos.y
+        );
+
+        // 먹이와 겹치지 않는지
+        const notOnFood = !(deadZonePos.x === this.food.x && deadZonePos.y === this.food.y);
+
+        // 뱀의 진행방향 바로 앞에 생기지 않게 체크
+        const snakeHead = this.snake[0];
+        let nextX = snakeHead.x;
+        let nextY = snakeHead.y;
+        switch (this.direction) {
+          case 'LEFT': nextX -= 1; break;
+          case 'RIGHT': nextX += 1; break;
+          case 'UP': nextY -= 1; break;
+          case 'DOWN': nextY += 1; break;
+        }
+        const notInFrontOfSnake = !(deadZonePos.x === nextX && deadZonePos.y === nextY);
+
+        // 기존 데드존과 충분히 떨어져있는지 체크 (맨해튼 거리 5칸 이상)
+        const farFromOtherDeadZones = [...this.deadZones, ...deadZonePositions].every(dz => {
+          const distance = Math.abs(dz.x - deadZonePos.x) + Math.abs(dz.y - deadZonePos.y);
+          return distance >= 5;
+        });
+
+        validPosition = notOnSnake && notOnFood && notInFrontOfSnake && farFromOtherDeadZones;
+      }
+
+      deadZonePositions.push(deadZonePos);
+    }
+
+    // 2개의 깜빡이는 사각형 생성
+    const blinkRects = deadZonePositions.map(pos => {
+      const rect = this.add.rectangle(
+        pos.x * this.gridSize + this.gridSize / 2,
+        pos.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
+        this.gridSize - 2,
+        this.gridSize - 2,
+        0x000000,
+        1
+      );
+      rect.setDepth(50);
+      return { rect, pos };
+    });
+
+    // 2개 동시 깜빡임 (10번, 1.5초)
+    let blinkCount = 0;
+    const blinkTimer = this.time.addEvent({
+      delay: 150,
+      callback: () => {
+        blinkRects.forEach(({ rect }) => {
+          rect.setVisible(!rect.visible);
+        });
+        blinkCount++;
+
+        if (blinkCount >= 10) {
+          blinkTimer.remove();
+          blinkRects.forEach(({ rect }) => {
+            rect.setVisible(true);
+            rect.setFillStyle(0x000000, 1);
+          });
+
+          // 경고 메시지 표시
+          this.showStage4Warning(() => {
+            // 데드존 저장
+            blinkRects.forEach(({ rect, pos }) => {
+              this.deadZones.push({
+                x: pos.x,
+                y: pos.y,
+                rect: rect
+              });
+            });
+
+            // 카운트다운 후 게임 재개
+            this.startCountdownAndResumeStage4();
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  showStage4Warning(onComplete) {
+    const { width, height } = this.cameras.main;
+
+    // 경고 텍스트
+    const warningText = this.add.text(width / 2, height / 2, '', {
+      fontSize: '32px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2000);
+
+    const message = 'THIS TOO SHALL KILL YOU!';
+    let charIndex = 0;
+
+    // 타이핑 효과
+    const typingTimer = this.time.addEvent({
+      delay: 50,
+      callback: () => {
+        if (charIndex < message.length) {
+          warningText.setText(message.substring(0, charIndex + 1));
+          charIndex++;
+        } else {
+          typingTimer.remove();
+          // 타이핑 완료 후 콜백 실행
+          this.time.delayedCall(500, () => {
+            warningText.destroy();
+            onComplete();
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  startCountdownAndResumeStage4() {
+    const { width, height } = this.cameras.main;
+
+    // 카운트다운 텍스트
+    const countdownText = this.add.text(width / 2, height / 2, '3', {
+      fontSize: '64px',
+      fill: '#ffff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2000);
+
+    let countdown = 3;
+    const countdownTimer = this.time.addEvent({
+      delay: 600,
+      callback: () => {
+        countdown--;
+        if (countdown > 0) {
+          countdownText.setText(countdown.toString());
+        } else {
+          countdownText.setText('GO!');
+          countdownTimer.remove();
+
+          // GO! 표시 후 게임 재개
+          this.time.delayedCall(400, () => {
+            countdownText.destroy();
+            // 게임 재개
+            this.moveTimer.paused = false;
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
   draw() {
     // 이전 프레임 지우기
     if (this.graphics) {
@@ -1707,8 +2095,9 @@ export default class SnakeGame extends Phaser.Scene {
       );
     });
 
-    // 먹이 그리기
-    this.graphics.fillStyle(0xff0000);
+    // 먹이 그리기 (25번째 먹이는 머리색과 동일 - 초록색)
+    const isFinalFood = this.foodCount === 24; // 다음 먹이가 25번째
+    this.graphics.fillStyle(isFinalFood ? 0x00ff00 : 0xff0000);
     this.graphics.fillCircle(
       this.food.x * this.gridSize + this.gridSize / 2,
       this.food.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
@@ -2018,6 +2407,11 @@ export default class SnakeGame extends Phaser.Scene {
             duration: 300, // 500ms → 300ms로 빠르게
             onComplete: () => {
               stageText.destroy();
+
+              // Stage 4 시작 시 데드존 2개 추가 애니메이션
+              if (this.currentStage === 4) {
+                this.addDeadZonesForStage4();
+              }
             }
           });
         });
