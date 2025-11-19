@@ -28,6 +28,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.snakeBodyTint = null;
     this.snakeGlow = false;
 
+    // 십자가 후레쉬 라인 (6~15번째 먹이)
+    this.crosshairLines = null;
+
     // 배경음악 설정 (첫 입력 후 재생)
     this.bgMusic = this.sound.add('bgm', {
       loop: true,
@@ -296,6 +299,9 @@ export default class SnakeGame extends Phaser.Scene {
     // 먹이가 벽에 붙어있으면 말풍선 표시
     this.checkAndShowFoodBubble(foodPos);
 
+    // 6~15번째 먹이일 때 십자가 후레쉬 효과
+    this.showCrosshairEffect(foodPos);
+
     return foodPos;
   }
 
@@ -547,6 +553,156 @@ export default class SnakeGame extends Phaser.Scene {
     console.log('[DEBUG] Bubble created and stored:', this.foodBubble);
   }
 
+  showCrosshairEffect(foodPos) {
+    // 기존 십자가 라인 제거
+    if (this.crosshairLines) {
+      // 모든 객체와 트윈 제거
+      this.crosshairLines.forEach(obj => {
+        this.tweens.killTweensOf(obj);
+        obj.destroy();
+      });
+      this.crosshairLines = null;
+    }
+
+    // stage 4 이상이면 후레쉬 효과 없음
+    if (this.currentStage >= 4) {
+      return;
+    }
+
+    // 0~9번째 먹이가 아니면 리턴 (첫 번째 먹이부터 10번째 먹이 전까지)
+    if (this.foodCount >= 10) {
+      return;
+    }
+
+    const foodX = foodPos.x * this.gridSize + this.gridSize / 2;
+    const foodY = foodPos.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    this.crosshairLines = [];
+
+    // 1. 중심에서 퍼지는 빛 원형 펄스 (먹이 주변) - 하늘색
+    const pulseCircle = this.add.circle(foodX, foodY, 20, 0x4dd0e1, 0.12);
+    pulseCircle.setDepth(1); // 먹이 뒤로
+    this.crosshairLines.push(pulseCircle);
+
+    // 펄스 애니메이션 (크기 변화)
+    this.tweens.add({
+      targets: pulseCircle,
+      scale: 1.8,
+      alpha: 0,
+      duration: 1200,
+      ease: 'Cubic.easeOut',
+      repeat: -1
+    });
+
+    // 2. 글로우 효과를 위한 다층 라인 (세로) - 하늘색, 더 흐릿하게
+    const verticalX = foodPos.x * this.gridSize + this.gridSize / 2;
+
+    // 세로 - 외곽 글로우 (매우 두껍고 매우 흐릿함)
+    const vGlow = this.add.rectangle(
+      verticalX,
+      this.gameAreaY + (this.rows * this.gridSize / 2),
+      15, // 20 → 15로 조정
+      this.rows * this.gridSize,
+      0x4dd0e1, // 하늘색
+      0.04 // 0.08 → 0.04로 더 흐릿하게
+    );
+    vGlow.setDepth(1); // 먹이 뒤로
+    this.crosshairLines.push(vGlow);
+
+    // 세로 - 중간 레이어
+    const vMid = this.add.rectangle(
+      verticalX,
+      this.gameAreaY + (this.rows * this.gridSize / 2),
+      12,
+      this.rows * this.gridSize,
+      0x80deea, // 밝은 하늘색
+      0.08 // 0.12 → 0.08로 더 흐릿하게
+    );
+    vMid.setDepth(1); // 먹이 뒤로
+    this.crosshairLines.push(vMid);
+
+    // 세로 - 중심 라인
+    const vCore = this.add.rectangle(
+      verticalX,
+      this.gameAreaY + (this.rows * this.gridSize / 2),
+      3, // 6 → 3으로 얇게
+      this.rows * this.gridSize,
+      0xb3e5fc, // 매우 밝은 하늘색
+      0.15 // 0.25 → 0.15로 더 흐릿하게
+    );
+    vCore.setDepth(1); // 먹이 뒤로
+    this.crosshairLines.push(vCore);
+
+    // 3. 글로우 효과를 위한 다층 라인 (가로) - 하늘색, 더 흐릿하게
+    const horizontalY = foodPos.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 가로 - 외곽 글로우
+    const hGlow = this.add.rectangle(
+      this.cols * this.gridSize / 2,
+      horizontalY,
+      this.cols * this.gridSize,
+      15, // 20 → 15로 조정
+      0x4dd0e1, // 하늘색
+      0.04 // 0.08 → 0.04로 더 흐릿하게
+    );
+    hGlow.setDepth(1); // 먹이 뒤로
+    this.crosshairLines.push(hGlow);
+
+    // 가로 - 중간 레이어
+    const hMid = this.add.rectangle(
+      this.cols * this.gridSize / 2,
+      horizontalY,
+      this.cols * this.gridSize,
+      12,
+      0x80deea, // 밝은 하늘색
+      0.08 // 0.12 → 0.08로 더 흐릿하게
+    );
+    hMid.setDepth(1); // 먹이 뒤로
+    this.crosshairLines.push(hMid);
+
+    // 가로 - 중심 라인
+    const hCore = this.add.rectangle(
+      this.cols * this.gridSize / 2,
+      horizontalY,
+      this.cols * this.gridSize,
+      3, // 6 → 3으로 얇게
+      0xb3e5fc, // 매우 밝은 하늘색
+      0.15 // 0.25 → 0.15로 더 흐릿하게
+    );
+    hCore.setDepth(1); // 먹이 뒤로
+    this.crosshairLines.push(hCore);
+
+    // 4. 깜빡이는 애니메이션 (부드러운 호흡)
+    this.tweens.add({
+      targets: [vCore, hCore],
+      alpha: 0.06, // 0.1 → 0.06으로 더 흐릿하게
+      duration: 1000,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.tweens.add({
+      targets: [vMid, hMid],
+      alpha: 0.03, // 0.04 → 0.03으로 더 흐릿하게
+      duration: 1000,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1,
+      delay: 150 // 약간 시차를 두어 파동 효과
+    });
+
+    this.tweens.add({
+      targets: [vGlow, hGlow],
+      alpha: 0.01, // 0.02 → 0.01로 더 흐릿하게
+      duration: 1000,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1,
+      delay: 300
+    });
+  }
+
   moveSnake() {
     if (this.gameOver) return;
 
@@ -745,12 +901,15 @@ export default class SnakeGame extends Phaser.Scene {
 
       this.food = this.generateFood();
 
-      // 21번째 먹이부터 텔레포트 활성화
-      if (this.foodCount >= 21) {
+      // 21번째 먹이부터 25번째까지 텔레포트 활성화
+      if (this.foodCount >= 21 && this.foodCount < 25) {
         this.foodTeleportEnabled = true;
         // 새 먹이에 대한 텔레포트 준비
         this.currentFoodTeleported = false; // 새 먹이는 아직 텔레포트 안됨
         this.nextTeleportStep = Phaser.Math.Between(1, 5); // 1~5 스텝 랜덤
+      } else {
+        // 25번째 이후는 텔레포트 비활성화
+        this.foodTeleportEnabled = false;
       }
 
       // 10번째부터 먹이 파티클 효과
@@ -758,8 +917,8 @@ export default class SnakeGame extends Phaser.Scene {
         this.createFoodParticles();
       }
 
-      // 스테이지 클리어 체크 (20개 먹으면 클리어)
-      if (this.foodCount >= 20) { // 20개 먹으면 클리어
+      // 스테이지 클리어 체크 (25개 먹으면 클리어)
+      if (this.foodCount >= 25) { // 25개 먹으면 클리어
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
