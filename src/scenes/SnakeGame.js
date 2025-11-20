@@ -2991,6 +2991,26 @@ export default class SnakeGame extends Phaser.Scene {
       const isNextSelected = this.selectedShopIndex === this.shopItems.length;
       this.shopNextBtn.bg.setStrokeStyle(3, isNextSelected ? 0xffff00 : 0x4a9e2d);
       this.shopNextBtn.text.setFill(isNextSelected ? '#ffff00' : '#ffffff');
+
+      if (isNextSelected) {
+        // 포커스 시 들썩임 애니메이션
+        if (!this.shopNextBtn.floatTween) {
+          this.shopNextBtn.floatTween = this.tweens.add({
+            targets: [this.shopNextBtn.bg, this.shopNextBtn.text],
+            y: '+=3',
+            duration: 200,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+          });
+        }
+      } else {
+        // 포커스 해제 시 애니메이션 정지
+        if (this.shopNextBtn.floatTween) {
+          this.shopNextBtn.floatTween.stop();
+          this.shopNextBtn.floatTween = null;
+        }
+      }
     }
   }
 
@@ -2999,11 +3019,24 @@ export default class SnakeGame extends Phaser.Scene {
 
     const maxIndex = this.shopItems.length; // 카드들 + Next Stage 버튼
 
+    // 다음 선택 가능한 인덱스 찾기 (SOLD 건너뛰기)
+    const findNextAvailable = (start, delta) => {
+      let idx = start;
+      for (let i = 0; i <= maxIndex; i++) {
+        idx = (idx + delta + maxIndex + 1) % (maxIndex + 1);
+        // Next Stage 버튼이거나 구매 안 한 아이템이면 선택 가능
+        if (idx === maxIndex || !this.shopItems[idx].purchased) {
+          return idx;
+        }
+      }
+      return start; // 못 찾으면 현재 유지
+    };
+
     if (direction === 'LEFT') {
-      this.selectedShopIndex = (this.selectedShopIndex - 1 + maxIndex + 1) % (maxIndex + 1);
+      this.selectedShopIndex = findNextAvailable(this.selectedShopIndex, -1);
       this.updateShopSelection();
     } else if (direction === 'RIGHT') {
-      this.selectedShopIndex = (this.selectedShopIndex + 1) % (maxIndex + 1);
+      this.selectedShopIndex = findNextAvailable(this.selectedShopIndex, 1);
       this.updateShopSelection();
     } else if (direction === 'UP') {
       // Next Stage 버튼에서 위로 누르면 아이템 카드로 이동
