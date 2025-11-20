@@ -181,11 +181,11 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopElements = []; // 상점 UI 요소들
     this.selectedShopIndex = 0; // 선택된 아이템 인덱스
     this.shopItems = [
-      { name: 'Speed Boost', description: '이동 속도 10% 감소', price: 500, purchased: false },
-      { name: 'Double Score', description: '다음 스테이지 점수 2배', price: 1000, purchased: false },
-      { name: 'Extra Life', description: '목숨 +1 (1회 부활)', price: 1500, purchased: false },
-      { name: 'Magnet', description: '먹이를 끌어당김', price: 800, purchased: false },
-      { name: 'Shield', description: '벽 충돌 1회 방지', price: 1200, purchased: false }
+      { name: 'Speed Boost', description: '이동 속도 10% 감소', price: 1, purchased: false },
+      { name: 'Double Score', description: '다음 스테이지 점수 2배', price: 2, purchased: false },
+      { name: 'Extra Life', description: '목숨 +1 (1회 부활)', price: 8, purchased: false },
+      { name: 'Magnet', description: '먹이를 끌어당김', price: 10, purchased: false },
+      { name: 'Shield', description: '벽 충돌 1회 방지', price: 15, purchased: false }
     ];
     this.shopKeyboardEnabled = false; // 상점 키보드 활성화
 
@@ -216,7 +216,8 @@ export default class SnakeGame extends Phaser.Scene {
     });
     this.input.keyboard.on('keydown-DOWN', () => {
       if (this.shopOpen) {
-        return; // 상점에서 아래는 무시
+        this.handleShopInput('DOWN');
+        return;
       }
       this.startMusicOnFirstInput();
       this.addDirectionToQueue('DOWN');
@@ -3008,6 +3009,12 @@ export default class SnakeGame extends Phaser.Scene {
       // 현재 선택된 카드 구매
       if (this.selectedShopIndex < this.shopItems.length) {
         this.purchaseItem(this.selectedShopIndex);
+      }
+    } else if (direction === 'DOWN') {
+      // 아이템 카드에서 아래로 누르면 Next Stage 버튼으로 이동
+      if (this.selectedShopIndex < this.shopItems.length) {
+        this.selectedShopIndex = this.shopItems.length;
+        this.updateShopSelection();
       }
     } else if (direction === 'ENTER') {
       // 카드 선택 중이면 구매 시도, Next Stage 버튼이면 상점 닫기
