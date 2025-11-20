@@ -1,5 +1,7 @@
 # Snake Game - Phaser 3
 
+> Last updated: 2025-11-20 (테스트 수정)
+
 ## 프로젝트 개요
 Phaser 3 기반 Snake 게임. 스테이지 시스템, 콤보, 아이템, 데드존 등 다양한 기능이 포함된 클래식 게임.
 
