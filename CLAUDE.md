@@ -1,15 +1,15 @@
 # Snake Game - Phaser 3
 
 ## 프로젝트 개요
-Phaser 3 기반 Snake 게임. 스테이지 시스템, 콤보, 아이템, 데드존 등 다양한 기능이 포함된 클래식 게임.
+Phaser 3 기반 Snake 게임. 스테이지 시스템, 콤보, 아이템, 데드존, 상점 등 다양한 기능이 포함된 클래식 게임.
 
 ## 파일 구조
 ```
-/Users/imjunseob/my-phaser-game/
+c:\dev\my-first-phaser-game\
 ├── src/
 │   ├── main.js              # Phaser 게임 설정 (pixelArt: true)
 │   └── scenes/
-│       └── SnakeGame.js     # 메인 게임 로직 (~2400 lines)
+│       └── SnakeGame.js     # 메인 게임 로직 (~3200 lines)
 ├── public/
 │   └── assets/
 │       ├── bgm/             # 배경음악 (snake_bgm.mp3)
@@ -31,7 +31,7 @@ Phaser 3 기반 Snake 게임. 스테이지 시스템, 콤보, 아이템, 데드�
 
 ### 스테이지 시스템
 - 각 스테이지: 25개 먹이 클리어
-- 스테이지 클리어 시: 뱀 점프 애니메이션 → "STAGE CLEAR" → 카운트다운 → 다음 스테이지
+- 스테이지 클리어 시: 뱀 점프 애니메이션 → "STAGE CLEAR" → 상점(Stage 4+) → 카운트다운 → 다음 스테이지
 - 최대 스테이지: 100
 
 ---
@@ -96,6 +96,46 @@ Phaser 3 기반 Snake 게임. 스테이지 시스템, 콤보, 아이템, 데드�
 - 색상: 초록색 (뱀 머리색과 동일)
 - 스테이지 클리어 직전 시각적 표시
 
+### 8. 상점 시스템 (Stage 4+ 클리어 후)
+
+#### 오픈 조건
+- Stage 4 클리어 후부터 매 스테이지 클리어 시 상점 오픈
+- STAGE CLEAR → 상점 → 3-2-1 카운트다운 → 다음 스테이지
+
+#### UI 구성 (Balatro 스타일)
+- **배경**: 어두운 오버레이 (85% 투명도)
+- **타이틀**: 네온 "SHOP" 사인 (빨간 배경, 노란 글씨)
+- **왼쪽 사이드바**: MONEY, STAGE, COMBO, SCORE 정보
+- **메인 영역**: 카드 형태 아이템 5개
+- **하단**: Next Stage 버튼 (초록), Reroll 버튼 (빨강)
+
+#### 아이템 목록
+| 아이템 | 설명 | 가격 |
+|--------|------|------|
+| Speed Boost | 이동 속도 10% 감소 | $500 |
+| Double Score | 다음 스테이지 점수 2배 | $1000 |
+| Extra Life | 목숨 +1 (1회 부활) | $1500 |
+| Magnet | 먹이를 끌어당김 | $800 |
+| Shield | 벽 충돌 1회 방지 | $1200 |
+
+#### 조작법
+- **←→**: 카드 선택
+- **↑**: 구매
+- **ENTER**: 다음 스테이지
+
+#### 애니메이션 요소
+- **타이틀**: 줌인 등장 → 깜빡임 → 지속 펄스
+- **사이드바**: 왼쪽에서 슬라이드 인, 정보 순차 페이드인
+- **카드**: 위에서 바운스 등장, 착지 파티클
+- **선택**: 카드 위로 올라옴 + 노란 테두리 + 들썩임
+- **구매**: 파티클 폭발 → 회전하며 날아감 → "SOLD"
+- **돈 전환**: 숫자 조각 날아옴 → 카운트업 + 크기 펄스
+- **닫기**: 카드들 흩어지며 사라짐
+
+#### 피드백
+- **돈 부족**: 빨간 깜빡임 + 좌우 흔들림 + 카드 흔들림
+- **이미 구매**: 카드 좌우 흔들림
+
 ---
 
 ## 주요 변수
@@ -126,6 +166,17 @@ this.currentFoodTeleportCount = 0      // 현재 먹이 텔레포트 횟수
 this.nextTeleportStep = 0              // 다음 텔레포트까지 스텝
 ```
 
+### 상점 시스템
+```javascript
+this.money = 0                         // 보유 돈
+this.shopOpen = false                  // 상점 열림 상태
+this.shopElements = []                 // 상점 UI 요소들
+this.shopCards = []                    // 카드 UI 요소들
+this.selectedShopIndex = 0             // 선택된 아이템 인덱스
+this.shopItems = [...]                 // 아이템 배열 {name, description, price, purchased}
+this.shopKeyboardEnabled = false       // 상점 키보드 활성화
+```
+
 ---
 
 ## 주요 함수
@@ -146,8 +197,18 @@ this.nextTeleportStep = 0              // 다음 텔레포트까지 스텝
 
 ### 스테이지
 - `clearStage()` - 스테이지 클리어 처리
+- `showStageClearText()` - 스테이지 클리어 텍스트 표시
 - `showNextStage()` - 다음 스테이지 표시
 - `resetStage()` - 스테이지 리셋
+
+### 상점
+- `openShop()` - 상점 열기 (UI 생성, 애니메이션)
+- `closeShop()` - 상점 닫기 (정리, 애니메이션)
+- `animateScoreToMoney()` - 스코어 → 돈 전환 애니메이션
+- `updateShopSelection()` - 선택 UI 업데이트
+- `handleShopInput()` - 상점 키보드 입력 처리
+- `purchaseItem()` - 아이템 구매
+- `shopCountdownAndStart()` - 상점 닫은 후 카운트다운
 
 ### 효과
 - `playFoodEffect()` - 먹이 먹을 때 효과
@@ -163,7 +224,7 @@ this.nextTeleportStep = 0              // 다음 텔레포트까지 스텝
 | 1 | 130ms | 없음 | 1회 | 기본 |
 | 2 | 더 빠름 | 없음 | 2회 | 텔레포트 강화 |
 | 3 | 더 빠름 | 1개 | 2회 | 10번째 먹이 시 데드존 |
-| 4+ | 더 빠름 | +2개 | 2회 | 스테이지 시작 시 데드존 추가 |
+| 4+ | 더 빠름 | +2개 | 2회 | 스테이지 시작 시 데드존 추가, 클리어 후 상점 |
 
 ---
 
@@ -193,8 +254,13 @@ const earnedScore = Math.floor(10 * comboMultiplier);
 - 이동: `assets/sfx/moving.mp3`
 - 먹기: `assets/sfx/eating.mp3`
 
+### 테스트용 설정 (현재 활성화)
+- `foodCount >= 1` (원래 25) - 먹이 1개로 스테이지 클리어
+- `currentStage >= 1` (원래 4) - Stage 1부터 상점 오픈
+
 ### 향후 추가 예정
+- 상점 아이템 실제 효과 구현
+- Reroll 기능 구현
 - 스프라이트 애니메이션 (뱀 머리)
-- 추가 아이템 효과
 - 리더보드
 - 모바일 지원
