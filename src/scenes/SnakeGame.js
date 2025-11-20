@@ -3010,8 +3010,12 @@ export default class SnakeGame extends Phaser.Scene {
         this.purchaseItem(this.selectedShopIndex);
       }
     } else if (direction === 'ENTER') {
-      // Next Stage로 이동
-      this.closeShop();
+      // 카드 선택 중이면 구매 시도, Next Stage 버튼이면 상점 닫기
+      if (this.selectedShopIndex < this.shopItems.length) {
+        this.purchaseItem(this.selectedShopIndex);
+      } else {
+        this.closeShop();
+      }
     }
   }
 
