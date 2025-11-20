@@ -3006,9 +3006,10 @@ export default class SnakeGame extends Phaser.Scene {
       this.selectedShopIndex = (this.selectedShopIndex + 1) % (maxIndex + 1);
       this.updateShopSelection();
     } else if (direction === 'UP') {
-      // 현재 선택된 카드 구매
-      if (this.selectedShopIndex < this.shopItems.length) {
-        this.purchaseItem(this.selectedShopIndex);
+      // Next Stage 버튼에서 위로 누르면 아이템 카드로 이동
+      if (this.selectedShopIndex === this.shopItems.length) {
+        this.selectedShopIndex = 0;
+        this.updateShopSelection();
       }
     } else if (direction === 'DOWN') {
       // 아이템 카드에서 아래로 누르면 Next Stage 버튼으로 이동
