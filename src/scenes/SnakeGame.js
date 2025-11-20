@@ -189,8 +189,16 @@ export default class SnakeGame extends Phaser.Scene {
     ];
     this.shopKeyboardEnabled = false; // 상점 키보드 활성화
 
+    // 뱅킹/대출 시스템
+    this.loanAmount = 0; // 빌린 금액 (원금)
+    this.loanDue = 0; // 갚아야 할 금액 (원금 + 이자)
+    this.loanInterestRate = 0.05; // 이자율 5%
+    this.loanUIOpen = false; // 대출 UI 열림 상태
+    this.loanElements = []; // 대출 UI 요소들
+
     // 키 입력 (입력 큐 시스템)
     this.input.keyboard.on('keydown-LEFT', () => {
+      if (this.loanUIOpen) return;
       if (this.shopOpen) {
         this.handleShopInput('LEFT');
         return;
@@ -199,6 +207,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('LEFT');
     });
     this.input.keyboard.on('keydown-RIGHT', () => {
+      if (this.loanUIOpen) return;
       if (this.shopOpen) {
         this.handleShopInput('RIGHT');
         return;
@@ -207,6 +216,10 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('RIGHT');
     });
     this.input.keyboard.on('keydown-UP', () => {
+      if (this.loanUIOpen) {
+        this.handleLoanInput('UP');
+        return;
+      }
       if (this.shopOpen) {
         this.handleShopInput('UP');
         return;
@@ -215,6 +228,10 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('UP');
     });
     this.input.keyboard.on('keydown-DOWN', () => {
+      if (this.loanUIOpen) {
+        this.handleLoanInput('DOWN');
+        return;
+      }
       if (this.shopOpen) {
         this.handleShopInput('DOWN');
         return;
@@ -225,6 +242,10 @@ export default class SnakeGame extends Phaser.Scene {
 
     // ENTER 키 (상점에서 다음 스테이지)
     this.input.keyboard.on('keydown-ENTER', () => {
+      if (this.loanUIOpen) {
+        this.handleLoanInput('ENTER');
+        return;
+      }
       if (this.shopOpen) {
         this.handleShopInput('ENTER');
       }
@@ -2507,6 +2528,11 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopOpen = true;
     const { width, height } = this.cameras.main;
 
+    // 대출 상환 체크
+    if (this.loanDue > 0) {
+      this.repayLoan();
+    }
+
     // 어두운 오버레이 (페이드인)
     const overlay = this.add.rectangle(0, 0, width, height, 0x0a1628, 0)
       .setOrigin(0, 0)
@@ -2775,25 +2801,25 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopNextBtn = { bg: nextBtnBg, text: nextBtnText };
     this.shopElements.push(nextBtnBg, nextBtnText);
 
-    // Reroll 버튼 (빨강)
-    const rerollBtnBg = this.add.rectangle(680, buttonY, 90, 45, 0x8B0000, 1)
+    // Loan 버튼 (빨강)
+    const loanBtnBg = this.add.rectangle(680, buttonY, 90, 45, 0x8B0000, 1)
       .setDepth(6001)
       .setStrokeStyle(3, 0xff4444)
       .setAlpha(0);
 
-    const rerollBtnText = this.add.text(680, buttonY, 'Reroll\n$50', {
+    const loanBtnText = this.add.text(680, buttonY, 'LOAN\n💰', {
       fontSize: '12px',
       fill: '#ffffff',
       fontStyle: 'bold',
       align: 'center'
     }).setOrigin(0.5).setDepth(6002).setAlpha(0);
 
-    this.shopRerollBtn = { bg: rerollBtnBg, text: rerollBtnText };
-    this.shopElements.push(rerollBtnBg, rerollBtnText);
+    this.shopLoanBtn = { bg: loanBtnBg, text: loanBtnText };
+    this.shopElements.push(loanBtnBg, loanBtnText);
 
     // 버튼 등장 애니메이션
     this.time.delayedCall(1200, () => {
-      [nextBtnBg, nextBtnText, rerollBtnBg, rerollBtnText].forEach((el, i) => {
+      [nextBtnBg, nextBtnText, loanBtnBg, loanBtnText].forEach((el, i) => {
         this.tweens.add({
           targets: el,
           alpha: 1,
@@ -3012,20 +3038,47 @@ export default class SnakeGame extends Phaser.Scene {
         }
       }
     }
+
+    // Loan 버튼 하이라이트
+    if (this.shopLoanBtn) {
+      const isLoanSelected = this.selectedShopIndex === this.shopItems.length + 1;
+      this.shopLoanBtn.bg.setStrokeStyle(3, isLoanSelected ? 0xffff00 : 0xff4444);
+      this.shopLoanBtn.text.setFill(isLoanSelected ? '#ffff00' : '#ffffff');
+
+      if (isLoanSelected) {
+        // 포커스 시 들썩임 애니메이션
+        if (!this.shopLoanBtn.floatTween) {
+          this.shopLoanBtn.floatTween = this.tweens.add({
+            targets: [this.shopLoanBtn.bg, this.shopLoanBtn.text],
+            y: '+=3',
+            duration: 200,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+          });
+        }
+      } else {
+        // 포커스 해제 시 애니메이션 정지
+        if (this.shopLoanBtn.floatTween) {
+          this.shopLoanBtn.floatTween.stop();
+          this.shopLoanBtn.floatTween = null;
+        }
+      }
+    }
   }
 
   handleShopInput(direction) {
     if (!this.shopOpen || !this.shopKeyboardEnabled) return;
 
-    const maxIndex = this.shopItems.length; // 카드들 + Next Stage 버튼
+    const maxIndex = this.shopItems.length + 1; // 카드들 + Next Stage + Loan 버튼
 
     // 다음 선택 가능한 인덱스 찾기 (SOLD 건너뛰기)
     const findNextAvailable = (start, delta) => {
       let idx = start;
       for (let i = 0; i <= maxIndex; i++) {
         idx = (idx + delta + maxIndex + 1) % (maxIndex + 1);
-        // Next Stage 버튼이거나 구매 안 한 아이템이면 선택 가능
-        if (idx === maxIndex || !this.shopItems[idx].purchased) {
+        // Next Stage, Loan 버튼이거나 구매 안 한 아이템이면 선택 가능
+        if (idx >= this.shopItems.length || !this.shopItems[idx].purchased) {
           return idx;
         }
       }
@@ -3039,8 +3092,8 @@ export default class SnakeGame extends Phaser.Scene {
       this.selectedShopIndex = findNextAvailable(this.selectedShopIndex, 1);
       this.updateShopSelection();
     } else if (direction === 'UP') {
-      // Next Stage 버튼에서 위로 누르면 아이템 카드로 이동
-      if (this.selectedShopIndex === this.shopItems.length) {
+      // 버튼에서 위로 누르면 아이템 카드로 이동
+      if (this.selectedShopIndex >= this.shopItems.length) {
         this.selectedShopIndex = 0;
         this.updateShopSelection();
       }
@@ -3051,11 +3104,13 @@ export default class SnakeGame extends Phaser.Scene {
         this.updateShopSelection();
       }
     } else if (direction === 'ENTER') {
-      // 카드 선택 중이면 구매 시도, Next Stage 버튼이면 상점 닫기
+      // 카드 선택 중이면 구매 시도, Next Stage 버튼이면 상점 닫기, Loan 버튼이면 대출 UI
       if (this.selectedShopIndex < this.shopItems.length) {
         this.purchaseItem(this.selectedShopIndex);
-      } else {
+      } else if (this.selectedShopIndex === this.shopItems.length) {
         this.closeShop();
+      } else if (this.selectedShopIndex === this.shopItems.length + 1) {
+        this.openLoanUI();
       }
     }
   }
@@ -3328,6 +3383,305 @@ export default class SnakeGame extends Phaser.Scene {
         }
       },
       repeat: 2
+    });
+  }
+
+  // =====================
+  // 뱅킹/대출 시스템
+  // =====================
+
+  repayLoan() {
+    if (this.loanDue <= 0) return;
+
+    const { width, height } = this.cameras.main;
+
+    // 대출 상환 애니메이션
+    const repayText = this.add.text(width / 2, height / 2 - 100, 'LOAN REPAYMENT', {
+      fontSize: '28px',
+      fill: '#ff4444',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(7000).setAlpha(0);
+
+    this.tweens.add({
+      targets: repayText,
+      alpha: 1,
+      y: height / 2 - 120,
+      duration: 400,
+      ease: 'Power2'
+    });
+
+    // 상환 금액 계산
+    const repayAmount = Math.min(this.money, this.loanDue);
+    const remaining = this.loanDue - repayAmount;
+
+    // 돈 차감 애니메이션
+    this.time.delayedCall(500, () => {
+      const deductText = this.add.text(width / 2, height / 2 - 60, `-$${repayAmount}`, {
+        fontSize: '36px',
+        fill: '#ff0000',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 4
+      }).setOrigin(0.5).setDepth(7000);
+
+      this.tweens.add({
+        targets: deductText,
+        y: height / 2 - 80,
+        alpha: 0,
+        duration: 1000,
+        ease: 'Power2',
+        onComplete: () => deductText.destroy()
+      });
+
+      this.money -= repayAmount;
+      this.loanDue = remaining;
+      this.loanAmount = remaining > 0 ? this.loanAmount : 0;
+
+      // 결과 표시
+      this.time.delayedCall(600, () => {
+        let resultMsg, resultColor;
+        if (remaining > 0) {
+          resultMsg = `Still owe: $${remaining}`;
+          resultColor = '#ffaa00';
+        } else {
+          resultMsg = 'PAID OFF!';
+          resultColor = '#00ff00';
+        }
+
+        const resultText = this.add.text(width / 2, height / 2 - 20, resultMsg, {
+          fontSize: '24px',
+          fill: resultColor,
+          fontStyle: 'bold',
+          stroke: '#000000',
+          strokeThickness: 3
+        }).setOrigin(0.5).setDepth(7000).setAlpha(0);
+
+        this.tweens.add({
+          targets: resultText,
+          alpha: 1,
+          scaleX: { from: 0.5, to: 1 },
+          scaleY: { from: 0.5, to: 1 },
+          duration: 300,
+          ease: 'Back.easeOut'
+        });
+
+        // 모든 텍스트 정리
+        this.time.delayedCall(1500, () => {
+          [repayText, resultText].forEach(t => {
+            if (t && t.active) {
+              this.tweens.add({
+                targets: t,
+                alpha: 0,
+                duration: 300,
+                onComplete: () => t.destroy()
+              });
+            }
+          });
+        });
+      });
+    });
+  }
+
+  openLoanUI() {
+    if (this.loanUIOpen) return;
+    this.loanUIOpen = true;
+    this.shopKeyboardEnabled = false;
+
+    const { width, height } = this.cameras.main;
+
+    // 대출 UI 배경
+    const loanBg = this.add.rectangle(width / 2, height / 2, 350, 300, 0x1a1a2e, 0.95)
+      .setDepth(7001)
+      .setStrokeStyle(3, 0xff4444)
+      .setAlpha(0);
+    this.loanElements.push(loanBg);
+
+    // 타이틀
+    const loanTitle = this.add.text(width / 2, height / 2 - 110, '💰 BANK LOAN 💰', {
+      fontSize: '24px',
+      fill: '#ffff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(7002).setAlpha(0);
+    this.loanElements.push(loanTitle);
+
+    // 이자율 표시
+    const interestText = this.add.text(width / 2, height / 2 - 75, `Interest Rate: ${this.loanInterestRate * 100}%`, {
+      fontSize: '14px',
+      fill: '#ff6666'
+    }).setOrigin(0.5).setDepth(7002).setAlpha(0);
+    this.loanElements.push(interestText);
+
+    // 현재 대출 상태
+    if (this.loanDue > 0) {
+      const currentDebt = this.add.text(width / 2, height / 2 - 50, `Current Debt: $${this.loanDue}`, {
+        fontSize: '14px',
+        fill: '#ff8888'
+      }).setOrigin(0.5).setDepth(7002).setAlpha(0);
+      this.loanElements.push(currentDebt);
+    }
+
+    // 대출 금액 옵션
+    this.loanOptions = [5, 10, 20, 50];
+    this.selectedLoanIndex = 0;
+    this.loanOptionTexts = [];
+
+    this.loanOptions.forEach((amount, i) => {
+      const due = Math.ceil(amount * (1 + this.loanInterestRate));
+      const optionText = this.add.text(
+        width / 2,
+        height / 2 - 20 + i * 35,
+        `$${amount} → Repay: $${due}`,
+        {
+          fontSize: '16px',
+          fill: '#ffffff',
+          fontStyle: 'bold'
+        }
+      ).setOrigin(0.5).setDepth(7002).setAlpha(0);
+      this.loanOptionTexts.push(optionText);
+      this.loanElements.push(optionText);
+    });
+
+    // 안내 텍스트
+    const helpText = this.add.text(width / 2, height / 2 + 125, '↑↓: Select  ENTER: Confirm  ESC: Cancel', {
+      fontSize: '10px',
+      fill: '#888888'
+    }).setOrigin(0.5).setDepth(7002).setAlpha(0);
+    this.loanElements.push(helpText);
+
+    // 등장 애니메이션
+    this.loanElements.forEach((el, i) => {
+      this.tweens.add({
+        targets: el,
+        alpha: 1,
+        y: el.y,
+        duration: 300,
+        delay: i * 50,
+        ease: 'Back.easeOut'
+      });
+    });
+
+    this.updateLoanSelection();
+
+    // ESC 키로 닫기
+    this.loanEscHandler = this.input.keyboard.once('keydown-ESC', () => {
+      this.closeLoanUI();
+    });
+  }
+
+  updateLoanSelection() {
+    if (!this.loanOptionTexts) return;
+
+    this.loanOptionTexts.forEach((text, i) => {
+      if (i === this.selectedLoanIndex) {
+        text.setFill('#00ff00');
+        text.setScale(1.1);
+      } else {
+        text.setFill('#ffffff');
+        text.setScale(1);
+      }
+    });
+  }
+
+  handleLoanInput(direction) {
+    if (!this.loanUIOpen) return;
+
+    if (direction === 'UP') {
+      this.selectedLoanIndex = (this.selectedLoanIndex - 1 + this.loanOptions.length) % this.loanOptions.length;
+      this.updateLoanSelection();
+    } else if (direction === 'DOWN') {
+      this.selectedLoanIndex = (this.selectedLoanIndex + 1) % this.loanOptions.length;
+      this.updateLoanSelection();
+    } else if (direction === 'ENTER') {
+      this.takeLoan(this.loanOptions[this.selectedLoanIndex]);
+    }
+  }
+
+  takeLoan(amount) {
+    const due = Math.ceil(amount * (1 + this.loanInterestRate));
+
+    // 기존 대출에 추가
+    this.loanAmount += amount;
+    this.loanDue += due;
+    this.money += amount;
+
+    // 돈 획득 애니메이션
+    const { width, height } = this.cameras.main;
+
+    // 코인 파티클 효과
+    for (let i = 0; i < 20; i++) {
+      const coin = this.add.circle(
+        width / 2 + (Math.random() - 0.5) * 100,
+        height / 2,
+        4,
+        0xffff00
+      ).setDepth(7003);
+
+      this.tweens.add({
+        targets: coin,
+        x: 80,
+        y: 160,
+        alpha: 0,
+        duration: 800 + Math.random() * 400,
+        ease: 'Power2',
+        onComplete: () => coin.destroy()
+      });
+    }
+
+    // 획득 텍스트
+    const gainText = this.add.text(width / 2, height / 2, `+$${amount}`, {
+      fontSize: '48px',
+      fill: '#00ff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(7003);
+
+    this.tweens.add({
+      targets: gainText,
+      y: height / 2 - 50,
+      alpha: 0,
+      scaleX: 1.5,
+      scaleY: 1.5,
+      duration: 1000,
+      ease: 'Power2',
+      onComplete: () => gainText.destroy()
+    });
+
+    // UI 닫기 및 상점 업데이트
+    this.time.delayedCall(500, () => {
+      this.closeLoanUI();
+      if (this.shopMoneyText) {
+        this.shopMoneyText.setText(`$${this.money}`);
+      }
+      this.updateShopSelection();
+    });
+  }
+
+  closeLoanUI() {
+    if (!this.loanUIOpen) return;
+    this.loanUIOpen = false;
+
+    // 요소 정리
+    this.loanElements.forEach(el => {
+      if (el && el.active) {
+        this.tweens.add({
+          targets: el,
+          alpha: 0,
+          scaleX: 0.8,
+          scaleY: 0.8,
+          duration: 200,
+          onComplete: () => el.destroy()
+        });
+      }
+    });
+    this.loanElements = [];
+    this.loanOptionTexts = [];
+
+    // 상점 키보드 다시 활성화
+    this.time.delayedCall(300, () => {
+      this.shopKeyboardEnabled = true;
     });
   }
 
