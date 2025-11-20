@@ -2512,6 +2512,11 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopOpen = true;
     const { width, height } = this.cameras.main;
 
+    // 매 상점 오픈 시 아이템 purchased 상태 리셋
+    this.shopItems.forEach(item => {
+      item.purchased = false;
+    });
+
     // 대출 상환 체크
     if (this.loanDue > 0) {
       this.repayLoan();
