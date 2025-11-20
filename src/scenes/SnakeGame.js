@@ -389,11 +389,8 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   checkAndShowFoodBubble(foodPos) {
-    console.log('[DEBUG] checkAndShowFoodBubble called, foodPos:', foodPos);
-
     // 기존 말풍선 제거
     if (this.foodBubble) {
-      console.log('[DEBUG] Removing old bubble before creating new one');
 
       // 즉시 보이지 않게 + alpha 0으로 설정
       if (this.foodBubble.image) {
@@ -427,11 +424,8 @@ export default class SnakeGame extends Phaser.Scene {
     const isOnBottomWall = foodPos.y === this.rows - 1;
 
     if (!isOnLeftWall && !isOnRightWall && !isOnTopWall && !isOnBottomWall) {
-      console.log('[DEBUG] Food not on wall, no bubble');
       return; // 벽에 안 붙어있으면 리턴
     }
-
-    console.log('[DEBUG] Food on wall, creating bubble');
 
     // 재치있는 메시지 랜덤 선택
     const messages = ['Oops!', 'Sorry!', 'My bad!', 'Whoops!', 'Uh-oh!'];
@@ -633,7 +627,6 @@ export default class SnakeGame extends Phaser.Scene {
       image: bubbleImage,
       text: bubbleText
     };
-    console.log('[DEBUG] Bubble created and stored:', this.foodBubble);
   }
 
   showCrosshairEffect(foodPos) {
@@ -855,9 +848,6 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 먹이를 먹었는지 체크
     if (newHead.x === this.food.x && newHead.y === this.food.y) {
-      console.log('[DEBUG] ===== FOOD EATEN ===== at position:', newHead.x, newHead.y);
-      console.log('[DEBUG] this.foodBubble before removal:', this.foodBubble);
-
       // 먹이 먹는 효과음 재생
       if (this.eatingSound) {
         this.eatingSound.play();
@@ -865,8 +855,6 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 말풍선 제거
       if (this.foodBubble) {
-        console.log('[DEBUG] Removing bubble at food eat (foodCount=' + this.foodCount + ')');
-
         // 즉시 보이지 않게 + alpha 0으로 설정
         if (this.foodBubble.image) {
           this.foodBubble.image.setVisible(false);
@@ -889,10 +877,6 @@ export default class SnakeGame extends Phaser.Scene {
         if (this.foodBubble.text) {
           this.foodBubble.text.destroy();
         }
-
-        console.log('[DEBUG] Bubble removed');
-      } else {
-        console.log('[DEBUG] No bubble to remove (this.foodBubble is null)');
       }
       this.foodBubble = null;
 
@@ -1008,8 +992,6 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 말풍선 제거 (새 먹이 생성 전)
       if (this.foodBubble) {
-        console.log('[DEBUG] Removing bubble before generating new food');
-
         // 즉시 보이지 않게 + alpha 0으로 설정
         if (this.foodBubble.image) {
           this.foodBubble.image.setVisible(false);
@@ -2128,8 +2110,10 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       if (index === 0) {
-        // 머리 색상 (틴트 적용)
-        if (this.snakeHeadTint) {
+        // 머리 색상 (상점에서 구매한 색상 우선)
+        if (this.snakeHeadColor) {
+          this.graphics.fillStyle(this.snakeHeadColor);
+        } else if (this.snakeHeadTint) {
           this.graphics.fillStyle(this.snakeHeadTint);
         } else if (this.snakeBodyTint) {
           this.graphics.fillStyle(this.snakeBodyTint);
@@ -2546,14 +2530,21 @@ export default class SnakeGame extends Phaser.Scene {
       ease: 'Power2'
     });
 
+    // ===== 레이아웃 계산 =====
+    const sidebarMargin = 10; // 화면 끝에서 간격
+    const sidebarWidth = 140;
+    const sidebarEndX = sidebarMargin + sidebarWidth;
+    const rightAreaCenterX = sidebarEndX + (width - sidebarEndX) / 2;
+
     // ===== 네온 SHOP 타이틀 =====
-    const titleBg = this.add.rectangle(width / 2, 50, 200, 60, 0x8B0000, 1)
+
+    const titleBg = this.add.rectangle(rightAreaCenterX, 50, 200, 60, 0x8B0000, 1)
       .setDepth(6001)
       .setStrokeStyle(4, 0xff0000)
       .setAlpha(0);
     this.shopElements.push(titleBg);
 
-    const title = this.add.text(width / 2, 50, 'SHOP', {
+    const title = this.add.text(rightAreaCenterX, 50, 'SHOP', {
       fontSize: '42px',
       fill: '#ffff00',
       fontStyle: 'bold',
@@ -2597,10 +2588,10 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     // ===== 왼쪽 사이드바 =====
-    const sidebarWidth = 140;
     const sidebarX = -sidebarWidth;
+    const sidebarFinalX = sidebarMargin + sidebarWidth / 2;
 
-    const sidebar = this.add.rectangle(sidebarWidth / 2, height / 2, sidebarWidth, height - 80, 0x1a1a2e, 0.95)
+    const sidebar = this.add.rectangle(sidebarFinalX, height / 2, sidebarWidth, height - 80, 0x1a1a2e, 0.95)
       .setDepth(6001)
       .setStrokeStyle(2, 0x3d5a80)
       .setX(sidebarX);
@@ -2609,7 +2600,7 @@ export default class SnakeGame extends Phaser.Scene {
     // 사이드바 슬라이드 인
     this.tweens.add({
       targets: sidebar,
-      x: sidebarWidth / 2,
+      x: sidebarFinalX,
       duration: 500,
       ease: 'Back.easeOut',
       delay: 300
@@ -2617,16 +2608,18 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 사이드바 내용
     const sidebarContent = [];
+    const contentX = sidebarMargin + 10;
+    const contentCenterX = sidebarMargin + sidebarWidth / 2;
 
     // 돈 표시
-    const moneyLabel = this.add.text(10, 100, 'MONEY', {
+    const moneyLabel = this.add.text(contentX, 100, 'MONEY', {
       fontSize: '12px',
       fill: '#888888',
       fontStyle: 'bold'
     }).setDepth(6002).setAlpha(0);
     sidebarContent.push(moneyLabel);
 
-    this.shopMoneyText = this.add.text(70, 125, '$0', {
+    this.shopMoneyText = this.add.text(contentCenterX, 125, '$0', {
       fontSize: '24px',
       fill: '#ffff00',
       fontStyle: 'bold'
@@ -2634,14 +2627,14 @@ export default class SnakeGame extends Phaser.Scene {
     sidebarContent.push(this.shopMoneyText);
 
     // 스테이지 표시
-    const stageLabel = this.add.text(10, 170, 'STAGE', {
+    const stageLabel = this.add.text(contentX, 170, 'STAGE', {
       fontSize: '12px',
       fill: '#888888',
       fontStyle: 'bold'
     }).setDepth(6002).setAlpha(0);
     sidebarContent.push(stageLabel);
 
-    const stageValue = this.add.text(70, 195, `${this.currentStage}`, {
+    const stageValue = this.add.text(contentCenterX, 195, `${this.currentStage}`, {
       fontSize: '28px',
       fill: '#00ff00',
       fontStyle: 'bold'
@@ -2649,14 +2642,14 @@ export default class SnakeGame extends Phaser.Scene {
     sidebarContent.push(stageValue);
 
     // 콤보 표시
-    const comboLabel = this.add.text(10, 240, 'COMBO', {
+    const comboLabel = this.add.text(contentX, 240, 'COMBO', {
       fontSize: '12px',
       fill: '#888888',
       fontStyle: 'bold'
     }).setDepth(6002).setAlpha(0);
     sidebarContent.push(comboLabel);
 
-    const comboValue = this.add.text(70, 265, `${this.maxCombo}`, {
+    const comboValue = this.add.text(contentCenterX, 265, `${this.maxCombo}`, {
       fontSize: '28px',
       fill: '#ff6600',
       fontStyle: 'bold'
@@ -2664,14 +2657,14 @@ export default class SnakeGame extends Phaser.Scene {
     sidebarContent.push(comboValue);
 
     // 스코어 표시
-    const scoreLabel = this.add.text(10, 310, 'SCORE', {
+    const scoreLabel = this.add.text(contentX, 310, 'SCORE', {
       fontSize: '12px',
       fill: '#888888',
       fontStyle: 'bold'
     }).setDepth(6002).setAlpha(0);
     sidebarContent.push(scoreLabel);
 
-    const scoreValue = this.add.text(70, 335, `${this.score}`, {
+    const scoreValue = this.add.text(contentCenterX, 335, `${this.score}`, {
       fontSize: '20px',
       fill: '#00ffff',
       fontStyle: 'bold'
@@ -2697,15 +2690,26 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopCards = [];
     const cardWidth = 100;
     const cardHeight = 140;
-    const cardStartX = 200;
-    const cardY = 200;
     const cardSpacing = 120;
+    const cardY = 200;
+    // 우측 영역 중앙 기준으로 카드 배치
+    const totalCardsWidth = (this.shopItems.length - 1) * cardSpacing;
+    const cardStartX = rightAreaCenterX - totalCardsWidth / 2;
+
+    // 총 돈 계산 (현재 money + 획득할 score)
+    const totalMoney = this.money + this.score;
 
     this.shopItems.forEach((item, index) => {
       const cardX = cardStartX + index * cardSpacing;
+      const canAfford = totalMoney >= item.price;
 
       // 카드 컨테이너
       const card = this.add.container(cardX, -200).setDepth(6001);
+
+      // 구매 불가 아이템은 처음부터 어둡게
+      if (!item.purchased && !canAfford) {
+        card.setAlpha(0.5);
+      }
 
       // 카드 배경
       const cardBg = this.add.rectangle(0, 0, cardWidth, cardHeight, 0x2a3f5f, 1)
@@ -2727,15 +2731,17 @@ export default class SnakeGame extends Phaser.Scene {
         fontStyle: 'bold'
       }).setOrigin(0.5);
 
-      // 가격 태그
-      const priceTag = this.add.rectangle(0, -cardHeight / 2 - 15, 40, 20,
-        item.purchased ? 0x666666 : 0x00aa00, 1)
-        .setStrokeStyle(2, item.purchased ? 0x444444 : 0x00ff00);
+      // 가격 태그 (구매 가능 여부에 따라 색상)
+      const priceTagColor = item.purchased ? 0x666666 : (canAfford ? 0x00aa00 : 0x661111);
+      const priceTagStroke = item.purchased ? 0x444444 : (canAfford ? 0x00ff00 : 0xff4444);
+      const priceTag = this.add.rectangle(0, -cardHeight / 2 - 15, 40, 20, priceTagColor, 1)
+        .setStrokeStyle(2, priceTagStroke);
 
+      const priceTextColor = item.purchased ? '#666666' : (canAfford ? '#00ff00' : '#ff4444');
       const priceText = this.add.text(0, -cardHeight / 2 - 15,
         item.purchased ? 'SOLD' : `$${item.price}`, {
         fontSize: '10px',
-        fill: '#ffffff',
+        fill: priceTextColor,
         fontStyle: 'bold'
       }).setOrigin(0.5);
 
@@ -2782,84 +2788,209 @@ export default class SnakeGame extends Phaser.Scene {
       });
     });
 
+    // ===== 뱀 프리뷰 영역 =====
+    const previewY = 420;
+    const previewGridSize = 12;
+    const previewCols = 22;
+    const previewRows = 5;
+    const previewWidth = previewCols * previewGridSize;
+    const previewHeight = previewRows * previewGridSize;
+    const previewX = rightAreaCenterX - previewWidth / 2;
+
+    // 미니맵 배경
+    const previewBg = this.add.rectangle(
+      rightAreaCenterX, previewY,
+      previewWidth, previewHeight,
+      0x0d1117, 1
+    ).setDepth(6001).setAlpha(0);
+    this.shopElements.push(previewBg);
+
+    // 그리드 라인 저장용
+    const gridLines = [];
+
+    // 그리드 라인 (더 선명하게)
+    for (let i = 0; i <= previewCols; i++) {
+      const x = previewX + i * previewGridSize;
+      const line = this.add.rectangle(x, previewY, 1, previewHeight, 0x3a4a5a, 1)
+        .setDepth(6001).setAlpha(0);
+      gridLines.push(line);
+      this.shopElements.push(line);
+    }
+    for (let i = 0; i <= previewRows; i++) {
+      const y = previewY - previewHeight / 2 + i * previewGridSize;
+      const line = this.add.rectangle(rightAreaCenterX, y, previewWidth, 1, 0x3a4a5a, 1)
+        .setDepth(6001).setAlpha(0);
+      gridLines.push(line);
+      this.shopElements.push(line);
+    }
+
+    // 테두리
+    const previewBorder = this.add.rectangle(
+      rightAreaCenterX, previewY,
+      previewWidth, previewHeight
+    ).setDepth(6002).setStrokeStyle(2, 0x4a6a8a).setFillStyle(0x000000, 0).setAlpha(0);
+    this.shopElements.push(previewBorder);
+
+    // 초기 뱀 (6칸, 가로)
+    this.shopSnakePreview = [];
+    const snakeLength = 6;
+    const snakeStartCol = Math.floor(previewCols / 2) + 2;
+    const snakeRow = Math.floor(previewRows / 2);
+
+    for (let i = 0; i < snakeLength; i++) {
+      const col = snakeStartCol - i;
+      const cellX = previewX + col * previewGridSize + previewGridSize / 2;
+      const cellY = previewY - previewHeight / 2 + snakeRow * previewGridSize + previewGridSize / 2;
+
+      const isHead = i === 0;
+      // 이미 구매한 머리 색상이 있으면 적용
+      const color = isHead ? (this.snakeHeadColor || 0x00ff00) : 0x00cc00;
+
+      const segment = this.add.rectangle(
+        cellX, cellY,
+        previewGridSize - 2, previewGridSize - 2,
+        color, 1
+      ).setDepth(6002).setAlpha(0);
+
+      this.shopSnakePreview.push(segment);
+      this.shopElements.push(segment);
+    }
+
+    // 프리뷰 등장 애니메이션
+    this.time.delayedCall(1000, () => {
+      // 배경과 그리드
+      this.tweens.add({
+        targets: [previewBg, ...gridLines],
+        alpha: 0.6,
+        duration: 300,
+        ease: 'Power2'
+      });
+
+      // 테두리
+      this.tweens.add({
+        targets: previewBorder,
+        alpha: 1,
+        duration: 300,
+        ease: 'Power2'
+      });
+
+      // 뱀 세그먼트 순차 등장
+      this.shopSnakePreview.forEach((segment, i) => {
+        this.tweens.add({
+          targets: segment,
+          alpha: 1,
+          duration: 200,
+          delay: 100 + i * 50,
+          ease: 'Back.easeOut'
+        });
+      });
+    });
+
     // ===== 하단 버튼들 =====
-    const buttonY = 420;
+    // 사이드바 하단 끝에 맞추고, Loan 버튼 우측은 5번째 카드 우측에 맞춤
+    const buttonY = 520;
+    const buttonGap = 12;
+    const nextBtnWidth = 110;
+    const loanBtnWidth = 70;
 
-    // Next Stage 버튼 (초록)
-    const nextBtnBg = this.add.rectangle(550, buttonY, 120, 45, 0x2d5016, 1)
-      .setDepth(6001)
-      .setStrokeStyle(3, 0x4a9e2d)
+    // 5번째 카드 우측 = cardStartX + 4 * cardSpacing + cardWidth / 2
+    const lastCardRightX = cardStartX + 4 * cardSpacing + cardWidth / 2;
+    const loanBtnX = lastCardRightX - loanBtnWidth / 2;
+    const nextBtnX = loanBtnX - loanBtnWidth / 2 - buttonGap - nextBtnWidth / 2;
+
+    // Next Stage 버튼 (모던 그라데이션 스타일)
+    const nextBtnGlow = this.add.rectangle(nextBtnX, buttonY, nextBtnWidth + 8, 53, 0x00ff88, 0.3)
+      .setDepth(6000)
       .setAlpha(0);
 
-    const nextBtnText = this.add.text(550, buttonY, 'Next\nStage', {
-      fontSize: '14px',
-      fill: '#ffffff',
+    const nextBtnBg = this.add.rectangle(nextBtnX, buttonY, nextBtnWidth, 45, 0x1a472a, 1)
+      .setDepth(6001)
+      .setStrokeStyle(2, 0x00ff88)
+      .setAlpha(0);
+
+    const nextBtnHighlight = this.add.rectangle(nextBtnX, buttonY - 12, nextBtnWidth - 10, 8, 0x00ff88, 0.2)
+      .setDepth(6001)
+      .setAlpha(0);
+
+    const nextBtnText = this.add.text(nextBtnX, buttonY, 'NEXT STAGE', {
+      fontSize: '16px',
+      fill: '#00ff88',
       fontStyle: 'bold',
       align: 'center'
     }).setOrigin(0.5).setDepth(6002).setAlpha(0);
 
-    this.shopNextBtn = { bg: nextBtnBg, text: nextBtnText };
-    this.shopElements.push(nextBtnBg, nextBtnText);
+    this.shopNextBtn = { bg: nextBtnBg, text: nextBtnText, glow: nextBtnGlow, highlight: nextBtnHighlight };
+    this.shopElements.push(nextBtnGlow, nextBtnBg, nextBtnHighlight, nextBtnText);
 
-    // Loan 버튼 (빨강)
-    const loanBtnBg = this.add.rectangle(680, buttonY, 90, 45, 0x8B0000, 1)
-      .setDepth(6001)
-      .setStrokeStyle(3, 0xff4444)
+    // Loan 버튼 (모던 스타일)
+    const loanBtnGlow = this.add.rectangle(loanBtnX, buttonY, loanBtnWidth + 8, 53, 0xff6b6b, 0.3)
+      .setDepth(6000)
       .setAlpha(0);
 
-    const loanBtnText = this.add.text(680, buttonY, 'LOAN\n💰', {
-      fontSize: '12px',
-      fill: '#ffffff',
+    const loanBtnBg = this.add.rectangle(loanBtnX, buttonY, loanBtnWidth, 45, 0x4a1a1a, 1)
+      .setDepth(6001)
+      .setStrokeStyle(2, 0xff6b6b)
+      .setAlpha(0);
+
+    const loanBtnHighlight = this.add.rectangle(loanBtnX, buttonY - 12, loanBtnWidth - 10, 8, 0xff6b6b, 0.2)
+      .setDepth(6001)
+      .setAlpha(0);
+
+    const loanBtnText = this.add.text(loanBtnX, buttonY, 'LOAN', {
+      fontSize: '16px',
+      fill: '#ff6b6b',
       fontStyle: 'bold',
       align: 'center'
     }).setOrigin(0.5).setDepth(6002).setAlpha(0);
 
-    this.shopLoanBtn = { bg: loanBtnBg, text: loanBtnText };
-    this.shopElements.push(loanBtnBg, loanBtnText);
+    this.shopLoanBtn = { bg: loanBtnBg, text: loanBtnText, glow: loanBtnGlow, highlight: loanBtnHighlight };
+    this.shopElements.push(loanBtnGlow, loanBtnBg, loanBtnHighlight, loanBtnText);
 
-    // 버튼 등장 애니메이션
+    // 버튼 등장 애니메이션 (슬라이드 업 + 페이드)
     this.time.delayedCall(1200, () => {
-      [nextBtnBg, nextBtnText, loanBtnBg, loanBtnText].forEach((el, i) => {
+      const allBtnElements = [
+        nextBtnGlow, nextBtnBg, nextBtnHighlight, nextBtnText,
+        loanBtnGlow, loanBtnBg, loanBtnHighlight, loanBtnText
+      ];
+
+      allBtnElements.forEach((el, i) => {
+        const originalY = el.y;
+        el.y = originalY + 30;
         this.tweens.add({
           targets: el,
-          alpha: 1,
-          scaleX: { from: 0, to: 1 },
-          scaleY: { from: 0, to: 1 },
-          duration: 300,
-          delay: i * 100,
+          y: originalY,
+          alpha: el === nextBtnGlow || el === loanBtnGlow ? 0.3 : 1,
+          duration: 400,
+          delay: Math.floor(i / 4) * 150,
           ease: 'Back.easeOut'
         });
       });
 
-      // 버튼 펄스 효과
+      // Next Stage 버튼 글로우 펄스
       this.tweens.add({
-        targets: nextBtnBg,
+        targets: nextBtnGlow,
+        alpha: 0.5,
         scaleX: 1.05,
-        scaleY: 1.05,
-        duration: 800,
+        scaleY: 1.1,
+        duration: 1000,
         yoyo: true,
         repeat: -1,
         ease: 'Sine.easeInOut'
       });
     });
 
-    // ===== 조작 안내 =====
-    const helpText = this.add.text(width / 2, height - 30, '←→: 선택  ↑: 구매  ENTER: 다음 스테이지', {
-      fontSize: '12px',
-      fill: '#666666'
-    }).setOrigin(0.5).setDepth(6002).setAlpha(0);
-    this.shopElements.push(helpText);
-
-    this.time.delayedCall(1500, () => {
-      this.tweens.add({
-        targets: helpText,
-        alpha: 1,
-        duration: 300
-      });
-    });
-
-    // 선택 인덱스 초기화
+    // 선택 인덱스 초기화 (첫 번째 구매 가능한 아이템)
     this.selectedShopIndex = 0;
+    for (let i = 0; i < this.shopItems.length; i++) {
+      if (!this.shopItems[i].purchased) {
+        this.selectedShopIndex = i;
+        break;
+      }
+    }
+    // 모든 아이템이 SOLD면 Next Stage 버튼 선택
+    if (this.shopItems.every(item => item.purchased)) {
+      this.selectedShopIndex = this.shopItems.length;
+    }
 
     // 스코어 → 돈 전환 애니메이션
     this.time.delayedCall(800, () => {
@@ -2958,18 +3089,7 @@ export default class SnakeGame extends Phaser.Scene {
       const item = this.shopItems[index];
       const canAfford = this.money >= item.price;
 
-      // 구매 불가 아이템 어둡게 처리
-      if (!item.purchased && !canAfford) {
-        card.container.setAlpha(0.5);
-        if (card.priceText) {
-          card.priceText.setFill('#ff4444');
-        }
-      } else if (!item.purchased) {
-        card.container.setAlpha(1);
-        if (card.priceText) {
-          card.priceText.setFill('#00ff00');
-        }
-      }
+      // 밝기는 초기 설정 유지 (돈 카운트 중 변경 안 함)
 
       if (isSelected && !item.purchased) {
         // 선택된 카드 - 위로 올라오고 발광
@@ -3015,26 +3135,51 @@ export default class SnakeGame extends Phaser.Scene {
     // Next Stage 버튼 하이라이트
     if (this.shopNextBtn) {
       const isNextSelected = this.selectedShopIndex === this.shopItems.length;
-      this.shopNextBtn.bg.setStrokeStyle(3, isNextSelected ? 0xffff00 : 0x4a9e2d);
-      this.shopNextBtn.text.setFill(isNextSelected ? '#ffff00' : '#ffffff');
 
       if (isNextSelected) {
-        // 포커스 시 들썩임 애니메이션
+        this.shopNextBtn.bg.setStrokeStyle(3, 0xffffff);
+        this.shopNextBtn.text.setFill('#ffffff');
+        this.shopNextBtn.glow.setFillStyle(0xffffff, 0.5);
+
+        // 포커스 시 스케일 업 + 글로우 강화
         if (!this.shopNextBtn.floatTween) {
           this.shopNextBtn.floatTween = this.tweens.add({
-            targets: [this.shopNextBtn.bg, this.shopNextBtn.text],
-            y: '+=3',
-            duration: 200,
-            yoyo: true,
-            repeat: -1,
-            ease: 'Sine.easeInOut'
+            targets: [this.shopNextBtn.bg, this.shopNextBtn.text, this.shopNextBtn.highlight],
+            scaleX: 1.08,
+            scaleY: 1.08,
+            duration: 150,
+            ease: 'Back.easeOut'
+          });
+          this.tweens.add({
+            targets: this.shopNextBtn.glow,
+            alpha: 0.7,
+            scaleX: 1.15,
+            scaleY: 1.2,
+            duration: 150
           });
         }
       } else {
-        // 포커스 해제 시 애니메이션 정지
+        this.shopNextBtn.bg.setStrokeStyle(2, 0x00ff88);
+        this.shopNextBtn.text.setFill('#00ff88');
+        this.shopNextBtn.glow.setFillStyle(0x00ff88, 0.3);
+
+        // 포커스 해제 시 원래 크기로
         if (this.shopNextBtn.floatTween) {
           this.shopNextBtn.floatTween.stop();
           this.shopNextBtn.floatTween = null;
+          this.tweens.add({
+            targets: [this.shopNextBtn.bg, this.shopNextBtn.text, this.shopNextBtn.highlight],
+            scaleX: 1,
+            scaleY: 1,
+            duration: 150
+          });
+          this.tweens.add({
+            targets: this.shopNextBtn.glow,
+            alpha: 0.3,
+            scaleX: 1,
+            scaleY: 1,
+            duration: 150
+          });
         }
       }
     }
@@ -3042,26 +3187,51 @@ export default class SnakeGame extends Phaser.Scene {
     // Loan 버튼 하이라이트
     if (this.shopLoanBtn) {
       const isLoanSelected = this.selectedShopIndex === this.shopItems.length + 1;
-      this.shopLoanBtn.bg.setStrokeStyle(3, isLoanSelected ? 0xffff00 : 0xff4444);
-      this.shopLoanBtn.text.setFill(isLoanSelected ? '#ffff00' : '#ffffff');
 
       if (isLoanSelected) {
-        // 포커스 시 들썩임 애니메이션
+        this.shopLoanBtn.bg.setStrokeStyle(3, 0xffffff);
+        this.shopLoanBtn.text.setFill('#ffffff');
+        this.shopLoanBtn.glow.setFillStyle(0xffffff, 0.5);
+
+        // 포커스 시 스케일 업 + 글로우 강화
         if (!this.shopLoanBtn.floatTween) {
           this.shopLoanBtn.floatTween = this.tweens.add({
-            targets: [this.shopLoanBtn.bg, this.shopLoanBtn.text],
-            y: '+=3',
-            duration: 200,
-            yoyo: true,
-            repeat: -1,
-            ease: 'Sine.easeInOut'
+            targets: [this.shopLoanBtn.bg, this.shopLoanBtn.text, this.shopLoanBtn.highlight],
+            scaleX: 1.08,
+            scaleY: 1.08,
+            duration: 150,
+            ease: 'Back.easeOut'
+          });
+          this.tweens.add({
+            targets: this.shopLoanBtn.glow,
+            alpha: 0.7,
+            scaleX: 1.15,
+            scaleY: 1.2,
+            duration: 150
           });
         }
       } else {
-        // 포커스 해제 시 애니메이션 정지
+        this.shopLoanBtn.bg.setStrokeStyle(2, 0xff6b6b);
+        this.shopLoanBtn.text.setFill('#ff6b6b');
+        this.shopLoanBtn.glow.setFillStyle(0xff6b6b, 0.3);
+
+        // 포커스 해제 시 원래 크기로
         if (this.shopLoanBtn.floatTween) {
           this.shopLoanBtn.floatTween.stop();
           this.shopLoanBtn.floatTween = null;
+          this.tweens.add({
+            targets: [this.shopLoanBtn.bg, this.shopLoanBtn.text, this.shopLoanBtn.highlight],
+            scaleX: 1,
+            scaleY: 1,
+            duration: 150
+          });
+          this.tweens.add({
+            targets: this.shopLoanBtn.glow,
+            alpha: 0.3,
+            scaleX: 1,
+            scaleY: 1,
+            duration: 150
+          });
         }
       }
     }
@@ -3094,8 +3264,20 @@ export default class SnakeGame extends Phaser.Scene {
     } else if (direction === 'UP') {
       // 버튼에서 위로 누르면 아이템 카드로 이동
       if (this.selectedShopIndex >= this.shopItems.length) {
-        this.selectedShopIndex = 0;
-        this.updateShopSelection();
+        // 첫 번째 구매 가능한 아이템 찾기
+        let foundIndex = -1;
+        for (let i = 0; i < this.shopItems.length; i++) {
+          if (!this.shopItems[i].purchased) {
+            foundIndex = i;
+            break;
+          }
+        }
+
+        if (foundIndex !== -1) {
+          this.selectedShopIndex = foundIndex;
+          this.updateShopSelection();
+        }
+        // 모든 아이템이 SOLD면 버튼에 머무름
       }
     } else if (direction === 'DOWN') {
       // 아이템 카드에서 아래로 누르면 Next Stage 버튼으로 이동
@@ -3192,6 +3374,86 @@ export default class SnakeGame extends Phaser.Scene {
     this.money -= item.price;
     item.purchased = true;
     this.shopMoneyText.setText(`$${this.money}`);
+
+    // 아이템별 효과 적용
+    if (index === 0 && this.shopSnakePreview && this.shopSnakePreview.length > 0) {
+      // Speed Boost - 뱀 머리 노란색으로 변경
+      this.snakeHeadColor = 0xffff00;
+
+      // 화려한 장착 애니메이션
+      const head = this.shopSnakePreview[0];
+      const headX = head.x;
+      const headY = head.y;
+
+      // 1. 머리에서 파티클 폭발
+      for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2;
+        const particle = this.add.circle(headX, headY, 3, 0xffff00)
+          .setDepth(6010).setAlpha(1);
+        this.tweens.add({
+          targets: particle,
+          x: headX + Math.cos(angle) * 40,
+          y: headY + Math.sin(angle) * 40,
+          alpha: 0,
+          scale: 0,
+          duration: 400,
+          ease: 'Power2',
+          onComplete: () => particle.destroy()
+        });
+      }
+
+      // 2. 전체 뱀 웨이브 효과 (머리→꼬리)
+      this.shopSnakePreview.forEach((segment, i) => {
+        // 순차적 스케일 업
+        this.tweens.add({
+          targets: segment,
+          scaleX: 1.4,
+          scaleY: 1.4,
+          duration: 100,
+          delay: i * 50,
+          yoyo: true,
+          ease: 'Back.easeOut'
+        });
+
+        // 순차적 색상 플래시 (흰색 웨이브)
+        const originalColor = i === 0 ? 0xffff00 : 0x00cc00;
+        this.time.delayedCall(i * 50, () => {
+          segment.setFillStyle(0xffffff);
+          this.time.delayedCall(100, () => {
+            segment.setFillStyle(originalColor);
+          });
+        });
+      });
+
+      // 3. 머리 글로우 효과
+      this.time.delayedCall(300, () => {
+        const glow = this.add.circle(headX, headY, 15, 0xffff00, 0.5)
+          .setDepth(6009);
+        this.tweens.add({
+          targets: glow,
+          alpha: 0,
+          scale: 2,
+          duration: 500,
+          onComplete: () => glow.destroy()
+        });
+      });
+
+      // 4. 에너지 라인 효과 (머리에서 꼬리로)
+      const tail = this.shopSnakePreview[this.shopSnakePreview.length - 1];
+      const energyLine = this.add.rectangle(headX, headY, 4, 4, 0xffff00)
+        .setDepth(6008);
+
+      this.tweens.add({
+        targets: energyLine,
+        x: tail.x,
+        scaleX: 0.5,
+        alpha: 0,
+        duration: 400,
+        delay: 100,
+        ease: 'Power2',
+        onComplete: () => energyLine.destroy()
+      });
+    }
 
     // 카드가 위로 날아가며 사라지는 애니메이션
     if (card.floatTween) {
