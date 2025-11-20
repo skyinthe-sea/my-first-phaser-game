@@ -2929,6 +2929,20 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopCards.forEach((card, index) => {
       const isSelected = index === this.selectedShopIndex;
       const item = this.shopItems[index];
+      const canAfford = this.money >= item.price;
+
+      // 구매 불가 아이템 어둡게 처리
+      if (!item.purchased && !canAfford) {
+        card.container.setAlpha(0.5);
+        if (card.priceText) {
+          card.priceText.setFill('#ff4444');
+        }
+      } else if (!item.purchased) {
+        card.container.setAlpha(1);
+        if (card.priceText) {
+          card.priceText.setFill('#00ff00');
+        }
+      }
 
       if (isSelected && !item.purchased) {
         // 선택된 카드 - 위로 올라오고 발광
@@ -2939,8 +2953,8 @@ export default class SnakeGame extends Phaser.Scene {
           ease: 'Back.easeOut'
         });
 
-        // 테두리 발광
-        card.bg.setStrokeStyle(4, 0xffff00);
+        // 테두리 발광 (구매 불가 시 빨간색)
+        card.bg.setStrokeStyle(4, canAfford ? 0xffff00 : 0xff4444);
 
         // 들썩임 효과
         if (!card.floatTween) {
@@ -3040,6 +3054,37 @@ export default class SnakeGame extends Phaser.Scene {
         repeat: 2,
         onComplete: () => card.container.setAngle(0)
       });
+
+      // "NOT ENOUGH" 메시지 애니메이션
+      const cardX = card.container.x;
+      const cardY = card.container.y;
+      const notEnoughText = this.add.text(cardX, cardY, 'NOT ENOUGH', {
+        fontSize: '14px',
+        fill: '#ff0000',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 3
+      }).setOrigin(0.5).setDepth(6010).setAlpha(0);
+
+      this.tweens.add({
+        targets: notEnoughText,
+        y: cardY - 50,
+        alpha: 1,
+        duration: 200,
+        ease: 'Power2',
+        onComplete: () => {
+          this.tweens.add({
+            targets: notEnoughText,
+            y: cardY - 80,
+            alpha: 0,
+            duration: 300,
+            delay: 200,
+            ease: 'Power2',
+            onComplete: () => notEnoughText.destroy()
+          });
+        }
+      });
+
       return;
     }
 
