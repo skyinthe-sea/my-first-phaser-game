@@ -5690,6 +5690,9 @@ export default class SnakeGame extends Phaser.Scene {
   showPaymentWarning(missedLoans) {
     const { width, height } = this.cameras.main;
 
+    // 경고 중 키보드 입력 비활성화
+    this.shopKeyboardEnabled = false;
+
     // 화면 흔들기
     this.cameras.main.shake(500, 0.02);
 
@@ -5873,6 +5876,11 @@ export default class SnakeGame extends Phaser.Scene {
           delay: i * 30,
           onComplete: () => el.destroy()
         });
+      });
+
+      // 경고 종료 후 키보드 재활성화
+      this.time.delayedCall(allElements.length * 30 + 350, () => {
+        this.shopKeyboardEnabled = true;
       });
     });
   }
