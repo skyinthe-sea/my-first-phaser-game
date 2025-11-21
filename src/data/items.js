@@ -4,7 +4,7 @@ export const ITEMS = {
     id: 'combo_shield',
     name: 'Combo Shield',
     description: 'Protects your combo once when you would lose it',
-    price: 100,
+    price: 10,
     rarity: 'rare',
     icon: 'combo_shield', // 이미지 키
     effect: {
