@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { getShopItems } from '../data/items.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -19,6 +20,9 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 말풍선 이미지 로드
     this.load.image('bubble', 'assets/sprite/bubble.png');
+
+    // 아이템 이미지 로드
+    this.load.image('combo_shield', 'assets/items/combo_shield.png');
   }
 
   create() {
@@ -180,14 +184,11 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopOpen = false; // 상점 열림 상태
     this.shopElements = []; // 상점 UI 요소들
     this.selectedShopIndex = 0; // 선택된 아이템 인덱스
-    this.shopItems = [
-      { name: 'Speed Boost', description: '이동 속도 10% 감소', price: 1, purchased: false },
-      { name: 'Double Score', description: '다음 스테이지 점수 2배', price: 2, purchased: false },
-      { name: 'Extra Life', description: '목숨 +1 (1회 부활)', price: 8, purchased: false },
-      { name: 'Magnet', description: '먹이를 끌어당김', price: 10, purchased: false },
-      { name: 'Shield', description: '벽 충돌 1회 방지', price: 15, purchased: false }
-    ];
+    this.shopItems = getShopItems(); // items.js에서 아이템 데이터 로드
     this.shopKeyboardEnabled = false; // 상점 키보드 활성화
+
+    // 아이템 효과 상태
+    this.comboShieldCount = 0; // 콤보 실드 개수 (여러 개 지원)
 
     // 뱅킹/대출 시스템
     this.loanAmount = 0; // 빌린 금액 (원금)
@@ -951,10 +952,21 @@ export default class SnakeGame extends Phaser.Scene {
       } else {
         // 콤보 끊김
         if (this.combo > 0) {
-          this.showComboBroken();
+          // 콤보 실드가 있으면 방어
+          if (this.comboShieldCount > 0) {
+            this.comboShieldCount--;
+            this.showComboShieldEffect();
+            // 콤보 유지, 방향 전환 카운터만 리셋
+            this.directionChangesCount = 0;
+          } else {
+            this.showComboBroken();
+            this.combo = 0;
+            this.comboText.setText('');
+          }
+        } else {
+          this.combo = 0;
+          this.comboText.setText('');
         }
-        this.combo = 0;
-        this.comboText.setText('');
       }
 
       // 콤보에 따른 점수 배율
@@ -1036,7 +1048,7 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 스테이지 클리어 체크 (25개 먹으면 클리어)
-      if (this.foodCount >= 1) { // TODO: 테스트 후 25로 변경
+      if (this.foodCount >= 25) {
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -1437,9 +1449,16 @@ export default class SnakeGame extends Phaser.Scene {
       textColor = '#ff0000'; // 빨강
       strokeColor = '#660000';
     } else if (movesLeft === 0) {
-      displayText = 'X';
-      textColor = '#666666'; // 회색
-      strokeColor = '#222222';
+      // 콤보 실드가 있으면 SHIELD! 표시
+      if (this.comboShieldCount > 0) {
+        displayText = 'SHIELD!';
+        textColor = '#ffd700'; // 골드
+        strokeColor = '#665500';
+      } else {
+        displayText = 'X';
+        textColor = '#666666'; // 회색
+        strokeColor = '#222222';
+      }
     } else {
       return; // 4 이상이면 표시 안 함
     }
@@ -1631,6 +1650,149 @@ export default class SnakeGame extends Phaser.Scene {
       ease: 'Power2',
       onComplete: () => brokenText.destroy()
     });
+  }
+
+  showComboShieldEffect() {
+    const { width, height } = this.cameras.main;
+
+    // 1. 화면 전체 플래시 (골드 → 화이트 → 페이드)
+    const flash = this.add.rectangle(width / 2, height / 2, width, height, 0xffffff, 0.8)
+      .setDepth(1000);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 150,
+      onComplete: () => flash.destroy()
+    });
+
+    // 2. 방패 아이콘 확대 효과 (중앙에서 커지면서 등장)
+    const shieldIcon = this.add.text(width / 2, height / 2 - 60, '🛡️', {
+      fontSize: '80px'
+    }).setOrigin(0.5).setDepth(1002).setScale(0).setAlpha(0);
+
+    this.tweens.add({
+      targets: shieldIcon,
+      scale: 1.5,
+      alpha: 1,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        // 방패 회전 + 축소 페이드
+        this.tweens.add({
+          targets: shieldIcon,
+          scale: 0,
+          alpha: 0,
+          angle: 360,
+          duration: 400,
+          ease: 'Power2',
+          onComplete: () => shieldIcon.destroy()
+        });
+      }
+    });
+
+    // 3. "COMBO SHIELD!!" 텍스트 - 글자별 등장
+    const text = 'COMBO SHIELD!!';
+    const letters = [];
+    const startX = width / 2 - (text.length * 12);
+
+    for (let i = 0; i < text.length; i++) {
+      const letter = this.add.text(startX + i * 24, height / 2 + 20, text[i], {
+        fontSize: '36px',
+        fill: '#ffd700',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 4
+      }).setOrigin(0.5).setDepth(1001).setScale(0).setAlpha(0);
+      letters.push(letter);
+
+      // 순차적 등장 애니메이션
+      this.tweens.add({
+        targets: letter,
+        scale: 1.2,
+        alpha: 1,
+        y: height / 2 + 10,
+        duration: 100,
+        delay: i * 30,
+        ease: 'Back.easeOut'
+      });
+    }
+
+    // 글자 전체 펄스 + 페이드 아웃
+    this.time.delayedCall(text.length * 30 + 200, () => {
+      // 펄스
+      this.tweens.add({
+        targets: letters,
+        scale: 1.4,
+        duration: 100,
+        yoyo: true,
+        repeat: 1,
+        onComplete: () => {
+          // 페이드 아웃
+          this.tweens.add({
+            targets: letters,
+            alpha: 0,
+            y: height / 2 - 30,
+            duration: 300,
+            ease: 'Power2',
+            onComplete: () => letters.forEach(l => l.destroy())
+          });
+        }
+      });
+    });
+
+    // 4. 웨이브 링 효과 (3겹)
+    for (let r = 0; r < 3; r++) {
+      const ring = this.add.circle(width / 2, height / 2, 10, 0x000000, 0)
+        .setStrokeStyle(4, 0xffd700, 1)
+        .setDepth(1000);
+      this.tweens.add({
+        targets: ring,
+        radius: 200 + r * 50,
+        alpha: 0,
+        duration: 600,
+        delay: r * 100,
+        ease: 'Power2',
+        onComplete: () => ring.destroy()
+      });
+    }
+
+    // 5. 스파클 파티클 (별 모양)
+    for (let i = 0; i < 30; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 50 + Math.random() * 100;
+      const sparkle = this.add.text(
+        width / 2 + Math.cos(angle) * 30,
+        height / 2 + Math.sin(angle) * 30,
+        '✦',
+        { fontSize: '16px', fill: '#ffd700' }
+      ).setOrigin(0.5).setDepth(1001).setAlpha(1);
+
+      this.tweens.add({
+        targets: sparkle,
+        x: width / 2 + Math.cos(angle) * distance,
+        y: height / 2 + Math.sin(angle) * distance,
+        alpha: 0,
+        scale: 0,
+        duration: 400 + Math.random() * 200,
+        ease: 'Power2',
+        onComplete: () => sparkle.destroy()
+      });
+    }
+
+    // 6. 화면 테두리 골드 글로우 (펄스)
+    const border = this.add.rectangle(width / 2, height / 2, width - 10, height - 10, 0x000000, 0)
+      .setStrokeStyle(10, 0xffd700, 1)
+      .setDepth(1000);
+    this.tweens.add({
+      targets: border,
+      strokeAlpha: { from: 1, to: 0 },
+      duration: 600,
+      ease: 'Sine.easeOut',
+      onComplete: () => border.destroy()
+    });
+
+    // 7. 화면 흔들림
+    this.cameras.main.shake(200, 0.01);
   }
 
   playFoodEffect() {
@@ -2512,10 +2674,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopOpen = true;
     const { width, height } = this.cameras.main;
 
-    // 매 상점 오픈 시 아이템 purchased 상태 리셋
-    this.shopItems.forEach(item => {
-      item.purchased = false;
-    });
+    // 매 상점 오픈 시 아이템 목록 새로 로드
+    this.shopItems = getShopItems();
 
     // 대출 상환 체크
     if (this.loanDue > 0) {
@@ -2723,11 +2883,19 @@ export default class SnakeGame extends Phaser.Scene {
       // 카드 내부 패턴
       const cardInner = this.add.rectangle(0, -20, cardWidth - 20, cardHeight - 60, 0x1a2a3f, 1);
 
-      // 아이템 아이콘 (이모지 대신 심볼)
-      const icons = ['⚡', '×2', '❤', '🧲', '🛡'];
-      const iconText = this.add.text(0, -25, icons[index], {
-        fontSize: '32px'
-      }).setOrigin(0.5);
+      // 아이템 아이콘 (이미지 또는 이모지)
+      let iconElement;
+      if (item.icon && this.textures.exists(item.icon)) {
+        // 이미지가 있으면 이미지 사용
+        iconElement = this.add.image(0, -20, item.icon)
+          .setDisplaySize(64, 64);
+      } else {
+        // 이미지가 없으면 기본 이모지
+        const defaultIcons = ['⚡', '×2', '❤', '🧲', '🛡'];
+        iconElement = this.add.text(0, -25, defaultIcons[index] || '?', {
+          fontSize: '32px'
+        }).setOrigin(0.5);
+      }
 
       // 아이템 이름
       const nameText = this.add.text(0, 30, item.name.split(' ')[0], {
@@ -2750,7 +2918,7 @@ export default class SnakeGame extends Phaser.Scene {
         fontStyle: 'bold'
       }).setOrigin(0.5);
 
-      card.add([cardBg, cardInner, iconText, nameText, priceTag, priceText]);
+      card.add([cardBg, cardInner, iconElement, nameText, priceTag, priceText]);
       this.shopElements.push(card);
 
       this.shopCards.push({
@@ -3089,6 +3257,61 @@ export default class SnakeGame extends Phaser.Scene {
   updateShopSelection() {
     if (!this.shopCards) return;
 
+    // 기존 설명 팝업 제거
+    if (this.itemDescPopup) {
+      this.itemDescPopup.destroy();
+      this.itemDescPopup = null;
+    }
+
+    // 선택된 아이템이 카드인 경우 설명 팝업 표시
+    if (this.selectedShopIndex < this.shopItems.length) {
+      const selectedItem = this.shopItems[this.selectedShopIndex];
+      const card = this.shopCards[this.selectedShopIndex];
+
+      if (card && selectedItem.description) {
+        const popupX = card.container.x;
+        const popupY = card.container.y + 110;
+
+        // 설명 팝업 배경 - 더 진하고 잘 보이게
+        const popupBg = this.add.rectangle(popupX, popupY + 10, 200, 50, 0x1a1a2e, 0.95)
+          .setDepth(6010)
+          .setStrokeStyle(2, 0x4a9eff);
+
+        // 설명 텍스트 - 더 큰 폰트, 테두리 추가
+        const popupText = this.add.text(popupX, popupY + 10, selectedItem.description, {
+          fontSize: '11px',
+          fill: '#ffffff',
+          fontStyle: 'bold',
+          align: 'center',
+          wordWrap: { width: 180 },
+          stroke: '#000000',
+          strokeThickness: 2
+        }).setOrigin(0.5).setDepth(6011);
+
+        // 컨테이너로 묶기
+        this.itemDescPopup = this.add.container(0, 0, [popupBg, popupText]);
+        this.shopElements.push(this.itemDescPopup);
+
+        // 슬라이드 업 + 페이드인 애니메이션
+        popupBg.setAlpha(0).setY(popupY + 30);
+        popupText.setAlpha(0).setY(popupY + 30);
+        this.tweens.add({
+          targets: popupBg,
+          alpha: 0.95,
+          y: popupY + 10,
+          duration: 200,
+          ease: 'Back.easeOut'
+        });
+        this.tweens.add({
+          targets: popupText,
+          alpha: 1,
+          y: popupY + 10,
+          duration: 200,
+          ease: 'Back.easeOut'
+        });
+      }
+    }
+
     this.shopCards.forEach((card, index) => {
       const isSelected = index === this.selectedShopIndex;
       const item = this.shopItems[index];
@@ -3381,7 +3604,55 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopMoneyText.setText(`$${this.money}`);
 
     // 아이템별 효과 적용
-    if (index === 0 && this.shopSnakePreview && this.shopSnakePreview.length > 0) {
+    if (item.id === 'combo_shield') {
+      // Combo Shield - 콤보 실드 추가
+      this.comboShieldCount++;
+
+      // 화려한 장착 애니메이션
+      if (this.shopSnakePreview && this.shopSnakePreview.length > 0) {
+        const head = this.shopSnakePreview[0];
+        const headX = head.x;
+        const headY = head.y;
+
+        // 1. 골드 파티클 폭발
+        for (let i = 0; i < 12; i++) {
+          const angle = (i / 12) * Math.PI * 2;
+          const particle = this.add.circle(headX, headY, 3, 0xffd700)
+            .setDepth(6010).setAlpha(1);
+          this.tweens.add({
+            targets: particle,
+            x: headX + Math.cos(angle) * 40,
+            y: headY + Math.sin(angle) * 40,
+            alpha: 0,
+            scale: 0,
+            duration: 400,
+            ease: 'Power2',
+            onComplete: () => particle.destroy()
+          });
+        }
+
+        // 2. 전체 뱀 웨이브 효과 (골드 플래시)
+        this.shopSnakePreview.forEach((segment, i) => {
+          this.tweens.add({
+            targets: segment,
+            scaleX: 1.4,
+            scaleY: 1.4,
+            duration: 100,
+            delay: i * 50,
+            yoyo: true,
+            ease: 'Back.easeOut'
+          });
+
+          const originalColor = i === 0 ? 0x00ff00 : 0x00cc00;
+          this.time.delayedCall(i * 50, () => {
+            segment.setFillStyle(0xffd700);
+            this.time.delayedCall(100, () => {
+              segment.setFillStyle(originalColor);
+            });
+          });
+        });
+      }
+    } else if (item.id === 'speed_boost' && this.shopSnakePreview && this.shopSnakePreview.length > 0) {
       // Speed Boost - 뱀 머리 노란색으로 변경
       this.snakeHeadColor = 0xffff00;
 
