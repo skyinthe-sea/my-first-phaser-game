@@ -2784,67 +2784,40 @@ export default class SnakeGame extends Phaser.Scene {
     const contentX = sidebarMargin + 10;
     const contentCenterX = sidebarMargin + sidebarWidth / 2;
 
-    // 돈 표시
-    const moneyLabel = this.add.text(contentX, 100, 'MONEY', {
-      fontSize: '12px',
-      fill: '#888888',
-      fontStyle: 'bold'
-    }).setDepth(6002).setAlpha(0);
-    sidebarContent.push(moneyLabel);
-
-    this.shopMoneyText = this.add.text(contentCenterX, 125, '$0', {
-      fontSize: '24px',
-      fill: '#ffff00',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(6002).setAlpha(0);
-    sidebarContent.push(this.shopMoneyText);
-
     // 스테이지 표시
-    const stageLabel = this.add.text(contentX, 170, 'STAGE', {
+    const stageLabel = this.add.text(contentX, 100, 'STAGE', {
       fontSize: '12px',
       fill: '#888888',
       fontStyle: 'bold'
     }).setDepth(6002).setAlpha(0);
     sidebarContent.push(stageLabel);
 
-    const stageValue = this.add.text(contentCenterX, 195, `${this.currentStage}`, {
+    const stageValue = this.add.text(contentCenterX, 125, `${this.currentStage}`, {
       fontSize: '28px',
       fill: '#00ff00',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(6002).setAlpha(0);
     sidebarContent.push(stageValue);
 
-    // 콤보 표시
-    const comboLabel = this.add.text(contentX, 240, 'COMBO', {
+    // 돈 표시
+    const moneyLabel = this.add.text(contentX, 170, 'MONEY', {
       fontSize: '12px',
       fill: '#888888',
       fontStyle: 'bold'
     }).setDepth(6002).setAlpha(0);
-    sidebarContent.push(comboLabel);
+    sidebarContent.push(moneyLabel);
 
-    const comboValue = this.add.text(contentCenterX, 265, `${this.maxCombo}`, {
-      fontSize: '28px',
-      fill: '#ff6600',
+    this.shopMoneyText = this.add.text(contentCenterX, 195, '$0', {
+      fontSize: '24px',
+      fill: '#ffff00',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(6002).setAlpha(0);
-    sidebarContent.push(comboValue);
-
-    // 스코어 표시
-    const scoreLabel = this.add.text(contentX, 310, 'SCORE', {
-      fontSize: '12px',
-      fill: '#888888',
-      fontStyle: 'bold'
-    }).setDepth(6002).setAlpha(0);
-    sidebarContent.push(scoreLabel);
-
-    const scoreValue = this.add.text(contentCenterX, 335, `${this.score}`, {
-      fontSize: '20px',
-      fill: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(6002).setAlpha(0);
-    sidebarContent.push(scoreValue);
+    sidebarContent.push(this.shopMoneyText);
 
     this.shopElements.push(...sidebarContent);
+
+    // 빚 정보는 updateShopDebtInfo에서 관리 (중복 방지)
+    this.shopDebtElements = [];
 
     // 사이드바 내용 페이드인
     this.time.delayedCall(600, () => {
@@ -2856,6 +2829,10 @@ export default class SnakeGame extends Phaser.Scene {
           delay: i * 50,
           ease: 'Power2'
         });
+      });
+      // 빚 정보 표시 (대출이 있을 때만)
+      this.time.delayedCall(sidebarContent.length * 50 + 100, () => {
+        this.updateShopDebtInfo();
       });
     });
 
@@ -3194,33 +3171,42 @@ export default class SnakeGame extends Phaser.Scene {
     const afterScore = previousMoney + scoreEarned;
     this.money = afterScore;
 
-    // 2. 대출이 있으면 이자 적용 및 자동상환 계산
+    // 2. 대출이 있으면 자동상환 계산 (5스테이지 원리금균등)
     const repayments = []; // 각 은행별 상환 정보
     let hasMissedPayment = false;
     let bankruptBank = null;
 
     if (this.loans.length > 0) {
-      this.applyLoanInterest();
-      this.loans.sort((a, b) => a.due - b.due);
-
       this.loans.forEach(loan => {
-        const minPayment = Math.min(Math.ceil(loan.due * this.minimumPaymentRate), loan.due);
-        if (this.money >= minPayment) {
-          this.money -= minPayment;
-          loan.due -= minPayment;
+        // 마지막 스테이지면 남은 전액, 아니면 고정 상환액
+        const payment = loan.stagesLeft === 1 ? loan.remaining : Math.min(loan.paymentPerStage, loan.remaining);
+
+        if (this.money >= payment) {
+          this.money -= payment;
+          loan.remaining -= payment;
+          loan.stagesLeft--;
           loan.missedPayments = 0;
-          repayments.push({ bankName: loan.bankName, amount: minPayment });
+          repayments.push({
+            bankName: loan.bankName,
+            amount: payment,
+            remainingAfter: loan.remaining
+          });
         } else {
           loan.missedPayments++;
           hasMissedPayment = true;
-          repayments.push({ bankName: loan.bankName, amount: 0, missed: true });
+          repayments.push({
+            bankName: loan.bankName,
+            amount: 0,
+            missed: true,
+            remainingAfter: loan.remaining
+          });
         }
       });
 
       bankruptBank = this.loans.find(l => l.missedPayments >= 2);
-      this.loans = this.loans.filter(loan => loan.due > 0);
+      this.loans = this.loans.filter(loan => loan.remaining > 0);
       this.loanTier = this.loans.length;
-      this.totalDebt = this.loans.reduce((sum, loan) => sum + loan.due, 0);
+      this.totalDebt = this.loans.reduce((sum, loan) => sum + loan.remaining, 0);
     }
 
     const finalMoney = this.money;
@@ -3474,7 +3460,7 @@ export default class SnakeGame extends Phaser.Scene {
                   onComplete: () => {
                     mainAmount.destroy();
 
-                    if (this.shopMoneyText) {
+                    if (this.shopMoneyText && this.shopMoneyText.active) {
                       this.shopMoneyText.setText(`$${finalMoney}`);
                       this.tweens.add({
                         targets: this.shopMoneyText,
@@ -3485,6 +3471,15 @@ export default class SnakeGame extends Phaser.Scene {
                         ease: 'Back.easeOut'
                       });
                     }
+                    // 빚 정보 업데이트
+                    this.time.delayedCall(200, () => {
+                      this.updateShopDebtInfo();
+
+                      // 빚 완납 체크 (이전에 대출이 있었고 지금은 없는 경우)
+                      if (repayments.length > 0 && this.loans.length === 0) {
+                        this.showDebtFreeAnimation();
+                      }
+                    });
                   }
                 });
               }
@@ -3618,7 +3613,20 @@ export default class SnakeGame extends Phaser.Scene {
       const item = this.shopItems[index];
       const canAfford = this.money >= item.price;
 
-      // 밝기는 초기 설정 유지 (돈 카운트 중 변경 안 함)
+      // 딤 처리 업데이트 (구매 가능 여부에 따라)
+      if (!item.purchased) {
+        // 컨테이너 알파 (딤 처리)
+        card.container.setAlpha(canAfford ? 1 : 0.5);
+
+        // 가격 태그 색상
+        const priceTagColor = canAfford ? 0x00aa00 : 0x661111;
+        const priceTagStroke = canAfford ? 0x00ff00 : 0xff4444;
+        card.priceTag.setFillStyle(priceTagColor);
+        card.priceTag.setStrokeStyle(2, priceTagStroke);
+
+        // 가격 텍스트 색상
+        card.price.setFill(canAfford ? '#00ff00' : '#ff4444');
+      }
 
       if (isSelected && !item.purchased) {
         // 선택된 카드 - 위로 올라오고 발광
@@ -3769,15 +3777,17 @@ export default class SnakeGame extends Phaser.Scene {
   handleShopInput(direction) {
     if (!this.shopOpen || !this.shopKeyboardEnabled) return;
 
-    const maxIndex = this.shopItems.length + 1; // 카드들 + Next Stage + Loan 버튼
+    const itemCount = this.shopItems.length;
 
-    // 다음 선택 가능한 인덱스 찾기 (SOLD 건너뛰기)
-    const findNextAvailable = (start, delta) => {
+    // 아이템 내에서 다음 선택 가능한 인덱스 찾기 (SOLD 건너뛰기, 아이템만 순환)
+    const findNextItemAvailable = (start, delta) => {
+      // 버튼에서 좌우 누르면 무시
+      if (start >= itemCount) return start;
+
       let idx = start;
-      for (let i = 0; i <= maxIndex; i++) {
-        idx = (idx + delta + maxIndex + 1) % (maxIndex + 1);
-        // Next Stage, Loan 버튼이거나 구매 안 한 아이템이면 선택 가능
-        if (idx >= this.shopItems.length || !this.shopItems[idx].purchased) {
+      for (let i = 0; i < itemCount; i++) {
+        idx = (idx + delta + itemCount) % itemCount;
+        if (!this.shopItems[idx].purchased) {
           return idx;
         }
       }
@@ -3785,11 +3795,25 @@ export default class SnakeGame extends Phaser.Scene {
     };
 
     if (direction === 'LEFT') {
-      this.selectedShopIndex = findNextAvailable(this.selectedShopIndex, -1);
-      this.updateShopSelection();
+      if (this.selectedShopIndex < itemCount) {
+        // 아이템 영역에서 좌우 순환
+        this.selectedShopIndex = findNextItemAvailable(this.selectedShopIndex, -1);
+        this.updateShopSelection();
+      } else {
+        // 버튼 영역에서 좌우 이동 (Next Stage <-> Loan)
+        this.selectedShopIndex = this.selectedShopIndex === itemCount ? itemCount + 1 : itemCount;
+        this.updateShopSelection();
+      }
     } else if (direction === 'RIGHT') {
-      this.selectedShopIndex = findNextAvailable(this.selectedShopIndex, 1);
-      this.updateShopSelection();
+      if (this.selectedShopIndex < itemCount) {
+        // 아이템 영역에서 좌우 순환
+        this.selectedShopIndex = findNextItemAvailable(this.selectedShopIndex, 1);
+        this.updateShopSelection();
+      } else {
+        // 버튼 영역에서 좌우 이동 (Next Stage <-> Loan)
+        this.selectedShopIndex = this.selectedShopIndex === itemCount ? itemCount + 1 : itemCount;
+        this.updateShopSelection();
+      }
     } else if (direction === 'UP') {
       // 버튼에서 위로 누르면 아이템 카드로 이동
       if (this.selectedShopIndex >= this.shopItems.length) {
@@ -4098,12 +4122,16 @@ export default class SnakeGame extends Phaser.Scene {
       yoyo: true
     });
 
-    // 다음 카드로 자동 이동
+    // 다음 카드로 자동 이동 (오른쪽으로)
     this.time.delayedCall(300, () => {
-      // 구매 안 한 카드 찾기
-      for (let i = 0; i < this.shopItems.length; i++) {
-        if (!this.shopItems[i].purchased) {
-          this.selectedShopIndex = i;
+      const currentIndex = index;
+      const itemCount = this.shopItems.length;
+
+      // 현재 인덱스+1부터 오른쪽으로 검색
+      for (let i = 1; i <= itemCount; i++) {
+        const nextIndex = (currentIndex + i) % itemCount;
+        if (!this.shopItems[nextIndex].purchased) {
+          this.selectedShopIndex = nextIndex;
           this.updateShopSelection();
           return;
         }
@@ -4273,10 +4301,7 @@ export default class SnakeGame extends Phaser.Scene {
       ease: 'Power2'
     });
 
-    // 현재 부채가 있으면 왼쪽 패널에 표시
-    if (this.loans.length > 0) {
-      this.showDebtSummary(width, height);
-    }
+    // 부채 정보는 상점 사이드바에 표시됨
 
     // 은행 검색 시작
     this.startBankSearch(width, height);
@@ -4667,24 +4692,74 @@ export default class SnakeGame extends Phaser.Scene {
 
     const panelX = width / 2 + 60; // 오른쪽 패널 중심
 
-    // 대출 불가 메시지
-    const noLoanText = this.add.text(panelX, height / 2 - 100, 'No banks available!', {
-      fontSize: '22px',
+    // 메인 메시지 - 은행 없음
+    const noLoanText = this.add.text(panelX, height / 2 - 80, 'NO BANKS AVAILABLE!', {
+      fontSize: '20px',
       fill: '#ff4444',
       fontStyle: 'bold',
       stroke: '#440000',
-      strokeThickness: 2
+      strokeThickness: 3
     }).setOrigin(0.5).setDepth(7002).setAlpha(0);
     this.loanElements.push(noLoanText);
 
-    const hintText = this.add.text(panelX, height / 2 - 75, 'Repay existing loans to borrow again.', {
-      fontSize: '11px',
-      fill: '#ff8888'
+    // 위트있는 메시지
+    const wittyText = this.add.text(panelX, height / 2 - 40,
+      "You've maxed out every bank in town!", {
+      fontSize: '12px',
+      fill: '#ffaa00',
+      fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(7002).setAlpha(0);
-    this.loanElements.push(hintText);
+    this.loanElements.push(wittyText);
 
-    // 흔들림 애니메이션과 함께 등장
-    [noLoanText, hintText].forEach((el, i) => {
+    const wittyText2 = this.add.text(panelX, height / 2 - 15,
+      "Time to pay your debts, rookie!", {
+      fontSize: '14px',
+      fill: '#ff8888',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(7002).setAlpha(0);
+    this.loanElements.push(wittyText2);
+
+    // OK 버튼
+    const okBg = this.add.rectangle(panelX, height / 2 + 50, 100, 35, 0x006600)
+      .setStrokeStyle(2, 0x00ff00)
+      .setDepth(7001).setAlpha(0)
+      .setInteractive({ useHandCursor: true });
+    this.loanElements.push(okBg);
+
+    const okText = this.add.text(panelX, height / 2 + 50, 'OK', {
+      fontSize: '16px',
+      fill: '#00ff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(7002).setAlpha(0);
+    this.loanElements.push(okText);
+
+    const helpText = this.add.text(panelX, height / 2 + 90, 'Press ESC or click OK', {
+      fontSize: '10px',
+      fill: '#888888'
+    }).setOrigin(0.5).setDepth(7002).setAlpha(0);
+    this.loanElements.push(helpText);
+
+    // OK 버튼 클릭 이벤트
+    okBg.on('pointerdown', () => {
+      this.closeLoanUI();
+    });
+
+    okBg.on('pointerover', () => {
+      okBg.setFillStyle(0x008800);
+    });
+
+    okBg.on('pointerout', () => {
+      okBg.setFillStyle(0x006600);
+    });
+
+    // 엔터키로 닫기
+    this.input.keyboard.once('keydown-ENTER', () => {
+      this.closeLoanUI();
+    });
+
+    // 애니메이션
+    const elements = [noLoanText, wittyText, wittyText2, okBg, okText, helpText];
+    elements.forEach((el, i) => {
       el.setScale(0.5);
       this.tweens.add({
         targets: el,
@@ -4692,10 +4767,11 @@ export default class SnakeGame extends Phaser.Scene {
         scaleX: 1,
         scaleY: 1,
         duration: 300,
-        delay: i * 100,
+        delay: i * 80,
         ease: 'Back.easeOut',
         onComplete: () => {
           if (i === 0) {
+            // 타이틀 흔들림
             this.tweens.add({
               targets: el,
               x: el.x + 5,
@@ -4707,16 +4783,6 @@ export default class SnakeGame extends Phaser.Scene {
         }
       });
     });
-
-    // 상환 가능한 대출 목록 표시
-    if (this.loans.length > 0) {
-      this.showRepaymentOptions(width, height);
-    } else {
-      // 대출이 없으면 자동으로 닫기
-      this.time.delayedCall(2000, () => {
-        this.closeLoanUI();
-      });
-    }
   }
 
   showRepaymentOptions(width, height) {
@@ -5050,16 +5116,21 @@ export default class SnakeGame extends Phaser.Scene {
   takeLoanFromBank(bank) {
     const amount = bank.maxLoan;
     const interest = Math.ceil(amount * bank.interestRate / 100);
-    const due = amount + interest;
+    const totalDue = amount + interest;
+    const paymentPerStage = Math.ceil(totalDue / 5); // 5스테이지로 분할
 
     // 대출 기록 추가
     this.loans.push({
       bankId: bank.id,
       bankName: bank.name,
       principal: amount,
+      interest: interest,
       interestRate: bank.interestRate,
-      due: due,
-      missedPayments: 0 // 연체 횟수
+      totalDue: totalDue,
+      remaining: totalDue,
+      paymentPerStage: paymentPerStage,
+      stagesLeft: 5,
+      missedPayments: 0
     });
 
     // 티어 증가
@@ -5067,7 +5138,7 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 돈 추가
     this.money += amount;
-    this.totalDebt += due;
+    this.totalDebt += totalDue;
 
     // 돈 획득 애니메이션
     const { width, height } = this.cameras.main;
@@ -5147,10 +5218,186 @@ export default class SnakeGame extends Phaser.Scene {
       this.closeLoanUI();
       if (this.shopMoneyText) {
         this.shopMoneyText.setText(`$${this.money}`);
+        // 돈 펄스 효과
+        this.tweens.add({
+          targets: this.shopMoneyText,
+          scaleX: 1.3,
+          scaleY: 1.3,
+          duration: 150,
+          yoyo: true,
+          ease: 'Back.easeOut'
+        });
       }
+      // 빚 정보 업데이트
+      this.updateShopDebtInfo();
       // 실시간 상점 아이템 업데이트
       this.updateShopAffordability();
       this.updateShopSelection();
+    });
+  }
+
+  updateShopDebtInfo() {
+    if (!this.shopOpen) return;
+
+    const sidebarMargin = 10;
+    const sidebarWidth = 140;
+    const contentX = sidebarMargin + 8;
+    const contentCenterX = sidebarMargin + sidebarWidth / 2;
+    const rightX = sidebarMargin + sidebarWidth - 8;
+
+    // 기존 빚 정보 요소 제거 (shopElements에서도 제거)
+    if (this.shopDebtElements) {
+      this.shopDebtElements.forEach(el => {
+        if (el && el.destroy) {
+          // shopElements 배열에서도 제거
+          const idx = this.shopElements.indexOf(el);
+          if (idx > -1) this.shopElements.splice(idx, 1);
+          el.destroy();
+        }
+      });
+    }
+    this.shopDebtElements = [];
+
+    // 대출이 없으면 종료
+    if (!this.loans || this.loans.length === 0) return;
+
+    let debtY = 240;
+
+    // 구분선
+    const debtDivider = this.add.rectangle(contentCenterX, debtY, sidebarWidth - 16, 1, 0xff4444, 0.5)
+      .setDepth(6002).setAlpha(0);
+    this.shopDebtElements.push(debtDivider);
+    this.shopElements.push(debtDivider);
+    debtY += 12;
+
+    // DEBTS 라벨
+    const debtLabel = this.add.text(contentX, debtY, 'DEBTS', {
+      fontSize: '11px',
+      fill: '#ff4444',
+      fontStyle: 'bold'
+    }).setDepth(6002).setAlpha(0);
+    this.shopDebtElements.push(debtLabel);
+    this.shopElements.push(debtLabel);
+    debtY += 16;
+
+    // 각 은행별 상세 정보
+    this.loans.forEach(loan => {
+      const payment = loan.stagesLeft === 1 ? loan.remaining : Math.min(loan.paymentPerStage, loan.remaining);
+      const afterPayment = loan.remaining - payment;
+
+      // 은행 이름
+      const shortName = loan.bankName.length > 12 ? loan.bankName.substring(0, 10) + '..' : loan.bankName;
+      const bankText = this.add.text(contentX, debtY, shortName, {
+        fontSize: '10px',
+        fill: '#ffffff',
+        fontStyle: 'bold'
+      }).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(bankText);
+      this.shopElements.push(bankText);
+      debtY += 14;
+
+      // 원금/이자
+      const principalText = this.add.text(contentX, debtY, `P:$${loan.principal}`, {
+        fontSize: '9px',
+        fill: '#888888'
+      }).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(principalText);
+      this.shopElements.push(principalText);
+
+      const interestText = this.add.text(rightX, debtY, `I:$${loan.interest}`, {
+        fontSize: '9px',
+        fill: '#888888'
+      }).setOrigin(1, 0).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(interestText);
+      this.shopElements.push(interestText);
+      debtY += 12;
+
+      // 잔금
+      const remainText = this.add.text(contentX, debtY, `Remain:`, {
+        fontSize: '9px',
+        fill: '#aaaaaa'
+      }).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(remainText);
+      this.shopElements.push(remainText);
+
+      const remainValue = this.add.text(rightX, debtY, `$${loan.remaining}`, {
+        fontSize: '10px',
+        fill: '#ff6666',
+        fontStyle: 'bold'
+      }).setOrigin(1, 0).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(remainValue);
+      this.shopElements.push(remainValue);
+      debtY += 12;
+
+      // 다음상환
+      const nextText = this.add.text(contentX, debtY, `Next:`, {
+        fontSize: '9px',
+        fill: '#aaaaaa'
+      }).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(nextText);
+      this.shopElements.push(nextText);
+
+      const nextValue = this.add.text(rightX, debtY, `-$${payment}`, {
+        fontSize: '10px',
+        fill: '#ff4444',
+        fontStyle: 'bold'
+      }).setOrigin(1, 0).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(nextValue);
+      this.shopElements.push(nextValue);
+      debtY += 12;
+
+      // 상환후
+      const afterText = this.add.text(contentX, debtY, `After:`, {
+        fontSize: '9px',
+        fill: '#aaaaaa'
+      }).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(afterText);
+      this.shopElements.push(afterText);
+
+      const afterValue = this.add.text(rightX, debtY, `$${afterPayment}`, {
+        fontSize: '10px',
+        fill: '#ffaa00',
+        fontStyle: 'bold'
+      }).setOrigin(1, 0).setDepth(6002).setAlpha(0);
+      this.shopDebtElements.push(afterValue);
+      this.shopElements.push(afterValue);
+      debtY += 16;
+    });
+
+    // 총 부채
+    const totalLine = this.add.rectangle(contentCenterX, debtY, sidebarWidth - 20, 1, 0xff4444, 0.3)
+      .setDepth(6002).setAlpha(0);
+    this.shopDebtElements.push(totalLine);
+    this.shopElements.push(totalLine);
+    debtY += 10;
+
+    const totalDebtLabel = this.add.text(contentX, debtY, 'TOTAL', {
+      fontSize: '10px',
+      fill: '#ff4444'
+    }).setDepth(6002).setAlpha(0);
+    this.shopDebtElements.push(totalDebtLabel);
+    this.shopElements.push(totalDebtLabel);
+
+    const totalDebtValue = this.add.text(rightX, debtY, `$${this.totalDebt}`, {
+      fontSize: '14px',
+      fill: '#ff4444',
+      fontStyle: 'bold'
+    }).setOrigin(1, 0).setDepth(6002).setAlpha(0);
+    this.shopDebtElements.push(totalDebtValue);
+    this.shopElements.push(totalDebtValue);
+
+    // 애니메이션으로 표시 (슬라이드 + 페이드인)
+    this.shopDebtElements.forEach((el, i) => {
+      const originalX = el.x;
+      el.x = originalX - 20;
+      this.tweens.add({
+        targets: el,
+        x: originalX,
+        alpha: 1,
+        duration: 250,
+        delay: i * 30,
+        ease: 'Power2'
+      });
     });
   }
 
@@ -5382,6 +5629,60 @@ export default class SnakeGame extends Phaser.Scene {
           delay: i * 50,
           onComplete: () => el.destroy()
         });
+      });
+    });
+  }
+
+  showDebtFreeAnimation() {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 메인 텍스트
+    const debtFreeText = this.add.text(centerX, centerY - 20, 'DEBT FREE', {
+      fontSize: '28px',
+      fill: '#00ff88',
+      fontStyle: 'bold',
+      stroke: '#004422',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(7200).setAlpha(0).setScale(0.5);
+
+    // 서브 텍스트
+    const subText = this.add.text(centerX, centerY + 20, 'Good work. Keep it up.', {
+      fontSize: '12px',
+      fill: '#aaaaaa'
+    }).setOrigin(0.5).setDepth(7200).setAlpha(0);
+
+    // 메인 텍스트 등장
+    this.tweens.add({
+      targets: debtFreeText,
+      alpha: 1,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 400,
+      ease: 'Back.easeOut'
+    });
+
+    // 서브 텍스트 등장
+    this.tweens.add({
+      targets: subText,
+      alpha: 1,
+      duration: 300,
+      delay: 300,
+      ease: 'Power2'
+    });
+
+    // 2초 후 페이드아웃
+    this.time.delayedCall(2000, () => {
+      this.tweens.add({
+        targets: [debtFreeText, subText],
+        alpha: 0,
+        duration: 500,
+        ease: 'Power2',
+        onComplete: () => {
+          debtFreeText.destroy();
+          subText.destroy();
+        }
       });
     });
   }
