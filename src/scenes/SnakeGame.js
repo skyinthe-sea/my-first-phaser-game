@@ -170,6 +170,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.maxCombo = 0; // 최대 콤보 추적
     this.directionChangesCount = 0; // 먹이 먹은 후 방향 전환 횟수
     this.hasEatenFirstFood = false; // 첫 먹이를 먹었는지 여부
+    this.comboLost = false; // 실드 부족으로 콤보가 끊어졌는지
+    this.shieldsUsedThisCycle = false; // 이번 먹이 사이클에서 실드가 사용되었는지
 
     this.comboFeedback = null; // 콤보 피드백 표시용
 
@@ -190,6 +192,10 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 아이템 효과 상태
     this.comboShieldCount = 0; // 콤보 실드 개수 (여러 개 지원)
+    this.hasHadShield = false; // 실드를 가졌던 적이 있는지 (NO SHIELD 표시용)
+
+    // 인게임 아이템 상태 UI (우측 하단)
+    this.createItemStatusUI();
 
     // 뱅킹/대출 시스템 (전면 개편)
     this.loans = []; // 은행별 대출 배열 [{bankId, bankName, principal, interestRate, due}]
@@ -328,6 +334,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.inputQueue.push(newDirection);
       if (this.movingSound) this.movingSound.play();
       this.directionChangesCount++;
+      this.checkComboShieldOnDirectionChange();
       this.showDirectionChangeCounter();
     }
     // 큐에 이미 입력이 있으면 마지막 입력 기준으로 체크
@@ -345,7 +352,37 @@ export default class SnakeGame extends Phaser.Scene {
       this.inputQueue.push(newDirection);
       if (this.movingSound) this.movingSound.play();
       this.directionChangesCount++;
+      this.checkComboShieldOnDirectionChange();
       this.showDirectionChangeCounter();
+    }
+  }
+
+  // 방향전환 시 콤보 실드 체크 (4번째부터 매번 1개씩 소모)
+  checkComboShieldOnDirectionChange() {
+    // 이미 끊어졌으면 체크 불필요 (콤보가 0이어도 실드는 소모됨)
+    if (this.comboLost) return;
+
+    // 4번째 방향전환부터 실드 필요
+    if (this.directionChangesCount >= 4) {
+      if (this.comboShieldCount > 0) {
+        // 실드 소모
+        this.comboShieldCount--;
+        this.shieldsUsedThisCycle = true; // 실드 사용 표시
+        this.showShieldConsumedEffect();
+        this.updateItemStatusUI();
+
+        // 마지막 실드 소모 시 수트 해제 애니메이션
+        if (this.comboShieldCount === 0) {
+          this.showSuitRemovalEffect();
+        }
+      } else {
+        // 실드 없음 - 콤보 끊김 예고
+        this.comboLost = true;
+        // 실드를 가졌다가 다 쓴 경우에만 NO SHIELD 표시
+        if (this.hasHadShield) {
+          this.showComboLostWarning();
+        }
+      }
     }
   }
 
@@ -934,15 +971,26 @@ export default class SnakeGame extends Phaser.Scene {
         this.startItemSpawnTimer();
       }
 
-      // 콤보 체크 (3번 방향전환 안에 먹었는지)
-      if (this.directionChangesCount <= 3) {
-        // 콤보 유지/증가
+      // 콤보 체크 (실드 부족으로 끊어졌는지 확인)
+      if (this.comboLost) {
+        // 실드 부족으로 콤보가 끊어진 경우
+        this.showComboBroken();
+        this.combo = 0;
+        this.comboText.setText('');
+        this.comboLost = false;
+      } else {
+        // 콤보 유지/증가 (3회 이내 또는 실드로 방어됨)
         this.combo++;
         // 최대 콤보 업데이트
         if (this.combo > this.maxCombo) {
           this.maxCombo = this.combo;
         }
         this.showComboEffect();
+
+        // 실드로 방어된 경우 방패 효과 추가
+        if (this.shieldsUsedThisCycle) {
+          this.showComboShieldEffect();
+        }
 
         // 콤보 텍스트 업데이트
         this.comboText.setText(`x${this.combo}`);
@@ -955,24 +1003,6 @@ export default class SnakeGame extends Phaser.Scene {
           yoyo: true,
           ease: 'Power2'
         });
-      } else {
-        // 콤보 끊김
-        if (this.combo > 0) {
-          // 콤보 실드가 있으면 방어
-          if (this.comboShieldCount > 0) {
-            this.comboShieldCount--;
-            this.showComboShieldEffect();
-            // 콤보 유지, 방향 전환 카운터만 리셋
-            this.directionChangesCount = 0;
-          } else {
-            this.showComboBroken();
-            this.combo = 0;
-            this.comboText.setText('');
-          }
-        } else {
-          this.combo = 0;
-          this.comboText.setText('');
-        }
       }
 
       // 콤보에 따른 점수 배율
@@ -1004,6 +1034,7 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 방향 전환 카운터 리셋 (0으로 되돌림)
       this.directionChangesCount = 0;
+      this.shieldsUsedThisCycle = false; // 실드 사용 플래그 리셋
 
       // 먹이 먹은 효과 실행
       this.playFoodEffect();
@@ -1801,6 +1832,326 @@ export default class SnakeGame extends Phaser.Scene {
     this.cameras.main.shake(200, 0.01);
   }
 
+  showSuitRemovalEffect() {
+    // 수트 해제 효과: 노란 머리가 파티클로 깨지면서 녹색으로 복원
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 1. 노란색 파티클이 깨지면서 날아감
+    for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2;
+      const particle = this.add.rectangle(
+        headX,
+        headY,
+        4,
+        4,
+        0xffff00
+      ).setDepth(500).setAlpha(1);
+
+      this.tweens.add({
+        targets: particle,
+        x: headX + Math.cos(angle) * 50,
+        y: headY + Math.sin(angle) * 50,
+        alpha: 0,
+        scale: 0,
+        rotation: Math.random() * Math.PI * 2,
+        duration: 400,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 2. 녹색 복원 글로우
+    const glow = this.add.circle(headX, headY, 5, 0x00ff00, 0.8)
+      .setDepth(499);
+    this.tweens.add({
+      targets: glow,
+      radius: 25,
+      alpha: 0,
+      duration: 400,
+      ease: 'Power2',
+      onComplete: () => glow.destroy()
+    });
+
+    // 3. "SUIT OFF" 텍스트 (작게)
+    const text = this.add.text(headX, headY - 30, 'SUIT OFF', {
+      fontSize: '14px',
+      fill: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(501).setAlpha(0);
+
+    this.tweens.add({
+      targets: text,
+      alpha: 1,
+      y: headY - 50,
+      duration: 300,
+      ease: 'Power2',
+      onComplete: () => {
+        this.tweens.add({
+          targets: text,
+          alpha: 0,
+          y: headY - 70,
+          duration: 300,
+          delay: 200,
+          onComplete: () => text.destroy()
+        });
+      }
+    });
+  }
+
+  // 실드 소모 시 작은 애니메이션 (4번째 방향전환마다)
+  showShieldConsumedEffect() {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 작은 실드 아이콘이 깨지는 효과
+    const shieldIcon = this.add.text(headX, headY - 20, '🛡️', {
+      fontSize: '20px'
+    }).setOrigin(0.5).setDepth(500).setAlpha(1);
+
+    // 실드가 위로 올라가면서 깨지는 애니메이션
+    this.tweens.add({
+      targets: shieldIcon,
+      y: headY - 50,
+      alpha: 0,
+      scale: 0.3,
+      angle: 360,
+      duration: 400,
+      ease: 'Power2',
+      onComplete: () => shieldIcon.destroy()
+    });
+
+    // 작은 파티클
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const particle = this.add.circle(headX, headY - 20, 2, 0xffd700)
+        .setDepth(499).setAlpha(0.8);
+      this.tweens.add({
+        targets: particle,
+        x: headX + Math.cos(angle) * 25,
+        y: headY - 20 + Math.sin(angle) * 25,
+        alpha: 0,
+        duration: 300,
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // "-1" 텍스트
+    const minusText = this.add.text(headX + 15, headY - 30, '-1', {
+      fontSize: '12px',
+      fill: '#ff6666',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 2
+    }).setOrigin(0.5).setDepth(501).setAlpha(0);
+
+    this.tweens.add({
+      targets: minusText,
+      alpha: 1,
+      y: headY - 45,
+      duration: 200,
+      ease: 'Power2',
+      onComplete: () => {
+        this.tweens.add({
+          targets: minusText,
+          alpha: 0,
+          duration: 200,
+          delay: 100,
+          onComplete: () => minusText.destroy()
+        });
+      }
+    });
+  }
+
+  // 실드 부족으로 콤보 끊김 예고 (X 표시 + 빠른 머리색 복원)
+  showComboLostWarning() {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 1. 큰 X 표시
+    const xMark = this.add.text(headX, headY - 30, '✗', {
+      fontSize: '40px',
+      fill: '#ff0000',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(502).setScale(0).setAlpha(0);
+
+    this.tweens.add({
+      targets: xMark,
+      scale: 1.5,
+      alpha: 1,
+      duration: 150,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: xMark,
+          scale: 0,
+          alpha: 0,
+          duration: 200,
+          delay: 200,
+          onComplete: () => xMark.destroy()
+        });
+      }
+    });
+
+    // 2. 빠른 머리색 복원 (노란색 → 녹색)
+    // 노란색 파티클이 빠르게 튀어나감
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const particle = this.add.rectangle(headX, headY, 3, 3, 0xffff00)
+        .setDepth(501).setAlpha(1);
+      this.tweens.add({
+        targets: particle,
+        x: headX + Math.cos(angle) * 40,
+        y: headY + Math.sin(angle) * 40,
+        alpha: 0,
+        rotation: Math.random() * Math.PI * 2,
+        duration: 250,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 3. 녹색 플래시
+    const flash = this.add.circle(headX, headY, 8, 0x00ff00, 0.9)
+      .setDepth(500);
+    this.tweens.add({
+      targets: flash,
+      radius: 30,
+      alpha: 0,
+      duration: 300,
+      ease: 'Power2',
+      onComplete: () => flash.destroy()
+    });
+
+    // 4. 화면 흔들림 (작게)
+    this.cameras.main.shake(100, 0.005);
+
+    // 5. "NO SHIELD!" 텍스트
+    const text = this.add.text(headX, headY + 30, 'NO SHIELD!', {
+      fontSize: '12px',
+      fill: '#ff4444',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 2
+    }).setOrigin(0.5).setDepth(501).setAlpha(0);
+
+    this.tweens.add({
+      targets: text,
+      alpha: 1,
+      y: headY + 40,
+      duration: 200,
+      onComplete: () => {
+        this.tweens.add({
+          targets: text,
+          alpha: 0,
+          duration: 300,
+          delay: 300,
+          onComplete: () => text.destroy()
+        });
+      }
+    });
+  }
+
+  // 인게임 아이템 상태 UI 생성 (우측 하단, 트렌디한 스타일)
+  createItemStatusUI() {
+    const { width, height } = this.cameras.main;
+
+    // UI 컨테이너 위치 (우측 하단)
+    const uiX = width - 70;
+    const uiY = height - 40;
+
+    // 반투명 배경 (라운드 사각형 느낌)
+    this.itemStatusBg = this.add.rectangle(uiX, uiY, 120, 50, 0x000000, 0.7)
+      .setDepth(3000)
+      .setStrokeStyle(2, 0x333333)
+      .setAlpha(0); // 처음엔 숨김
+
+    // 실드 아이콘
+    this.itemStatusIcon = this.add.text(uiX - 35, uiY, '🛡️', {
+      fontSize: '20px'
+    }).setOrigin(0.5).setDepth(3001).setAlpha(0);
+
+    // 실드 개수
+    this.itemStatusCount = this.add.text(uiX + 5, uiY, '×0', {
+      fontSize: '18px',
+      fill: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0, 0.5).setDepth(3001).setAlpha(0);
+
+    // 상태 라벨
+    this.itemStatusLabel = this.add.text(uiX, uiY - 18, 'SHIELDS', {
+      fontSize: '8px',
+      fill: '#888888'
+    }).setOrigin(0.5).setDepth(3001).setAlpha(0);
+  }
+
+  // 아이템 상태 UI 업데이트
+  updateItemStatusUI() {
+    // 실드가 0개면 UI 숨기기
+    if (this.comboShieldCount === 0) {
+      // 페이드아웃
+      this.tweens.add({
+        targets: [this.itemStatusBg, this.itemStatusIcon, this.itemStatusCount, this.itemStatusLabel],
+        alpha: 0,
+        duration: 300,
+        ease: 'Power2'
+      });
+      return;
+    }
+
+    // 실드가 있으면 UI 표시
+    const isNewlyVisible = this.itemStatusBg.alpha === 0;
+
+    // 개수 업데이트
+    this.itemStatusCount.setText(`×${this.comboShieldCount}`);
+
+    // 색상 업데이트 (개수에 따라)
+    if (this.comboShieldCount >= 3) {
+      this.itemStatusCount.setFill('#00ff00'); // 녹색 - 여유
+      this.itemStatusBg.setStrokeStyle(2, 0x00ff00);
+    } else if (this.comboShieldCount === 2) {
+      this.itemStatusCount.setFill('#ffff00'); // 노란색 - 보통
+      this.itemStatusBg.setStrokeStyle(2, 0xffff00);
+    } else {
+      this.itemStatusCount.setFill('#ff4444'); // 빨간색 - 위험
+      this.itemStatusBg.setStrokeStyle(2, 0xff4444);
+    }
+
+    if (isNewlyVisible) {
+      // 첫 등장 애니메이션
+      this.tweens.add({
+        targets: this.itemStatusBg,
+        alpha: 1,
+        scaleX: { from: 0.5, to: 1 },
+        scaleY: { from: 0.5, to: 1 },
+        duration: 300,
+        ease: 'Back.easeOut'
+      });
+      this.tweens.add({
+        targets: [this.itemStatusIcon, this.itemStatusCount, this.itemStatusLabel],
+        alpha: 1,
+        duration: 300,
+        delay: 100,
+        ease: 'Power2'
+      });
+    } else {
+      // 개수 변경 애니메이션
+      this.tweens.add({
+        targets: this.itemStatusCount,
+        scaleX: 1.3,
+        scaleY: 1.3,
+        duration: 100,
+        yoyo: true,
+        ease: 'Power2'
+      });
+    }
+  }
+
   playFoodEffect() {
     const { width, height } = this.cameras.main;
     const foodPos = {
@@ -2278,9 +2629,9 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       if (index === 0) {
-        // 머리 색상 (상점에서 구매한 색상 우선)
-        if (this.snakeHeadColor) {
-          this.graphics.fillStyle(this.snakeHeadColor);
+        // 머리 색상 (콤보 실드가 있으면 노란색 - 수트 기능)
+        if (this.comboShieldCount > 0) {
+          this.graphics.fillStyle(0xffff00);
         } else if (this.snakeHeadTint) {
           this.graphics.fillStyle(this.snakeHeadTint);
         } else if (this.snakeBodyTint) {
@@ -2807,7 +3158,7 @@ export default class SnakeGame extends Phaser.Scene {
     }).setDepth(6002).setAlpha(0);
     sidebarContent.push(moneyLabel);
 
-    this.shopMoneyText = this.add.text(contentCenterX, 195, '$0', {
+    this.shopMoneyText = this.add.text(contentCenterX, 195, `$${this.money}`, {
       fontSize: '24px',
       fill: '#ffff00',
       fontStyle: 'bold'
@@ -3001,8 +3352,8 @@ export default class SnakeGame extends Phaser.Scene {
       const cellY = previewY - previewHeight / 2 + snakeRow * previewGridSize + previewGridSize / 2;
 
       const isHead = i === 0;
-      // 이미 구매한 머리 색상이 있으면 적용
-      const color = isHead ? (this.snakeHeadColor || 0x00ff00) : 0x00cc00;
+      // 콤보 실드가 있으면 노란색, 없으면 녹색
+      const color = isHead ? (this.comboShieldCount > 0 ? 0xffff00 : 0x00ff00) : 0x00cc00;
 
       const segment = this.add.rectangle(
         cellX, cellY,
@@ -3167,6 +3518,9 @@ export default class SnakeGame extends Phaser.Scene {
     const previousMoney = this.money;
     const scoreEarned = this.score;
 
+    // 정산 중 플래그 설정 (키보드 입력 차단)
+    this.isSettling = true;
+
     // 1. 스코어를 먼저 합산
     const afterScore = previousMoney + scoreEarned;
     this.money = afterScore;
@@ -3317,32 +3671,32 @@ export default class SnakeGame extends Phaser.Scene {
     }).setOrigin(1, 0.5).setDepth(7102).setAlpha(0);
     settlementElements.push(mainAmount);
 
-    let currentDelay = 300;
+    let currentDelay = 200;
 
     // 1단계: 기존 금액 표시
     this.tweens.add({
       targets: [prevLabel, prevAmount, finalLabel, mainAmount, divider],
       alpha: 1,
-      duration: 300,
+      duration: 200,
       delay: currentDelay,
       ease: 'Power2'
     });
 
-    currentDelay += 500;
+    currentDelay += 350;
 
     // 2단계: 스코어 추가
     if (scoreEarned > 0) {
       this.tweens.add({
         targets: [scoreLabel, scoreAmount],
         alpha: 1,
-        duration: 300,
+        duration: 200,
         delay: currentDelay,
         ease: 'Power2'
       });
 
       // 카운트업 애니메이션
-      this.time.delayedCall(currentDelay + 400, () => {
-        const countDuration = 600;
+      this.time.delayedCall(currentDelay + 250, () => {
+        const countDuration = 400;
         const startTime = this.time.now;
 
         const countUp = this.time.addEvent({
@@ -3364,19 +3718,19 @@ export default class SnakeGame extends Phaser.Scene {
         });
       });
 
-      currentDelay += 1100;
+      currentDelay += 750;
     }
 
     // 3단계: 각 은행별 상환 차감 (순차적으로)
     let runningTotal = afterScore;
     repayLabels.forEach((item, index) => {
-      const delay = currentDelay + index * 700;
+      const delay = currentDelay + index * 500;
 
       // 라벨 표시
       this.tweens.add({
         targets: [item.label, item.amount],
         alpha: 1,
-        duration: 300,
+        duration: 200,
         delay: delay,
         ease: 'Power2'
       });
@@ -3387,8 +3741,8 @@ export default class SnakeGame extends Phaser.Scene {
         const endValue = runningTotal - item.repay.amount;
         runningTotal = endValue;
 
-        this.time.delayedCall(delay + 350, () => {
-          const countDuration = 350;
+        this.time.delayedCall(delay + 200, () => {
+          const countDuration = 250;
           const startTime = this.time.now;
 
           const countDown = this.time.addEvent({
@@ -3412,76 +3766,74 @@ export default class SnakeGame extends Phaser.Scene {
       }
     });
 
-    currentDelay += repayments.length * 700 + 400;
+    currentDelay += repayments.length * 500 + 300;
 
     // 4단계: 배경 페이드아웃 + 최종 금액 날아감
-    this.time.delayedCall(currentDelay + 300, () => {
+    this.time.delayedCall(currentDelay + 200, () => {
       // 배경과 라벨들 페이드아웃
       settlementElements.forEach(el => {
         if (el !== mainAmount) {
           this.tweens.add({
             targets: el,
             alpha: 0,
-            duration: 400,
+            duration: 300,
             ease: 'Power2',
             onComplete: () => el.destroy()
           });
         }
       });
 
-      // 최종 금액 강조 후 날아감
-      this.time.delayedCall(500, () => {
+      // 최종 금액 빠르게 날아감 (은행 정산 스타일)
+      this.time.delayedCall(100, () => {
         const targetX = this.shopMoneyText ? this.shopMoneyText.x : 80;
         const targetY = this.shopMoneyText ? this.shopMoneyText.y : 180;
+        const startMoney = previousMoney;
 
-        // 최종 금액 중앙으로 이동
+        // 빠르게 날아가기
         this.tweens.add({
           targets: mainAmount,
-          x: centerX,
-          y: centerY,
-          duration: 300,
-          ease: 'Power2',
+          x: targetX,
+          y: targetY,
+          scaleX: 0.5,
+          scaleY: 0.5,
+          alpha: 0,
+          duration: 180,
+          ease: 'Power2.easeIn',
           onComplete: () => {
-            this.tweens.add({
-              targets: mainAmount,
-              scaleX: 1.5,
-              scaleY: 1.5,
-              duration: 200,
-              yoyo: true,
-              onComplete: () => {
-                this.tweens.add({
-                  targets: mainAmount,
-                  x: targetX,
-                  y: targetY,
-                  scaleX: 0.4,
-                  scaleY: 0.4,
-                  duration: 600,
-                  ease: 'Power2.easeIn',
-                  onComplete: () => {
-                    mainAmount.destroy();
+            mainAmount.destroy();
 
-                    if (this.shopMoneyText && this.shopMoneyText.active) {
-                      this.shopMoneyText.setText(`$${finalMoney}`);
-                      this.tweens.add({
-                        targets: this.shopMoneyText,
-                        scaleX: 1.5,
-                        scaleY: 1.5,
-                        duration: 150,
-                        yoyo: true,
-                        ease: 'Back.easeOut'
-                      });
-                    }
-                    // 빚 정보 업데이트
-                    this.time.delayedCall(200, () => {
-                      this.updateShopDebtInfo();
+            if (this.shopMoneyText && this.shopMoneyText.active) {
+              // 카운트업 애니메이션 (은행 정산 느낌)
+              const countDuration = 250;
+              const startTime = this.time.now;
 
-                      // 빚 완납 체크 (이전에 대출이 있었고 지금은 없는 경우)
-                      if (repayments.length > 0 && this.loans.length === 0) {
-                        this.showDebtFreeAnimation();
-                      }
-                    });
+              const countUp = this.time.addEvent({
+                delay: 16,
+                callback: () => {
+                  const elapsed = this.time.now - startTime;
+                  const progress = Math.min(elapsed / countDuration, 1);
+                  // easeOut으로 마지막에 천천히
+                  const eased = 1 - Math.pow(1 - progress, 3);
+                  const currentValue = Math.floor(startMoney + (finalMoney - startMoney) * eased);
+                  this.shopMoneyText.setText(`$${currentValue}`);
+
+                  if (progress >= 1) {
+                    this.shopMoneyText.setText(`$${finalMoney}`);
+                    countUp.destroy();
                   }
-                });
+                },
+                loop: true
+              });
+            }
+
+            // 빚 정보 업데이트 + 정산 완료
+            this.time.delayedCall(300, () => {
+              this.updateShopDebtInfo();
+              this.isSettling = false; // 정산 완료 - 키보드 입력 허용
+
+              // 빚 완납 체크 (이전에 대출이 있었고 지금은 없는 경우)
+              if (repayments.length > 0 && this.loans.length === 0) {
+                this.showDebtFreeAnimation();
               }
             });
           }
@@ -3775,7 +4127,7 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   handleShopInput(direction) {
-    if (!this.shopOpen || !this.shopKeyboardEnabled) return;
+    if (!this.shopOpen || !this.shopKeyboardEnabled || this.isSettling) return;
 
     const itemCount = this.shopItems.length;
 
@@ -3932,6 +4284,8 @@ export default class SnakeGame extends Phaser.Scene {
     if (item.id === 'combo_shield') {
       // Combo Shield - 콤보 실드 추가
       this.comboShieldCount++;
+      this.hasHadShield = true; // 실드를 가졌던 적이 있음
+      this.updateItemStatusUI();
 
       // 화려한 장착 애니메이션
       if (this.shopSnakePreview && this.shopSnakePreview.length > 0) {
@@ -3939,10 +4293,10 @@ export default class SnakeGame extends Phaser.Scene {
         const headX = head.x;
         const headY = head.y;
 
-        // 1. 골드 파티클 폭발
+        // 1. 노란 파티클 폭발
         for (let i = 0; i < 12; i++) {
           const angle = (i / 12) * Math.PI * 2;
-          const particle = this.add.circle(headX, headY, 3, 0xffd700)
+          const particle = this.add.circle(headX, headY, 3, 0xffff00)
             .setDepth(6010).setAlpha(1);
           this.tweens.add({
             targets: particle,
@@ -3956,7 +4310,7 @@ export default class SnakeGame extends Phaser.Scene {
           });
         }
 
-        // 2. 전체 뱀 웨이브 효과 (골드 플래시)
+        // 2. 전체 뱀 웨이브 효과 + 머리 노란색으로 변경
         this.shopSnakePreview.forEach((segment, i) => {
           this.tweens.add({
             targets: segment,
@@ -3968,28 +4322,40 @@ export default class SnakeGame extends Phaser.Scene {
             ease: 'Back.easeOut'
           });
 
-          const originalColor = i === 0 ? 0x00ff00 : 0x00cc00;
           this.time.delayedCall(i * 50, () => {
-            segment.setFillStyle(0xffd700);
+            segment.setFillStyle(0xffffff);
             this.time.delayedCall(100, () => {
-              segment.setFillStyle(originalColor);
+              // 머리는 노란색, 몸통은 원래색
+              segment.setFillStyle(i === 0 ? 0xffff00 : 0x00cc00);
             });
+          });
+        });
+
+        // 3. 머리 글로우 효과
+        this.time.delayedCall(300, () => {
+          const glow = this.add.circle(headX, headY, 15, 0xffff00, 0.5)
+            .setDepth(6009);
+          this.tweens.add({
+            targets: glow,
+            alpha: 0,
+            scale: 2,
+            duration: 500,
+            onComplete: () => glow.destroy()
           });
         });
       }
     } else if (item.id === 'speed_boost' && this.shopSnakePreview && this.shopSnakePreview.length > 0) {
-      // Speed Boost - 뱀 머리 노란색으로 변경
-      this.snakeHeadColor = 0xffff00;
+      // Speed Boost - 속도 증가 효과 (수트 기능은 Combo Shield로 이전됨)
 
       // 화려한 장착 애니메이션
       const head = this.shopSnakePreview[0];
       const headX = head.x;
       const headY = head.y;
 
-      // 1. 머리에서 파티클 폭발
+      // 1. 머리에서 파티클 폭발 (청록색 - 속도 느낌)
       for (let i = 0; i < 12; i++) {
         const angle = (i / 12) * Math.PI * 2;
-        const particle = this.add.circle(headX, headY, 3, 0xffff00)
+        const particle = this.add.circle(headX, headY, 3, 0x00ffff)
           .setDepth(6010).setAlpha(1);
         this.tweens.add({
           targets: particle,
@@ -4016,10 +4382,10 @@ export default class SnakeGame extends Phaser.Scene {
           ease: 'Back.easeOut'
         });
 
-        // 순차적 색상 플래시 (흰색 웨이브)
-        const originalColor = i === 0 ? 0xffff00 : 0x00cc00;
+        // 순차적 색상 플래시 (청록색 웨이브)
+        const originalColor = i === 0 ? 0x00ff00 : 0x00cc00;
         this.time.delayedCall(i * 50, () => {
-          segment.setFillStyle(0xffffff);
+          segment.setFillStyle(0x00ffff);
           this.time.delayedCall(100, () => {
             segment.setFillStyle(originalColor);
           });
@@ -4028,7 +4394,7 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 3. 머리 글로우 효과
       this.time.delayedCall(300, () => {
-        const glow = this.add.circle(headX, headY, 15, 0xffff00, 0.5)
+        const glow = this.add.circle(headX, headY, 15, 0x00ffff, 0.5)
           .setDepth(6009);
         this.tweens.add({
           targets: glow,
@@ -4041,7 +4407,7 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 4. 에너지 라인 효과 (머리에서 꼬리로)
       const tail = this.shopSnakePreview[this.shopSnakePreview.length - 1];
-      const energyLine = this.add.rectangle(headX, headY, 4, 4, 0xffff00)
+      const energyLine = this.add.rectangle(headX, headY, 4, 4, 0x00ffff)
         .setDepth(6008);
 
       this.tweens.add({
