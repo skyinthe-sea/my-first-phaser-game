@@ -216,8 +216,29 @@ export default class SnakeGame extends Phaser.Scene {
     this.missedPayments = 0; // 연속 미납 횟수 (2회 = 게임오버)
     this.minimumPaymentRate = 0.1; // 최소 상환율 (총 부채의 10%)
 
+    // 보스전 시스템
+    this.isBossStage = false; // 보스 스테이지 여부
+    this.bossMode = false; // 보스전 진행 중
+    this.bossPhase = 'none'; // 'intro', 'trap', 'poisoned', 'battle', 'victory'
+    this.snakePoisoned = false; // 독 상태 (보라색 뱀)
+    this.poisonGrowthActive = false; // 독 성장 활성화
+    this.poisonGrowthData = null; // 독 성장 데이터
+    this.bossHitCount = 0; // 보스 적중 횟수 (4번 클리어)
+    this.bossElement = null; // 보스 그래픽 요소
+    this.bossPosition = null; // 보스 위치
+    this.poisonGrowthTarget = 40; // 독 상태 목표 길이
+    this.bossInputBlocked = false; // 보스 인트로 중 입력 차단
+    this.poisonSpeedTarget = 40; // 독 상태 목표 속도
+    this.savedCombo = 0; // 보스전 전 콤보 저장
+    this.savedComboShieldCount = 0; // 보스전 전 실드 저장
+    this.bossCorners = []; // 보스가 나타날 코너 위치들
+    this.originalSnakeColor = 0x00ff00; // 원래 뱀 색상
+    this.bossStageInterval = 5; // 보스 등장 스테이지 간격 (테스트: 2, 실제: 5)
+    this.testBossStage = 2; // 테스트용 보스 스테이지
+
     // 키 입력 (입력 큐 시스템)
     this.input.keyboard.on('keydown-LEFT', () => {
+      if (this.bossInputBlocked) return;
       if (this.loanUIOpen) return;
       if (this.shopOpen) {
         this.handleShopInput('LEFT');
@@ -227,6 +248,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('LEFT');
     });
     this.input.keyboard.on('keydown-RIGHT', () => {
+      if (this.bossInputBlocked) return;
       if (this.loanUIOpen) return;
       if (this.shopOpen) {
         this.handleShopInput('RIGHT');
@@ -236,6 +258,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('RIGHT');
     });
     this.input.keyboard.on('keydown-UP', () => {
+      if (this.bossInputBlocked) return;
       if (this.loanUIOpen) {
         this.handleLoanInput('UP');
         return;
@@ -248,6 +271,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('UP');
     });
     this.input.keyboard.on('keydown-DOWN', () => {
+      if (this.bossInputBlocked) return;
       if (this.loanUIOpen) {
         this.handleLoanInput('DOWN');
         return;
@@ -366,6 +390,9 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 방향전환 시 콤보 실드 체크 (4번째부터 매번 1개씩 소모)
   checkComboShieldOnDirectionChange() {
+    // 보스 스테이지에서는 실드 소모 안함
+    if (this.bossMode) return;
+
     // 이미 끊어졌으면 체크 불필요 (콤보가 0이어도 실드는 소모됨)
     if (this.comboLost) return;
 
@@ -440,6 +467,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   checkAndShowFoodBubble(foodPos) {
+    // 보스 스테이지에서는 말풍선 비활성화
+    if (this.bossMode) return;
+
     // 기존 말풍선 제거
     if (this.foodBubble) {
 
@@ -691,6 +721,11 @@ export default class SnakeGame extends Phaser.Scene {
       this.crosshairLines = null;
     }
 
+    // 보스 스테이지에서는 십자가 효과 비활성화
+    if (this.bossMode) {
+      return;
+    }
+
     // stage 4 이상이면 후레쉬 효과 없음
     if (this.currentStage >= 4) {
       return;
@@ -833,6 +868,18 @@ export default class SnakeGame extends Phaser.Scene {
   moveSnake() {
     if (this.gameOver) return;
 
+    // 보스 인트로 중 이동 카운트 체크 (3칸 이동 후 대사)
+    if (this.bossMode && this.bossPhase === 'intro' && this.bossIntroMoveCount !== undefined) {
+      this.bossIntroMoveCount++;
+      if (this.bossIntroMoveCount >= 5) {
+        this.bossIntroMoveCount = undefined;
+        this.moveTimer.paused = true;
+        this.bossInputBlocked = true; // 입력 차단
+        this.showSnakeDialogue();
+        return;
+      }
+    }
+
     // 먹이 텔레포트 체크 (Stage 1: 1번, Stage 2+: 2번)
     const maxTeleports = this.currentStage === 1 ? 1 : 2;
     if (this.foodTeleportEnabled && this.currentFoodTeleportCount < maxTeleports && this.nextTeleportStep > 0) {
@@ -930,6 +977,26 @@ export default class SnakeGame extends Phaser.Scene {
         }
       }
       this.foodBubble = null;
+
+      // 보스전 처리
+      if (this.bossMode) {
+        if (this.bossPhase === 'trap') {
+          // 함정 먹이 - 독 효과 시작
+          this.handleBossTrap();
+          this.draw();
+          return;
+        } else if (this.bossPhase === 'battle') {
+          // 보스 적중
+          if (this.bossHitCount === 3) {
+            // 마지막 히트 - 슬로우모션
+            this.handleBossFinalHit();
+          } else {
+            this.handleBossHit();
+          }
+          this.draw();
+          return;
+        }
+      }
 
       this.foodCount++;
 
@@ -1091,8 +1158,8 @@ export default class SnakeGame extends Phaser.Scene {
         this.createFoodParticles();
       }
 
-      // 스테이지 클리어 체크 (25개 먹으면 클리어)
-      if (this.foodCount >= 1) { // TODO: 테스트 후 25로 변경
+      // 스테이지 클리어 체크 (25개 먹으면 클리어) - 보스전 중에는 비활성화
+      if (!this.bossMode && this.foodCount >= 1) { // TODO: 테스트 후 25로 변경
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -1118,12 +1185,35 @@ export default class SnakeGame extends Phaser.Scene {
         });
       }
     } else {
-      // 먹이를 안 먹었으면 꼬리 제거
-      this.snake.pop();
+      // 독 성장 중이면 꼬리 제거 안함 (성장)
+      if (this.poisonGrowthActive && this.poisonGrowthData) {
+        const data = this.poisonGrowthData;
+        if (data.currentGrowth < data.growthNeeded) {
+          // 속도 증가
+          this.moveTimer.delay = Math.max(data.targetSpeed, this.moveTimer.delay - data.speedDecrease);
+          data.currentGrowth++;
+
+          // 성장 완료 체크
+          if (data.currentGrowth >= data.growthNeeded) {
+            this.poisonGrowthActive = false;
+            // 보스전 본격 시작
+            this.time.delayedCall(500, () => {
+              this.startBossBattle();
+            });
+          }
+        } else {
+          this.snake.pop();
+        }
+      } else {
+        // 먹이를 안 먹었으면 꼬리 제거
+        this.snake.pop();
+      }
     }
 
-    // 아이템 업데이트 및 충돌 체크
-    this.updateItems(newHead);
+    // 아이템 업데이트 및 충돌 체크 (보스전 중에는 아이템 비활성화)
+    if (!this.bossMode) {
+      this.updateItems(newHead);
+    }
 
     // 화면 다시 그리기
     this.draw();
@@ -1469,6 +1559,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   showDirectionChangeCounter() {
+    // 보스 스테이지에서는 방향 전환 카운터 비활성화
+    if (this.bossMode) return;
+
     // 뱀 머리 위치
     const head = this.snake[0];
     const headPixelX = head.x * this.gridSize + this.gridSize / 2;
@@ -2636,8 +2729,12 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       if (index === 0) {
-        // 머리 색상 (콤보 실드가 있으면 노란색 - 수트 기능)
-        if (this.comboShieldCount > 0) {
+        // 머리 색상
+        if (this.snakePoisoned) {
+          // 보스전 독 상태 - 보라색
+          this.graphics.fillStyle(0x9900ff);
+        } else if (this.comboShieldCount > 0) {
+          // 콤보 실드가 있으면 노란색 - 수트 기능
           this.graphics.fillStyle(0xffff00);
         } else if (this.snakeHeadTint) {
           this.graphics.fillStyle(this.snakeHeadTint);
@@ -2648,7 +2745,10 @@ export default class SnakeGame extends Phaser.Scene {
         }
       } else {
         // 몸통 색상
-        if (this.snakeBodyTint) {
+        if (this.snakePoisoned) {
+          // 보스전 독 상태 - 보라색
+          this.graphics.fillStyle(0x7700cc);
+        } else if (this.snakeBodyTint) {
           this.graphics.fillStyle(this.snakeBodyTint);
         } else {
           this.graphics.fillStyle(0x00aa00);
@@ -2663,14 +2763,16 @@ export default class SnakeGame extends Phaser.Scene {
       );
     });
 
-    // 먹이 그리기 (25번째 먹이는 머리색과 동일 - 초록색)
-    const isFinalFood = this.foodCount === 24; // 다음 먹이가 25번째
-    this.graphics.fillStyle(isFinalFood ? 0x00ff00 : 0xff0000);
-    this.graphics.fillCircle(
-      this.food.x * this.gridSize + this.gridSize / 2,
-      this.food.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
-      this.gridSize / 2 - 2
-    );
+    // 먹이 그리기 (보스 요소가 있으면 건너뛰기)
+    if (!this.bossElement) {
+      const isFinalFood = this.foodCount === 24; // 다음 먹이가 25번째
+      this.graphics.fillStyle(isFinalFood ? 0x00ff00 : 0xff0000);
+      this.graphics.fillCircle(
+        this.food.x * this.gridSize + this.gridSize / 2,
+        this.food.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
+        this.gridSize / 2 - 2
+      );
+    }
   }
 
   endGame() {
@@ -2688,6 +2790,21 @@ export default class SnakeGame extends Phaser.Scene {
       if (item.text) item.text.destroy();
     });
     this.items = [];
+
+    // 보스 요소 정리
+    if (this.bossElement) {
+      this.bossElement.destroy();
+      this.bossElement = null;
+    }
+    // 보스 HIT 텍스트 정리
+    if (this.bossHitText) {
+      this.tweens.killTweensOf(this.bossHitText);
+      this.bossHitText.destroy();
+      this.bossHitText = null;
+    }
+    this.bossMode = false;
+    this.isBossStage = false;
+    this.snakePoisoned = false;
 
     // 배경음악 정지
     if (this.bgMusic) {
@@ -2954,8 +3071,46 @@ export default class SnakeGame extends Phaser.Scene {
     // 다음 스테이지로 증가
     this.currentStage++;
 
-    // 게임을 먼저 리셋하고 시작 (동시에 진행)
-    this.resetStage();
+    // 보스 스테이지 체크 (테스트: 2, 실제: 5, 10, 15...)
+    const isBossStage = this.currentStage === this.testBossStage ||
+                        (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0);
+
+    if (isBossStage) {
+      this.isBossStage = true;
+      this.bossMode = true;
+      // 콤보 상태 저장 (보스전 후 복원)
+      this.savedCombo = this.combo;
+      this.savedComboShieldCount = this.comboShieldCount;
+      // 보스전 중에는 콤보 비활성화
+      this.combo = 0;
+      this.comboText.setText('');
+
+      this.resetStage();
+      // resetStage 이후에 bossPhase 설정 (resetStage가 'none'으로 리셋하기 때문)
+      this.bossPhase = 'intro';
+      // 보스 스테이지에서는 먹이 숨기기
+      this.food = { x: -100, y: -100 };
+      // 3칸 이동 후 대사 시작을 위한 카운터
+      this.bossIntroMoveCount = 0;
+      // 일반 스테이지 인트로로 진행 (아래 코드로 계속)
+    }
+
+    // 보스 스테이지 후 콤보 복원 (보스가 아닌 스테이지로 전환 시)
+    if (!isBossStage && this.isBossStage) {
+      this.isBossStage = false;
+      this.bossMode = false;
+      this.combo = this.savedCombo;
+      this.comboShieldCount = this.savedComboShieldCount;
+      if (this.combo > 0) {
+        this.comboText.setText(`x${this.combo}`);
+      }
+      this.updateItemStatusUI();
+    }
+
+    // 보스 스테이지가 아닐 때만 리셋 (보스는 위에서 이미 리셋함)
+    if (!isBossStage) {
+      this.resetStage();
+    }
 
     // STAGE X 텍스트 (상단에 투명하게 표시)
     const stageText = this.add.text(width / 2, height / 2 - 100, `STAGE ${this.currentStage}`, {
@@ -3007,6 +3162,17 @@ export default class SnakeGame extends Phaser.Scene {
     this.direction = 'RIGHT';
     this.inputQueue = [];
 
+    // 보스전 상태 초기화
+    this.bossPhase = 'none';
+    this.bossHitCount = 0;
+    this.poisonGrowthActive = false;
+    this.poisonGrowthData = null;
+    this.snakePoisoned = false;
+    if (this.bossElement) {
+      this.bossElement.destroy();
+      this.bossElement = null;
+    }
+
     // 먹이 개수 리셋
     this.foodCount = 0;
     this.foodCountText.setText('0');
@@ -3039,6 +3205,9 @@ export default class SnakeGame extends Phaser.Scene {
   // =====================
 
   openShop() {
+    // 이미 상점이 열려있으면 중복 호출 방지
+    if (this.shopOpen) return;
+
     this.shopOpen = true;
     this.isPurchaseConfirmOpen = false;
     this.purchaseConfirmSelection = 'yes';
@@ -3047,6 +3216,30 @@ export default class SnakeGame extends Phaser.Scene {
     this.purchaseConfirmButtons = null;
     this.lastShopFocusKey = null;
     const { width, height } = this.cameras.main;
+
+    // 기존 상점 요소가 남아있으면 정리
+    if (this.shopElements && this.shopElements.length > 0) {
+      this.shopElements.forEach(el => {
+        if (el && el.destroy) el.destroy();
+      });
+      this.shopElements = [];
+    }
+    if (this.shopCards && this.shopCards.length > 0) {
+      this.shopCards.forEach(card => {
+        if (card && card.destroy) card.destroy();
+      });
+      this.shopCards = [];
+    }
+    if (this.shopDebtElements && this.shopDebtElements.length > 0) {
+      this.shopDebtElements.forEach(el => {
+        if (el && el.destroy) el.destroy();
+      });
+      this.shopDebtElements = [];
+    }
+
+    // 맵 위의 뱀 그래픽 정리 (보스전 후 보라색 뱀 등)
+    this.snakePoisoned = false;
+    this.graphics.clear();
 
     // 매 상점 오픈 시 아이템 목록 새로 로드
     this.shopItems = getShopItems();
@@ -6942,6 +7135,840 @@ export default class SnakeGame extends Phaser.Scene {
     this.time.delayedCall(400, () => {
       this.shopKeyboardEnabled = true;
     });
+  }
+
+  // ==================== 보스전 시스템 ====================
+
+  showSnakeDialogue() {
+    const { width, height } = this.cameras.main;
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 말풍선 배경
+    const bubble = this.add.rectangle(headX, headY - 50, 200, 40, 0xffffff, 0.95)
+      .setDepth(5001).setScale(0).setStrokeStyle(2, 0x000000);
+
+    this.tweens.add({
+      targets: bubble,
+      scale: 1,
+      duration: 200,
+      ease: 'Back.easeOut'
+    });
+
+    // 타이핑 효과 텍스트
+    const dialogue = "Where did the frog go?";
+    const dialogueText = this.add.text(headX, headY - 50, '', {
+      fontSize: '12px',
+      fill: '#000000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5002);
+
+    let charIndex = 0;
+    const typeTimer = this.time.addEvent({
+      delay: 50,
+      callback: () => {
+        dialogueText.setText(dialogue.substring(0, charIndex + 1));
+        charIndex++;
+        if (charIndex >= dialogue.length) {
+          typeTimer.destroy();
+          // 대사 완료 후 찾는 액션
+          this.time.delayedCall(800, () => {
+            this.tweens.add({
+              targets: [bubble, dialogueText],
+              alpha: 0,
+              duration: 200,
+              onComplete: () => {
+                bubble.destroy();
+                dialogueText.destroy();
+                this.snakeLookAround();
+              }
+            });
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  snakeLookAround() {
+    // 뱀이 좌우로 고개를 돌리는 효과
+    const head = this.snake[0];
+    let lookCount = 0;
+    const directions = ['LEFT', 'RIGHT', 'LEFT', 'RIGHT'];
+
+    const lookTimer = this.time.addEvent({
+      delay: 400,
+      callback: () => {
+        if (lookCount < directions.length) {
+          // 머리 위치에 시선 표시
+          const headX = head.x * this.gridSize + this.gridSize / 2;
+          const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+          const dir = directions[lookCount];
+          const offsetX = dir === 'LEFT' ? -20 : 20;
+
+          const eye = this.add.text(headX + offsetX, headY - 20, '👀', {
+            fontSize: '16px'
+          }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+          this.tweens.add({
+            targets: eye,
+            alpha: 1,
+            duration: 100,
+            yoyo: true,
+            hold: 200,
+            onComplete: () => eye.destroy()
+          });
+
+          lookCount++;
+        } else {
+          lookTimer.destroy();
+          this.time.delayedCall(500, () => {
+            this.showBossAppear();
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  showBossAppear() {
+    const { width, height } = this.cameras.main;
+
+    // 보스 위치: 뱀과 같은 높이, 우측 벽에서 9칸 떨어진 위치
+    let bossX = this.cols - 9;
+    let bossY = 15; // 뱀 시작 위치와 동일한 y
+
+    // 데드존과 겹치면 옆으로 이동
+    const isOnDeadZone = this.deadZones.some(dz => dz.x === bossX && dz.y === bossY);
+    if (isOnDeadZone) {
+      const offsets = [
+        { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }
+      ];
+      for (const offset of offsets) {
+        const newX = bossX + offset.x;
+        const newY = bossY + offset.y;
+        if (newX >= 0 && newX < this.cols && newY >= 0 && newY < this.rows) {
+          const alsoOnDeadZone = this.deadZones.some(dz => dz.x === newX && dz.y === newY);
+          if (!alsoOnDeadZone) {
+            bossX = newX;
+            bossY = newY;
+            break;
+          }
+        }
+      }
+    }
+
+    this.bossPosition = { x: bossX, y: bossY };
+
+    // 화면 플래시
+    const flash = this.add.rectangle(width / 2, height / 2, width, height, 0xff00ff, 0)
+      .setDepth(4999);
+    this.tweens.add({
+      targets: flash,
+      fillAlpha: 0.8,
+      duration: 100,
+      yoyo: true,
+      repeat: 2,
+      onComplete: () => flash.destroy()
+    });
+
+    // 보스 등장 외침
+    const bossShout = this.add.text(width / 2, height / 2 - 80, "Hey, you trash snake!", {
+      fontSize: '28px',
+      fill: '#ff00ff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5001).setAlpha(0).setScale(0.5);
+
+    this.tweens.add({
+      targets: bossShout,
+      alpha: 1,
+      scale: 1.2,
+      duration: 300,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.cameras.main.shake(200, 0.015);
+        this.time.delayedCall(1500, () => {
+          this.tweens.add({
+            targets: bossShout,
+            alpha: 0,
+            y: bossShout.y - 30,
+            duration: 300,
+            onComplete: () => bossShout.destroy()
+          });
+        });
+      }
+    });
+
+    // 보스 그리기 (뿔 달린 보라색 먹이)
+    this.time.delayedCall(500, () => {
+      this.drawBoss(bossX, bossY);
+
+      // 보스 대사
+      this.time.delayedCall(1000, () => {
+        this.showBossDialogue("We are enemies... Take my poison!", () => {
+          // 대사 후 바로 게임 재개
+          this.time.delayedCall(500, () => {
+            this.bossPhase = 'trap';
+            this.moveTimer.paused = false;
+            this.bossInputBlocked = false;
+          });
+        });
+      });
+    });
+  }
+
+  drawBoss(x, y) {
+    const bossX = x * this.gridSize + this.gridSize / 2;
+    const bossY = y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 보스 컨테이너
+    const bossContainer = this.add.container(bossX, bossY).setDepth(100);
+
+    // 보스 몸체 (보라색)
+    const body = this.add.rectangle(0, 0, this.gridSize - 2, this.gridSize - 2, 0x9900ff);
+    bossContainer.add(body);
+
+    // 뿔 (4개 모서리에)
+    const hornSize = 4;
+    const offset = this.gridSize / 2 - 2;
+    const horns = [
+      this.add.triangle(-offset, -offset, 0, hornSize, hornSize, hornSize, hornSize / 2, 0, 0xff00ff),
+      this.add.triangle(offset, -offset, 0, hornSize, hornSize, hornSize, hornSize / 2, 0, 0xff00ff),
+      this.add.triangle(-offset, offset, 0, 0, hornSize, 0, hornSize / 2, hornSize, 0xff00ff),
+      this.add.triangle(offset, offset, 0, 0, hornSize, 0, hornSize / 2, hornSize, 0xff00ff)
+    ];
+    horns.forEach(horn => bossContainer.add(horn));
+
+    // 등장 애니메이션
+    bossContainer.setScale(0).setAlpha(0);
+    this.tweens.add({
+      targets: bossContainer,
+      scale: 1,
+      alpha: 1,
+      duration: 400,
+      ease: 'Back.easeOut'
+    });
+
+    // 펄스 효과
+    this.tweens.add({
+      targets: bossContainer,
+      scaleX: 1.1,
+      scaleY: 1.1,
+      duration: 500,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    this.bossElement = bossContainer;
+
+    // 먹이로 설정
+    this.food = { x, y };
+  }
+
+  showBossDialogue(text, callback) {
+    const { width, height } = this.cameras.main;
+
+    const dialogue = this.add.text(width / 2, height / 2, '', {
+      fontSize: '20px',
+      fill: '#ff00ff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(5002);
+
+    let charIndex = 0;
+    const typeTimer = this.time.addEvent({
+      delay: 40,
+      callback: () => {
+        dialogue.setText(text.substring(0, charIndex + 1));
+        charIndex++;
+        if (charIndex >= text.length) {
+          typeTimer.destroy();
+          this.time.delayedCall(1500, () => {
+            this.tweens.add({
+              targets: dialogue,
+              alpha: 0,
+              duration: 300,
+              onComplete: () => {
+                dialogue.destroy();
+                if (callback) callback();
+              }
+            });
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  bossPreBattleCountdown() {
+    const { width, height } = this.cameras.main;
+
+    const countdownText = this.add.text(width / 2, height / 2, '', {
+      fontSize: '72px',
+      fill: '#ff00ff',
+      fontStyle: 'bold',
+      stroke: '#660066',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(5000);
+
+    let count = 3;
+    const countdownTimer = this.time.addEvent({
+      delay: 700,
+      callback: () => {
+        if (count > 0) {
+          countdownText.setText(count.toString());
+          countdownText.setScale(1.5);
+          this.tweens.add({
+            targets: countdownText,
+            scale: 1,
+            duration: 200,
+            ease: 'Back.easeOut'
+          });
+          count--;
+        } else {
+          countdownText.destroy();
+          this.moveTimer.paused = false;
+          this.bossInputBlocked = false; // 입력 차단 해제
+        }
+      },
+      repeat: 3
+    });
+  }
+
+  handleBossTrap() {
+    const { width, height } = this.cameras.main;
+
+    // 먹이 즉시 제거 (화면에서 완전히 숨김)
+    this.food = { x: -100, y: -100 };
+    if (this.bossElement) {
+      this.bossElement.destroy();
+      this.bossElement = null;
+    }
+
+    // 보스 대사
+    const trapText = this.add.text(width / 2, height / 2 - 100, "Good luck!", {
+      fontSize: '32px',
+      fill: '#ff00ff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+    this.tweens.add({
+      targets: trapText,
+      alpha: 1,
+      scale: { from: 0.5, to: 1.2 },
+      duration: 300,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.time.delayedCall(1000, () => {
+          this.tweens.add({
+            targets: trapText,
+            alpha: 0,
+            duration: 300,
+            onComplete: () => trapText.destroy()
+          });
+        });
+      }
+    });
+
+    // 독 효과 시작
+    this.bossPhase = 'poisoned';
+    this.applyPoison();
+  }
+
+  applyPoison() {
+    const { width, height } = this.cameras.main;
+
+    // 뱀 색상을 점점 보라색으로
+    let blinkCount = 0;
+    const blinkTimer = this.time.addEvent({
+      delay: 200,
+      callback: () => {
+        blinkCount++;
+        // 깜빡임 효과
+        this.snakePoisoned = blinkCount % 2 === 0;
+        this.draw();
+
+        if (blinkCount >= 10) {
+          blinkTimer.destroy();
+          this.snakePoisoned = true;
+          this.draw();
+
+          // 보스 대사: "Gotcha!"
+          const gotchaText = this.add.text(width / 2, height / 2 - 80, "Gotcha!", {
+            fontSize: '36px',
+            fill: '#ff00ff',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 4
+          }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+          this.tweens.add({
+            targets: gotchaText,
+            alpha: 1,
+            scale: { from: 0.5, to: 1.3 },
+            duration: 300,
+            ease: 'Back.easeOut',
+            onComplete: () => {
+              this.time.delayedCall(800, () => {
+                this.tweens.add({
+                  targets: gotchaText,
+                  alpha: 0,
+                  duration: 200,
+                  onComplete: () => gotchaText.destroy()
+                });
+              });
+            }
+          });
+
+          // 성장 시작
+          this.startPoisonGrowth();
+        }
+      },
+      loop: true
+    });
+  }
+
+  startPoisonGrowth() {
+    // 매 이동마다 1칸 성장 + 속도 증가
+    this.poisonGrowthActive = true;
+    this.poisonGrowthCount = 0;
+    this.originalSpeed = this.moveTimer.delay;
+
+    // 목표: 20칸, 40ms
+    const targetLength = this.poisonGrowthTarget;
+    const targetSpeed = this.poisonSpeedTarget;
+    const currentLength = this.snake.length;
+    const growthNeeded = targetLength - currentLength;
+    const speedDecrease = (this.originalSpeed - targetSpeed) / growthNeeded;
+
+    this.poisonGrowthData = {
+      targetLength,
+      targetSpeed,
+      growthNeeded,
+      speedDecrease,
+      currentGrowth: 0
+    };
+  }
+
+  handlePoisonGrowth() {
+    if (!this.poisonGrowthActive || !this.poisonGrowthData) return false;
+
+    const data = this.poisonGrowthData;
+    if (data.currentGrowth < data.growthNeeded) {
+      // 뱀 성장
+      const tail = this.snake[this.snake.length - 1];
+      this.snake.push({ x: tail.x, y: tail.y });
+
+      // 속도 증가
+      this.moveTimer.delay = Math.max(data.targetSpeed, this.moveTimer.delay - data.speedDecrease);
+
+      data.currentGrowth++;
+
+      // 성장 완료 체크
+      if (data.currentGrowth >= data.growthNeeded) {
+        this.poisonGrowthActive = false;
+        // 보스전 본격 시작
+        this.time.delayedCall(500, () => {
+          this.startBossBattle();
+        });
+      }
+      return true; // 성장함
+    }
+    return false;
+  }
+
+  startBossBattle() {
+    const { width, height } = this.cameras.main;
+    this.bossPhase = 'battle';
+    this.bossHitCount = 0;
+
+    // 코너 위치 설정 (4개) - 모서리 근처 (벽 충돌 방지를 위해 1칸 안쪽)
+    this.bossCorners = [
+      { x: 1, y: 1 }, // 좌상단
+      { x: this.cols - 2, y: 1 }, // 우상단
+      { x: 1, y: this.rows - 2 }, // 좌하단
+      { x: this.cols - 2, y: this.rows - 2 } // 우하단
+    ];
+
+    // 배틀 시작 메시지
+    const battleText = this.add.text(width / 2, height / 2, "BATTLE START!", {
+      fontSize: '48px',
+      fill: '#ff00ff',
+      fontStyle: 'bold',
+      stroke: '#660066',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+    this.tweens.add({
+      targets: battleText,
+      alpha: 1,
+      scale: { from: 0.5, to: 1.2 },
+      duration: 400,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.cameras.main.shake(300, 0.01);
+        this.time.delayedCall(1000, () => {
+          this.tweens.add({
+            targets: battleText,
+            alpha: 0,
+            duration: 300,
+            onComplete: () => {
+              battleText.destroy();
+              this.spawnBossAtCorner();
+            }
+          });
+        });
+      }
+    });
+  }
+
+  spawnBossAtCorner() {
+    if (this.bossHitCount >= 4) return;
+
+    // 코너에서 랜덤 선택 (순서대로)
+    let corner = { ...this.bossCorners[this.bossHitCount] };
+
+    // 데드존과 겹치면 옆으로 이동
+    const isOnDeadZone = this.deadZones.some(dz => dz.x === corner.x && dz.y === corner.y);
+    if (isOnDeadZone) {
+      // 인접한 위치 찾기 (상하좌우)
+      const offsets = [
+        { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 },
+        { x: 1, y: 1 }, { x: -1, y: 1 }, { x: 1, y: -1 }, { x: -1, y: -1 }
+      ];
+      for (const offset of offsets) {
+        const newX = corner.x + offset.x;
+        const newY = corner.y + offset.y;
+        // 경계 체크 및 데드존 체크
+        if (newX >= 0 && newX < this.cols && newY >= 0 && newY < this.rows) {
+          const alsoOnDeadZone = this.deadZones.some(dz => dz.x === newX && dz.y === newY);
+          if (!alsoOnDeadZone) {
+            corner = { x: newX, y: newY };
+            break;
+          }
+        }
+      }
+    }
+
+    this.bossPosition = corner;
+
+    // 보스 그리기
+    this.drawBoss(corner.x, corner.y);
+
+    // 등장 효과
+    const { width, height } = this.cameras.main;
+    const bossX = corner.x * this.gridSize + this.gridSize / 2;
+    const bossY = corner.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 경고 표시
+    const warning = this.add.text(bossX, bossY - 30, '!', {
+      fontSize: '24px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+    this.tweens.add({
+      targets: warning,
+      alpha: 1,
+      y: bossY - 40,
+      duration: 200,
+      yoyo: true,
+      repeat: 2,
+      onComplete: () => warning.destroy()
+    });
+  }
+
+  handleBossHit() {
+    const { width, height } = this.cameras.main;
+    this.bossHitCount++;
+
+    // 보스 피격 효과
+    if (this.bossElement) {
+      this.tweens.add({
+        targets: this.bossElement,
+        alpha: 0,
+        scale: 1.5,
+        duration: 200,
+        onComplete: () => {
+          this.bossElement.destroy();
+          this.bossElement = null;
+        }
+      });
+    }
+
+    // 히트 카운트 표시
+    // 기존 hitText 제거
+    if (this.bossHitText) {
+      this.tweens.killTweensOf(this.bossHitText);
+      this.bossHitText.destroy();
+      this.bossHitText = null;
+    }
+
+    this.bossHitText = this.add.text(width / 2, height / 2 - 100, `HIT ${this.bossHitCount}/4`, {
+      fontSize: '36px',
+      fill: '#ffff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+    this.tweens.add({
+      targets: this.bossHitText,
+      alpha: 1,
+      scale: { from: 0.5, to: 1.2 },
+      duration: 300,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.time.delayedCall(500, () => {
+          if (this.bossHitText) {
+            this.tweens.add({
+              targets: this.bossHitText,
+              alpha: 0,
+              duration: 200,
+              onComplete: () => {
+                if (this.bossHitText) {
+                  this.bossHitText.destroy();
+                  this.bossHitText = null;
+                }
+              }
+            });
+          }
+        });
+      }
+    });
+
+    // 마지막 히트면 승리
+    if (this.bossHitCount >= 4) {
+      this.showBossVictory();
+    } else {
+      // 다음 보스 생성
+      this.time.delayedCall(800, () => {
+        this.spawnBossAtCorner();
+      });
+    }
+  }
+
+  handleBossFinalHit() {
+    const { width, height } = this.cameras.main;
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 울트라 슬로우모션 + 줌
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 화면 슬로우 모션 효과
+    this.time.timeScale = 0.3;
+
+    // 카메라를 뱀 머리 위치로 이동 후 줌 인
+    this.cameras.main.pan(headX, headY, 300, 'Power2', false, (camera, progress) => {
+      if (progress === 1) {
+        this.cameras.main.zoomTo(2, 500, 'Power2', false, (cam, zoomProgress) => {
+          if (zoomProgress === 1) {
+            // 충돌!
+            this.cameras.main.shake(500, 0.03);
+
+            // 보스 비명
+            const scream = this.add.text(headX, headY - 50, "AAARGH! RIBBIT!", {
+              fontSize: '24px',
+              fill: '#ff0000',
+              fontStyle: 'bold',
+              stroke: '#000000',
+              strokeThickness: 3
+            }).setOrigin(0.5).setDepth(5002).setAlpha(0);
+
+            this.tweens.add({
+              targets: scream,
+              alpha: 1,
+              y: headY - 80,
+              scale: { from: 0.5, to: 1.5 },
+              duration: 500,
+              onComplete: () => {
+                this.time.delayedCall(800, () => {
+                  this.tweens.add({
+                    targets: scream,
+                    alpha: 0,
+                    duration: 300,
+                    onComplete: () => scream.destroy()
+                  });
+                });
+              }
+            });
+
+            // 보스 폭발 파티클
+            if (this.bossElement) {
+              for (let i = 0; i < 20; i++) {
+                const particle = this.add.rectangle(
+                  this.bossElement.x,
+                  this.bossElement.y,
+                  4, 4, 0xff00ff
+                ).setDepth(5001);
+
+                const angle = (i / 20) * Math.PI * 2;
+                this.tweens.add({
+                  targets: particle,
+                  x: this.bossElement.x + Math.cos(angle) * 100,
+                  y: this.bossElement.y + Math.sin(angle) * 100,
+                  alpha: 0,
+                  duration: 800,
+                  onComplete: () => particle.destroy()
+                });
+              }
+
+              this.bossElement.destroy();
+              this.bossElement = null;
+            }
+
+            // 줌 아웃 및 정상 속도 복원
+            this.time.delayedCall(1000, () => {
+              this.time.timeScale = 1;
+              // 카메라 위치 초기화 후 줌 아웃
+              const { width, height } = this.cameras.main;
+              this.cameras.main.pan(width / 2, height / 2, 300, 'Power2');
+              this.cameras.main.zoomTo(1, 500, 'Power2', false, () => {
+                this.showBossVictory();
+              });
+            });
+          }
+        });
+      }
+    });
+  }
+
+  showBossVictory() {
+    const { width, height } = this.cameras.main;
+    this.bossPhase = 'victory';
+
+    // 보너스 점수 추가 (보스전은 1000점 보너스만)
+    this.score = 1000;
+    this.scoreText.setText(this.score.toString());
+
+    // 보스 클리어 텍스트
+    const clearText = this.add.text(width / 2, height / 2 - 50, 'BOSS CLEAR!', {
+      fontSize: '64px',
+      fill: '#ffff00',
+      fontStyle: 'bold',
+      stroke: '#ff6600',
+      strokeThickness: 8
+    }).setOrigin(0.5).setDepth(5001).setAlpha(0).setScale(0.5);
+
+    this.tweens.add({
+      targets: clearText,
+      alpha: 1,
+      scale: 1.2,
+      duration: 500,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        // 화면 플래시
+        const flash = this.add.rectangle(width / 2, height / 2, width, height, 0xffff00, 0.5)
+          .setDepth(5000);
+        this.tweens.add({
+          targets: flash,
+          alpha: 0,
+          duration: 500,
+          onComplete: () => flash.destroy()
+        });
+
+        // 화면 흔들림
+        this.cameras.main.shake(500, 0.02);
+
+        // 보너스 점수 표시
+        const bonusText = this.add.text(width / 2, height / 2 + 30, '+1000 BONUS!', {
+          fontSize: '32px',
+          fill: '#00ff00',
+          fontStyle: 'bold',
+          stroke: '#008800',
+          strokeThickness: 4
+        }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+        this.tweens.add({
+          targets: bonusText,
+          alpha: 1,
+          y: height / 2 + 10,
+          duration: 300,
+          delay: 500
+        });
+
+        // 파티클 폭발
+        for (let i = 0; i < 30; i++) {
+          const colors = [0xffff00, 0xff00ff, 0x00ffff, 0xff0000, 0x00ff00];
+          const particle = this.add.rectangle(
+            width / 2, height / 2, 8, 8,
+            colors[Math.floor(Math.random() * colors.length)]
+          ).setDepth(5001);
+
+          const angle = (i / 30) * Math.PI * 2;
+          const distance = 150 + Math.random() * 100;
+          this.tweens.add({
+            targets: particle,
+            x: width / 2 + Math.cos(angle) * distance,
+            y: height / 2 + Math.sin(angle) * distance,
+            alpha: 0,
+            rotation: Math.random() * 10,
+            duration: 1000,
+            onComplete: () => particle.destroy()
+          });
+        }
+
+        // 보스 모드 종료 및 상점 열기
+        this.time.delayedCall(2000, () => {
+          this.tweens.add({
+            targets: [clearText, bonusText],
+            alpha: 0,
+            duration: 300,
+            onComplete: () => {
+              clearText.destroy();
+              bonusText.destroy();
+
+              // 보스 모드 종료
+              this.snakePoisoned = false;
+              this.bossMode = false;
+              this.bossPhase = 'none';
+
+              // 기존 스테이지 클리어 플로우 (상점 열기)
+              this.openShop();
+            }
+          });
+        });
+      }
+    });
+  }
+
+  snakeJumpAnimation(callback) {
+    // 뱀이 맵 밖으로 날아가는 애니메이션
+    const { width, height } = this.cameras.main;
+
+    // 각 세그먼트를 위로 날림
+    this.snake.forEach((segment, i) => {
+      const segX = segment.x * this.gridSize + this.gridSize / 2;
+      const segY = segment.y * this.gridSize + this.gridSize / 2 + 60;
+
+      const jumpRect = this.add.rectangle(segX, segY, this.gridSize - 2, this.gridSize - 2,
+        i === 0 ? (this.comboShieldCount > 0 ? 0xffff00 : 0x00ff00) : 0x00cc00
+      ).setDepth(5001);
+
+      this.tweens.add({
+        targets: jumpRect,
+        y: -50,
+        x: segX + (Math.random() - 0.5) * 100,
+        rotation: Math.random() * 5,
+        delay: i * 30,
+        duration: 500,
+        ease: 'Power2.easeIn',
+        onComplete: () => jumpRect.destroy()
+      });
+    });
+
+    this.time.delayedCall(800, callback);
   }
 
   update() {
