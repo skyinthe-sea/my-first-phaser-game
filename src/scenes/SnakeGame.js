@@ -60,18 +60,25 @@ export default class SnakeGame extends Phaser.Scene {
 
     // UI 영역 높이
     this.uiHeight = 60;
+    this.bottomUIHeight = 60;
 
-    // UI 배경
+    // 상단 UI 배경
     const uiBg = this.add.rectangle(0, 0, width, this.uiHeight, 0x1a1a1a, 0.95).setOrigin(0, 0).setDepth(2000);
 
-    // 구분선
+    // 상단 구분선
     this.add.rectangle(0, this.uiHeight, width, 2, 0x00ff00, 0.3).setOrigin(0, 0).setDepth(2000);
 
-    // 그리드 설정 (UI 영역 제외)
+    // 하단 UI 배경
+    this.add.rectangle(0, height - this.bottomUIHeight, width, this.bottomUIHeight, 0x1a1a1a, 0.95).setOrigin(0, 0).setDepth(2000);
+
+    // 하단 구분선
+    this.add.rectangle(0, height - this.bottomUIHeight - 2, width, 2, 0x00ff00, 0.3).setOrigin(0, 0).setDepth(2000);
+
+    // 그리드 설정 (상단/하단 UI 영역 제외)
     this.gridSize = 20;
     this.gameAreaY = this.uiHeight; // 게임 영역 시작 Y 좌표
     this.cols = Math.floor(width / this.gridSize);
-    this.rows = Math.floor((height - this.uiHeight) / this.gridSize);
+    this.rows = Math.floor((height - this.uiHeight - this.bottomUIHeight) / this.gridSize);
 
     // 뱀 초기화
     this.snake = [
@@ -2162,37 +2169,39 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
-  // 인게임 아이템 상태 UI 생성 (우측 하단, 트렌디한 스타일)
+  // 인게임 아이템 상태 UI 생성 (하단 UI 영역)
   createItemStatusUI() {
-    const { width, height } = this.cameras.main;
+    const { height } = this.cameras.main;
 
-    // UI 컨테이너 위치 (우측 하단)
-    const uiX = width - 70;
-    const uiY = height - 40;
+    // 하단 UI 영역 중앙 Y 좌표
+    const bottomUIY = height - this.bottomUIHeight / 2;
 
-    // 반투명 배경 (라운드 사각형 느낌)
-    this.itemStatusBg = this.add.rectangle(uiX, uiY, 120, 50, 0x000000, 0.7)
-      .setDepth(3000)
+    // 실드 아이템 위치 (왼쪽에서 첫번째 슬롯)
+    const shieldX = 80;
+
+    // 아이템 슬롯 배경
+    this.itemStatusBg = this.add.rectangle(shieldX, bottomUIY, 100, 44, 0x000000, 0.5)
+      .setDepth(2001)
       .setStrokeStyle(2, 0x333333)
-      .setAlpha(0); // 처음엔 숨김
+      .setAlpha(0);
 
     // 실드 아이콘
-    this.itemStatusIcon = this.add.text(uiX - 35, uiY, '🛡️', {
+    this.itemStatusIcon = this.add.text(shieldX - 30, bottomUIY, '🛡️', {
       fontSize: '20px'
-    }).setOrigin(0.5).setDepth(3001).setAlpha(0);
+    }).setOrigin(0.5).setDepth(2002).setAlpha(0);
 
     // 실드 개수
-    this.itemStatusCount = this.add.text(uiX + 5, uiY, '×0', {
+    this.itemStatusCount = this.add.text(shieldX + 10, bottomUIY, '×0', {
       fontSize: '18px',
       fill: '#ffffff',
       fontStyle: 'bold'
-    }).setOrigin(0, 0.5).setDepth(3001).setAlpha(0);
+    }).setOrigin(0, 0.5).setDepth(2002).setAlpha(0);
 
     // 상태 라벨
-    this.itemStatusLabel = this.add.text(uiX, uiY - 18, 'SHIELDS', {
+    this.itemStatusLabel = this.add.text(shieldX, bottomUIY - 18, 'SHIELDS', {
       fontSize: '8px',
       fill: '#888888'
-    }).setOrigin(0.5).setDepth(3001).setAlpha(0);
+    }).setOrigin(0.5).setDepth(2002).setAlpha(0);
   }
 
   // 아이템 상태 UI 업데이트
