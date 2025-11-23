@@ -189,6 +189,13 @@ export default class SnakeGame extends Phaser.Scene {
     this.selectedShopIndex = 0; // 선택된 아이템 인덱스
     this.shopItems = getShopItems(); // items.js에서 아이템 데이터 로드
     this.shopKeyboardEnabled = false; // 상점 키보드 활성화
+    this.isPurchaseConfirmOpen = false; // 구매 확인 창 상태
+    this.lastShopFocusKey = null; // 포커스 변화를 감지해 마이크로 인터랙션 적용
+    this.purchaseConfirmElements = []; // 구매 확인 알럿 구성 요소
+    this.purchaseConfirmButtons = null; // 구매 확인 알럿 버튼 캐싱
+    this.purchaseConfirmSelection = 'yes'; // 구매 확인 포커스 (yes/no)
+    this.pendingPurchaseIndex = null; // 확인 후 구매할 아이템 인덱스
+    this.lastPurchaseConfirmKey = null; // 구매 확인창 포커스 트래킹
 
     // 아이템 효과 상태
     this.comboShieldCount = 0; // 콤보 실드 개수 (여러 개 지원)
@@ -3033,6 +3040,12 @@ export default class SnakeGame extends Phaser.Scene {
 
   openShop() {
     this.shopOpen = true;
+    this.isPurchaseConfirmOpen = false;
+    this.purchaseConfirmSelection = 'yes';
+    this.pendingPurchaseIndex = null;
+    this.lastPurchaseConfirmKey = null;
+    this.purchaseConfirmButtons = null;
+    this.lastShopFocusKey = null;
     const { width, height } = this.cameras.main;
 
     // 매 상점 오픈 시 아이템 목록 새로 로드
@@ -3858,6 +3871,32 @@ export default class SnakeGame extends Phaser.Scene {
     }
   }
 
+  // 포커스가 이동할 때 짧은 펄스 애니메이션으로 인터랙션을 통일
+  spawnFocusPulse(x, y, color, depth = 6005, collection = 'shop') {
+    if (x === undefined || y === undefined) return;
+
+    const outer = this.add.circle(x, y, 44, color, 0.08).setDepth(depth).setAlpha(0);
+    const inner = this.add.circle(x, y, 24, color, 0.15).setDepth(depth + 1).setAlpha(0);
+
+    const targets = [outer, inner];
+    targets.forEach(t => {
+      this.tweens.add({
+        targets: t,
+        alpha: { from: 0.8, to: 0 },
+        scale: { from: 0.9, to: 1.5 },
+        duration: 260,
+        ease: 'Sine.easeOut',
+        onComplete: () => t.destroy()
+      });
+    });
+
+    if (collection === 'confirm') {
+      this.purchaseConfirmElements.push(...targets);
+    } else {
+      this.shopElements.push(...targets);
+    }
+  }
+
   updateShopSelection() {
     if (!this.shopCards) return;
 
@@ -3865,6 +3904,41 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.itemDescPopup) {
       this.itemDescPopup.destroy();
       this.itemDescPopup = null;
+    }
+
+    // 포커스가 바뀌면 통일된 펄스 연출을 추가
+    let focusInfo = null;
+    if (this.selectedShopIndex < this.shopItems.length) {
+      const focusedItem = this.shopItems[this.selectedShopIndex];
+      const focusedCard = this.shopCards[this.selectedShopIndex];
+      if (focusedItem && focusedCard) {
+        const canAfford = this.money >= focusedItem.price;
+        focusInfo = {
+          key: `card-${this.selectedShopIndex}`,
+          x: focusedCard.container.x,
+          y: focusedCard.container.y,
+          color: focusedItem.purchased ? 0x666666 : (canAfford ? 0x00ff88 : 0xff4444)
+        };
+      }
+    } else if (this.selectedShopIndex === this.shopItems.length && this.shopNextBtn) {
+      focusInfo = {
+        key: 'next',
+        x: this.shopNextBtn.bg.x,
+        y: this.shopNextBtn.bg.y,
+        color: 0x00ff88
+      };
+    } else if (this.selectedShopIndex === this.shopItems.length + 1 && this.shopLoanBtn) {
+      focusInfo = {
+        key: 'loan',
+        x: this.shopLoanBtn.bg.x,
+        y: this.shopLoanBtn.bg.y,
+        color: 0xff6b6b
+      };
+    }
+
+    if (focusInfo && focusInfo.key !== this.lastShopFocusKey) {
+      this.spawnFocusPulse(focusInfo.x, focusInfo.y, focusInfo.color, 6005, 'shop');
+      this.lastShopFocusKey = focusInfo.key;
     }
 
     // 선택된 아이템이 카드인 경우 설명 팝업 표시
@@ -4129,6 +4203,12 @@ export default class SnakeGame extends Phaser.Scene {
   handleShopInput(direction) {
     if (!this.shopOpen || !this.shopKeyboardEnabled || this.isSettling) return;
 
+    // 구매 확인창이 열려 있으면 그쪽으로 입력을 전달
+    if (this.isPurchaseConfirmOpen) {
+      this.handlePurchaseConfirmInput(direction);
+      return;
+    }
+
     const itemCount = this.shopItems.length;
 
     // 아이템 내에서 다음 선택 가능한 인덱스 찾기 (SOLD 건너뛰기, 아이템만 순환)
@@ -4193,7 +4273,7 @@ export default class SnakeGame extends Phaser.Scene {
     } else if (direction === 'ENTER') {
       // 카드 선택 중이면 구매 시도, Next Stage 버튼이면 상점 닫기, Loan 버튼이면 대출 UI
       if (this.selectedShopIndex < this.shopItems.length) {
-        this.purchaseItem(this.selectedShopIndex);
+        this.attemptPurchase(this.selectedShopIndex);
       } else if (this.selectedShopIndex === this.shopItems.length) {
         this.closeShop();
       } else if (this.selectedShopIndex === this.shopItems.length + 1) {
@@ -4202,76 +4282,344 @@ export default class SnakeGame extends Phaser.Scene {
     }
   }
 
-  purchaseItem(index) {
+  handleAlreadyPurchased(card) {
+    if (!card || !card.container) return;
+    this.tweens.add({
+      targets: card.container,
+      x: card.container.x + 10,
+      duration: 50,
+      yoyo: true,
+      repeat: 3
+    });
+  }
+
+  handleNotEnoughMoney(card) {
+    if (!card || !card.container) return;
+
+    this.shopMoneyText.setFill('#ff0000');
+    this.tweens.add({
+      targets: this.shopMoneyText,
+      x: this.shopMoneyText.x + 5,
+      duration: 50,
+      yoyo: true,
+      repeat: 5,
+      onComplete: () => {
+        this.shopMoneyText.setFill('#ffff00');
+      }
+    });
+
+    // 카드 흔들림
+    this.tweens.add({
+      targets: card.container,
+      angle: { from: -5, to: 5 },
+      duration: 50,
+      yoyo: true,
+      repeat: 2,
+      onComplete: () => card.container.setAngle(0)
+    });
+
+    // "NOT ENOUGH" 메시지 애니메이션
+    const cardX = card.container.x;
+    const cardY = card.container.y;
+    const notEnoughText = this.add.text(cardX, cardY, 'NOT ENOUGH', {
+      fontSize: '14px',
+      fill: '#ff0000',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(6010).setAlpha(0);
+
+    this.tweens.add({
+      targets: notEnoughText,
+      y: cardY - 50,
+      alpha: 1,
+      duration: 200,
+      ease: 'Power2',
+      onComplete: () => {
+        this.tweens.add({
+          targets: notEnoughText,
+          y: cardY - 80,
+          alpha: 0,
+          duration: 300,
+          delay: 200,
+          ease: 'Power2',
+          onComplete: () => notEnoughText.destroy()
+        });
+      }
+    });
+  }
+
+  attemptPurchase(index) {
+    if (this.isPurchaseConfirmOpen) return;
     const item = this.shopItems[index];
     const card = this.shopCards[index];
+    if (!item || !card) return;
 
     if (item.purchased) {
-      // 이미 구매함 - 카드 흔들림
-      this.tweens.add({
-        targets: card.container,
-        x: card.container.x + 10,
-        duration: 50,
-        yoyo: true,
-        repeat: 3
-      });
+      this.handleAlreadyPurchased(card);
       return;
     }
 
     if (this.money < item.price) {
-      // 돈 부족 - 빨간색 깜빡임 + 흔들림
-      this.shopMoneyText.setFill('#ff0000');
+      this.handleNotEnoughMoney(card);
+      return;
+    }
+
+    this.showPurchaseConfirm(item, index);
+  }
+
+  showPurchaseConfirm(item, index) {
+    if (this.isPurchaseConfirmOpen) return;
+    this.isPurchaseConfirmOpen = true;
+    this.pendingPurchaseIndex = index;
+    this.purchaseConfirmSelection = 'yes';
+    this.lastPurchaseConfirmKey = null;
+    this.purchaseConfirmElements = [];
+
+    const { width, height } = this.cameras.main;
+
+    // 반투명 오버레이
+    const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7)
+      .setOrigin(0, 0)
+      .setDepth(7200)
+      .setAlpha(0);
+    this.purchaseConfirmElements.push(overlay);
+    this.tweens.add({
+      targets: overlay,
+      alpha: 0.7,
+      duration: 180
+    });
+
+    // 패널
+    const panelBg = this.add.rectangle(width / 2, height / 2, 360, 200, 0x0d1117, 0.95)
+      .setDepth(7202)
+      .setScale(0.6)
+      .setAlpha(0);
+    const panelBorder = this.add.rectangle(width / 2, height / 2, 360, 200)
+      .setDepth(7203)
+      .setStrokeStyle(3, 0x4a9eff)
+      .setScale(0.6)
+      .setAlpha(0);
+    this.purchaseConfirmElements.push(panelBg, panelBorder);
+
+    this.tweens.add({
+      targets: [panelBg, panelBorder],
+      alpha: 1,
+      scaleX: { from: 0.6, to: 1 },
+      scaleY: { from: 0.6, to: 1 },
+      duration: 220,
+      ease: 'Back.easeOut'
+    });
+
+    // 타이틀 & 내용
+    const title = this.add.text(width / 2, height / 2 - 62, 'CONFIRM PURCHASE', {
+      fontSize: '18px',
+      fill: '#00ffff',
+      fontStyle: 'bold',
+      stroke: '#006666',
+      strokeThickness: 2
+    }).setOrigin(0.5).setDepth(7204).setAlpha(0);
+
+    const desc = this.add.text(width / 2, height / 2 - 30,
+      `Buy ${item.name} for $${item.price}?`, {
+      fontSize: '15px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      align: 'center',
+      stroke: '#000000',
+      strokeThickness: 2
+    }).setOrigin(0.5).setDepth(7204).setAlpha(0);
+
+    const sub = this.add.text(width / 2, height / 2,
+      'Press ENTER to confirm', {
+        fontSize: '12px',
+        fill: '#aaaaaa'
+      }).setOrigin(0.5).setDepth(7204).setAlpha(0);
+
+    this.purchaseConfirmElements.push(title, desc, sub);
+
+    this.tweens.add({
+      targets: [title, desc, sub],
+      alpha: 1,
+      y: '+=8',
+      duration: 200,
+      ease: 'Power2',
+      delay: 60
+    });
+
+    // 버튼
+    const btnY = height / 2 + 50;
+    const yesX = width / 2 - 70;
+    const noX = width / 2 + 70;
+
+    const yesGlow = this.add.rectangle(yesX, btnY, 110, 50, 0x00ff88, 0.18)
+      .setDepth(7201).setAlpha(0);
+    const yesBg = this.add.rectangle(yesX, btnY, 100, 44, 0x103522, 1)
+      .setDepth(7202).setStrokeStyle(2, 0x00ff88).setAlpha(0);
+    const yesHighlight = this.add.rectangle(yesX, btnY - 12, 80, 8, 0x00ff88, 0.2)
+      .setDepth(7202).setAlpha(0);
+    const yesText = this.add.text(yesX, btnY, 'YES', {
+      fontSize: '16px',
+      fill: '#00ff88',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(7204).setAlpha(0);
+
+    const noGlow = this.add.rectangle(noX, btnY, 110, 50, 0xff6b6b, 0.18)
+      .setDepth(7201).setAlpha(0);
+    const noBg = this.add.rectangle(noX, btnY, 100, 44, 0x401c1c, 1)
+      .setDepth(7202).setStrokeStyle(2, 0xff6b6b).setAlpha(0);
+    const noHighlight = this.add.rectangle(noX, btnY - 12, 80, 8, 0xff6b6b, 0.2)
+      .setDepth(7202).setAlpha(0);
+    const noText = this.add.text(noX, btnY, 'NO', {
+      fontSize: '16px',
+      fill: '#ff6b6b',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(7204).setAlpha(0);
+
+    this.purchaseConfirmButtons = {
+      yes: { bg: yesBg, text: yesText, glow: yesGlow, highlight: yesHighlight },
+      no: { bg: noBg, text: noText, glow: noGlow, highlight: noHighlight }
+    };
+
+    this.purchaseConfirmElements.push(
+      yesGlow, yesBg, yesHighlight, yesText,
+      noGlow, noBg, noHighlight, noText
+    );
+
+    // 버튼 등장 애니메이션
+    [yesGlow, yesBg, yesHighlight, yesText, noGlow, noBg, noHighlight, noText].forEach((el, i) => {
+      const originalY = el.y;
+      el.y = originalY + 25;
       this.tweens.add({
-        targets: this.shopMoneyText,
-        x: this.shopMoneyText.x + 5,
-        duration: 50,
-        yoyo: true,
-        repeat: 5,
-        onComplete: () => {
-          this.shopMoneyText.setFill('#ffff00');
-        }
+        targets: el,
+        y: originalY,
+        alpha: el === yesGlow || el === noGlow ? 0.3 : 1,
+        duration: 240,
+        delay: 70 + i * 20,
+        ease: 'Back.easeOut'
       });
+    });
 
-      // 카드도 흔들림
-      this.tweens.add({
-        targets: card.container,
-        angle: { from: -5, to: 5 },
-        duration: 50,
-        yoyo: true,
-        repeat: 2,
-        onComplete: () => card.container.setAngle(0)
-      });
+    // 기본 포커스 스타일 적용
+    this.updatePurchaseConfirmSelection();
+  }
 
-      // "NOT ENOUGH" 메시지 애니메이션
-      const cardX = card.container.x;
-      const cardY = card.container.y;
-      const notEnoughText = this.add.text(cardX, cardY, 'NOT ENOUGH', {
-        fontSize: '14px',
-        fill: '#ff0000',
-        fontStyle: 'bold',
-        stroke: '#000000',
-        strokeThickness: 3
-      }).setOrigin(0.5).setDepth(6010).setAlpha(0);
+  updatePurchaseConfirmSelection() {
+    if (!this.purchaseConfirmButtons) return;
 
-      this.tweens.add({
-        targets: notEnoughText,
-        y: cardY - 50,
-        alpha: 1,
-        duration: 200,
-        ease: 'Power2',
-        onComplete: () => {
-          this.tweens.add({
-            targets: notEnoughText,
-            y: cardY - 80,
-            alpha: 0,
-            duration: 300,
-            delay: 200,
-            ease: 'Power2',
-            onComplete: () => notEnoughText.destroy()
+    const yesSelected = this.purchaseConfirmSelection === 'yes';
+    const noSelected = this.purchaseConfirmSelection === 'no';
+
+    const styleButton = (btn, selected, baseColor) => {
+      if (!btn) return;
+      btn.bg.setStrokeStyle(selected ? 3 : 2, selected ? 0xffffff : baseColor);
+      btn.text.setFill(selected ? '#ffffff' : Phaser.Display.Color.IntegerToColor(baseColor).rgba);
+      btn.glow.setFillStyle(selected ? 0xffffff : baseColor, selected ? 0.4 : 0.2);
+
+      if (selected) {
+        if (!btn.floatTween) {
+          btn.floatTween = this.tweens.add({
+            targets: [btn.bg, btn.text, btn.highlight],
+            scaleX: 1.05,
+            scaleY: 1.05,
+            duration: 140,
+            ease: 'Back.easeOut'
           });
         }
-      });
+      } else if (btn.floatTween) {
+        btn.floatTween.stop();
+        btn.floatTween = null;
+        this.tweens.add({
+          targets: [btn.bg, btn.text, btn.highlight],
+          scaleX: 1,
+          scaleY: 1,
+          duration: 120
+        });
+      }
+    };
 
+    styleButton(this.purchaseConfirmButtons.yes, yesSelected, 0x00ff88);
+    styleButton(this.purchaseConfirmButtons.no, noSelected, 0xff6b6b);
+
+    // 포커스 펄스
+    const focusKey = `confirm-${this.purchaseConfirmSelection}`;
+    const focusTarget = yesSelected ? this.purchaseConfirmButtons.yes : this.purchaseConfirmButtons.no;
+    const focusColor = yesSelected ? 0x00ff88 : 0xff6b6b;
+    if (focusKey !== this.lastPurchaseConfirmKey && focusTarget) {
+      this.spawnFocusPulse(focusTarget.bg.x, focusTarget.bg.y, focusColor, 7205, 'confirm');
+      this.lastPurchaseConfirmKey = focusKey;
+    }
+  }
+
+  handlePurchaseConfirmInput(direction) {
+    if (!this.isPurchaseConfirmOpen) return;
+
+    if (direction === 'LEFT' || direction === 'UP') {
+      this.purchaseConfirmSelection = 'yes';
+      this.updatePurchaseConfirmSelection();
+    } else if (direction === 'RIGHT' || direction === 'DOWN') {
+      this.purchaseConfirmSelection = 'no';
+      this.updatePurchaseConfirmSelection();
+    } else if (direction === 'ENTER') {
+      if (this.purchaseConfirmSelection === 'yes') {
+        this.confirmPurchase();
+      } else {
+        this.closePurchaseConfirmOverlay();
+      }
+    }
+  }
+
+  confirmPurchase() {
+    const index = this.pendingPurchaseIndex;
+    this.closePurchaseConfirmOverlay();
+    if (index !== null && index !== undefined) {
+      this.purchaseItem(index);
+    }
+  }
+
+  closePurchaseConfirmOverlay(force = false) {
+    if (!this.purchaseConfirmElements.length && !this.isPurchaseConfirmOpen) return;
+
+    this.isPurchaseConfirmOpen = false;
+    this.pendingPurchaseIndex = null;
+    this.lastPurchaseConfirmKey = null;
+
+    const elements = [...this.purchaseConfirmElements];
+    this.purchaseConfirmElements = [];
+    this.purchaseConfirmButtons = null;
+
+    if (force) {
+      elements.forEach(el => {
+        if (el && el.destroy) el.destroy();
+      });
+      return;
+    }
+
+    elements.forEach(el => {
+      if (!el || el.active === false) return;
+      this.tweens.add({
+        targets: el,
+        alpha: 0,
+        duration: 160,
+        onComplete: () => {
+          if (el && el.destroy) el.destroy();
+        }
+      });
+    });
+  }
+
+  purchaseItem(index) {
+    const item = this.shopItems[index];
+    const card = this.shopCards[index];
+    if (!item || !card) return;
+
+    if (item.purchased) {
+      this.handleAlreadyPurchased(card);
+      return;
+    }
+
+    if (this.money < item.price) {
+      this.handleNotEnoughMoney(card);
       return;
     }
 
@@ -4511,6 +4859,8 @@ export default class SnakeGame extends Phaser.Scene {
   closeShop() {
     this.shopKeyboardEnabled = false;
     this.shopOpen = false;
+    this.lastShopFocusKey = null;
+    this.closePurchaseConfirmOverlay(true);
 
     // 네온 tween 정리
     if (this.shopNeonTween) {
