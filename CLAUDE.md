@@ -1,20 +1,20 @@
 # Snake Game - Phaser 3
 
-> Last updated: 2025-11-21
+> Last updated: 2025-11-23
 
 ## 프로젝트 개요
 Phaser 3 기반 Snake 게임. 스테이지 시스템, 콤보, 아이템, 데드존, 상점, 대출 시스템 등 다양한 기능이 포함된 클래식 게임.
 
 ## 파일 구조
 ```
-c:\dev\my-first-phaser-game\
+my-phaser-game/
 ├── src/
 │   ├── main.js              # Phaser 게임 설정 (pixelArt: true)
 │   ├── data/
 │   │   ├── banks.js         # 은행 데이터 (티어별 금리/한도)
 │   │   └── items.js         # 상점 아이템 데이터
 │   └── scenes/
-│       └── SnakeGame.js     # 메인 게임 로직 (~5900 lines)
+│       └── SnakeGame.js     # 메인 게임 로직 (~8100 lines)
 ├── public/
 │   └── assets/
 │       ├── bgm/             # 배경음악 (snake_bgm.mp3)
@@ -37,8 +37,19 @@ c:\dev\my-first-phaser-game\
 
 ### 스테이지 시스템
 - 각 스테이지: 25개 먹이 클리어
-- 스테이지 클리어 시: 뱀 점프 애니메이션 → "STAGE CLEAR" → 정산 → 상점(Stage 4+) → 카운트다운 → 다음 스테이지
+- 스테이지 클리어 시:
+  - Stage 1-2: 스코어 → 돈 전환 → 카운트다운 → 다음 스테이지
+  - Stage 3+: 뱀 점프 → "STAGE CLEAR" → 상점 → 정산 → 카운트다운 → 다음 스테이지
 - 최대 스테이지: 100
+
+### 기능 해금 시스템
+| 기능 | 해금 시점 | 설명 |
+|------|----------|------|
+| 십자가 후레쉬 | Stage 1-2 | 1~10번째 먹이 위치 강조 |
+| 데드존 | Stage 3+ | 10번째 먹이 시 생성 |
+| 상점 | Stage 3 클리어 후 | 아이템 구매 가능 |
+| 보스전 | Stage 5, 10, 15... | 매 5스테이지마다 |
+| 대출 기능 | Stage 6 클리어 후 | NEW 뱃지와 함께 등장 |
 
 ---
 
@@ -70,9 +81,10 @@ c:\dev\my-first-phaser-game\
 - 메시지: "Oops!", "Sorry!", "My bad!", "Whoops!", "Uh-oh!"
 - 페이드인/아웃 애니메이션
 
-### 3. 십자가 후레쉬 효과 (6~15번째 먹이)
-- 먹이 위치에서 십자가 모양 라인 깜빡임
+### 3. 십자가 후레쉬 효과 (Stage 1-2 전용)
+- 1~10번째 먹이 위치에서 십자가 모양 라인 깜빡임
 - 먹이 위치 강조 효과
+- Stage 3부터는 비활성화
 
 ### 4. 아이템 시스템 (10번째 먹이 이후)
 - 10번째 먹이 먹으면 아이템 시스템 활성화
@@ -115,27 +127,35 @@ c:\dev\my-first-phaser-game\
 - 색상: 초록색 (뱀 머리색과 동일)
 - 스테이지 클리어 직전 시각적 표시
 
-### 8. 상점 시스템 (Stage 4+ 클리어 후)
+### 8. 상점 시스템 (Stage 3 클리어 후)
 
 #### 오픈 조건
-- Stage 4 클리어 후부터 매 스테이지 클리어 시 상점 오픈
-- STAGE CLEAR → 정산 애니메이션 → 상점 → 3-2-1 카운트다운 → 다음 스테이지
+- Stage 3 클리어 후부터 매 스테이지 클리어 시 상점 오픈
+- STAGE CLEAR → 상점 → 정산 애니메이션 → 3-2-1 카운트다운 → 다음 스테이지
 
 #### UI 구성 (Balatro 스타일)
 - **배경**: 어두운 오버레이 (85% 투명도)
 - **타이틀**: 네온 "SHOP" 사인 (빨간 배경, 노란 글씨)
 - **왼쪽 사이드바**: STAGE, MONEY, DEBTS (대출 정보)
 - **메인 영역**: 카드 형태 아이템 5개
-- **하단**: Next Stage 버튼 (초록), Loan 버튼 (빨강)
+- **하단**: Next Stage 버튼 (초록), Loan 버튼 (빨강, Stage 6+)
+- **뱀 프리뷰**: 현재 장착된 수트 표시 (콤보 실드 노란 머리, 스피드 부스트 궤도 등)
 
 #### 아이템 목록
 | 아이템 | 설명 | 가격 |
 |--------|------|------|
 | Combo Shield | 콤보 끊김 1회 보호 + 수트(머리 노란색) | $10 |
-| Speed Boost | 이동 속도 10% 감소 | $150 |
+| Speed Boost | 궤도 전자 수트 + 속도 효과 | $150 |
 | Double Score | 다음 스테이지 점수 2배 | $200 |
 | Extra Life | 목숨 +1 (1회 부활) | $300 |
 | Magnet | 먹이를 끌어당김 | $250 |
+
+#### Speed Boost 수트
+- 구매 시: 에너지 집중 → 폭발 → 전자 궤도 등장 애니메이션
+- 인게임: 뱀 머리 주위로 2개의 전자가 궤도를 돌며 회전
+- 60fps 독립 타이머로 부드러운 애니메이션
+- 트레일 효과 + 펄스 크기 변화
+- 상점 프리뷰와 인게임 비율 맞춤 (0.6 스케일)
 
 #### 조작법
 - **←→**: 카드 선택 (아이템 영역에서 순환)
@@ -145,7 +165,7 @@ c:\dev\my-first-phaser-game\
 
 #### 네비게이션
 - 아이템 영역: 좌우 순환 (SOLD 건너뜀)
-- 버튼 영역: 좌우로 Next Stage ↔ Loan 전환
+- 버튼 영역: 좌우로 Next Stage ↔ Loan 전환 (Loan은 Stage 6+)
 - 구매 후: 오른쪽 다음 아이템으로 자동 이동, 마지막이면 Next Stage로
 
 #### 애니메이션 요소
@@ -171,7 +191,14 @@ c:\dev\my-first-phaser-game\
 3. 최종 금액이 사이드바로 날아감
 4. 빚 완납 시 "DEBT FREE" 메시지
 
-### 10. 대출 시스템
+#### Stage 1-2 정산
+- 상점이 없으므로 간단한 "+$X" 애니메이션으로 스코어 → 돈 전환
+
+### 10. 대출 시스템 (Stage 6 클리어 후)
+
+#### 해금
+- Stage 6 클리어 시 LOAN 버튼에 "NEW!" 뱃지 + 펄스 애니메이션
+- Stage 7부터는 일반 표시
 
 #### 티어 구조 (banks.js)
 | 티어 | 은행 유형 | 금리 | 한도 |
@@ -185,6 +212,7 @@ c:\dev\my-first-phaser-game\
 2. 현재 티어에서 랜덤 은행 선택
 3. 금리/한도 표시 → 금액 입력 (슬라이더)
 4. 대출 승인 → 돈 추가
+5. 엔터 연타 방지 (isLoanProcessing 플래그)
 
 #### 상환 방식 (5스테이지 균등분할)
 - 원금 + 이자를 5회로 나눠 상환
@@ -199,6 +227,66 @@ c:\dev\my-first-phaser-game\
 #### 대출 불가 상황
 - 모든 티어 대출 완료 시: "No banks available" 메시지
 - 위트있는 메시지 + OK/ESC로 닫기
+
+### 11. 보스 배틀 시스템 (매 5스테이지)
+
+#### 보스 스테이지 조건
+- 5, 10, 15, 20... 스테이지마다 보스전
+
+#### 보스전 플로우
+1. **인트로**
+   - 일반 스테이지처럼 3,2,1 카운트다운
+   - 뱀 5칸 이동 후 대사: "Where did the frog go?"
+   - 뱀이 두리번거리는 애니메이션
+
+2. **보스 등장**
+   - 보스 위치: 뱀과 같은 높이(y=15), 우측 벽에서 9칸 떨어진 곳
+   - 보스 대사: "Hey, you trash snake!"
+   - 보스 대사: "We are enemies... Take my poison!"
+   - 대사 후 바로 게임 재개 (카운트다운 없음)
+
+3. **독 먹이 (Trap Phase)**
+   - 보스가 보라색 독 먹이로 변신
+   - 먹으면 즉시 사라짐 (애니메이션 없음)
+   - 보스 대사: "Good luck!"
+   - 뱀 색상이 보라색으로 변경 (깜빡임 후)
+   - 보스 대사: "Gotcha!"
+
+4. **독 성장**
+   - 뱀이 3칸에서 40칸까지 성장
+   - 속도가 40ms까지 점점 빨라짐
+   - 성장 완료 후 "BATTLE START!" 메시지
+
+5. **배틀 (Battle Phase)**
+   - 4개 코너에 순서대로 보스 등장
+   - 코너 위치: (0, 0), (cols-1, 0), (0, rows-1), (cols-1, rows-1) - 정확히 벽에 붙은 모서리
+   - 데드존과 겹치면 자동으로 옆 칸으로 이동
+   - HIT 1/4, 2/4, 3/4 표시
+   - 3번 히트 후 마지막 4번째는 슬로우모션 연출
+
+6. **파이널 히트**
+   - 카메라가 뱀 머리 위치로 이동
+   - 울트라 슬로우모션 (timeScale: 0.3)
+   - 줌 인 (2배)
+   - 보스 비명: "AAARGH! RIBBIT!"
+   - 보스 폭발 파티클
+   - 줌 아웃 후 승리
+
+7. **보스 클리어**
+   - "BOSS CLEAR!" 텍스트 + 화면 플래시
+   - "+1000 BONUS!" 점수 추가
+   - 보스전 점수는 정확히 1000점만
+   - 상점 오픈 (기존 스테이지 클리어 플로우와 동일)
+
+#### 보스전 특수 규칙
+- **콤보 실드 보호**: 보스전 중 실드 소모 안함
+- **콤보 저장**: 보스전 시작 시 콤보 저장, 클리어 후 복원
+- **방향 카운터 비활성**: 3,2,1,x 표시 안함
+- **말풍선/십자가 효과 비활성**: 보스전 중 비활성
+
+#### 보스 UI 요소
+- 보스 디자인: 보라색 몸체 + 4개 뿔 (마젠타색)
+- 펄스 애니메이션으로 위협적인 느낌
 
 ---
 
@@ -215,12 +303,20 @@ this.gameOver = false           // 게임 오버 상태
 
 ### 점수/스테이지
 ```javascript
-this.score = 0                  // 현재 점수
+this.score = 0                  // 현재 스테이지 점수 (매 스테이지 리셋)
+this.money = 0                  // 보유 돈 (누적)
 this.foodCount = 0              // 먹은 먹이 개수
 this.currentStage = 1           // 현재 스테이지
 this.combo = 0                  // 현재 콤보
 this.maxCombo = 0               // 최대 콤보
 this.comboShieldCount = 0       // 콤보 실드 개수
+```
+
+### 아이템 효과 상태
+```javascript
+this.hasSpeedBoost = false              // 스피드 부스트 수트 활성화
+this.speedBoostOrbitals = []            // 궤도 파티클들 (인게임용)
+this.speedBoostOrbitalTimer = null      // 궤도 업데이트 타이머 (60fps)
 ```
 
 ### 시스템 플래그
@@ -233,7 +329,6 @@ this.nextTeleportStep = 0              // 다음 텔레포트까지 스텝
 
 ### 상점 시스템
 ```javascript
-this.money = 0                         // 보유 돈
 this.shopOpen = false                  // 상점 열림 상태
 this.shopElements = []                 // 상점 UI 요소들
 this.shopCards = []                    // 카드 UI 요소들
@@ -241,6 +336,8 @@ this.selectedShopIndex = 0             // 선택된 인덱스 (아이템 + 버�
 this.shopItems = [...]                 // 아이템 배열
 this.shopKeyboardEnabled = false       // 상점 키보드 활성화
 this.shopDebtElements = []             // 빚 정보 UI 요소들
+this.shopLoanBtn = null                // 대출 버튼 (Stage 6+ 에서만 존재)
+this.shopPreviewInfo = {}              // 프리뷰 좌표 정보 (수트 적용용)
 ```
 
 ### 대출 시스템
@@ -262,7 +359,28 @@ this.loans = []                        // 대출 배열
 this.loanTier = 0                      // 현재 대출 티어 (0~3)
 this.totalDebt = 0                     // 총 부채
 this.loanElements = []                 // 대출 UI 요소들
-this.loanOpen = false                  // 대출 UI 열림 상태
+this.loanUIOpen = false                // 대출 UI 열림 상태
+this.isLoanProcessing = false          // 대출 처리 중 (엔터 연타 방지)
+```
+
+### 보스전 시스템
+```javascript
+this.isBossStage = false               // 보스 스테이지 여부
+this.bossMode = false                  // 보스 모드 활성화
+this.bossPhase = 'none'                // 'intro', 'trap', 'poisoned', 'battle', 'victory'
+this.snakePoisoned = false             // 뱀 독 상태 (보라색)
+this.poisonGrowthActive = false        // 독 성장 중
+this.poisonGrowthTarget = 40           // 최대 성장 길이
+this.poisonSpeedTarget = 40            // 최종 속도 (ms)
+this.bossHitCount = 0                  // 보스 히트 횟수 (0~4)
+this.bossElement = null                // 보스 그래픽 요소
+this.bossPosition = null               // 보스 위치 {x, y}
+this.bossCorners = []                  // 배틀 코너 위치들
+this.bossInputBlocked = false          // 대사 중 입력 차단
+this.savedCombo = 0                    // 저장된 콤보
+this.savedComboShieldCount = 0         // 저장된 실드 개수
+this.bossStageInterval = 5             // 보스 스테이지 간격
+this.testBossStage = 5                 // 보스 스테이지 (5, 10, 15...)
 ```
 
 ---
@@ -286,6 +404,7 @@ this.loanOpen = false                  // 대출 UI 열림 상태
 ### 스테이지
 - `clearStage()` - 스테이지 클리어 처리
 - `showStageClearText()` - 스테이지 클리어 텍스트 표시
+- `startStageClearCountdown()` - 상점 없을 때 카운트다운 (스코어→돈 전환 포함)
 - `showNextStage()` - 다음 스테이지 표시
 - `resetStage()` - 스테이지 리셋
 
@@ -297,6 +416,12 @@ this.loanOpen = false                  // 대출 UI 열림 상태
 - `purchaseItem()` - 아이템 구매
 - `shopCountdownAndStart()` - 상점 닫은 후 카운트다운
 - `updateShopDebtInfo()` - 사이드바 빚 정보 업데이트
+- `applyShopPreviewSuits()` - 상점 프리뷰에 장착 수트 적용
+
+### 스피드 부스트 궤도
+- `initSpeedBoostOrbitals()` - 인게임 궤도 파티클 초기화
+- `updateSpeedBoostOrbitals()` - 60fps 궤도 위치 업데이트
+- `cleanupSpeedBoostOrbitals()` - 궤도 파티클 정리
 
 ### 정산
 - `animateScoreToMoney()` - 스코어 → 돈 전환 + 상환 애니메이션
@@ -317,16 +442,35 @@ this.loanOpen = false                  // 대출 UI 열림 상태
 - `createFoodParticles()` - 파티클 효과
 - `showComboEffect()` - 콤보 효과
 
+### 보스전
+- `showSnakeDialogue()` - 뱀 대사 표시
+- `snakeLookAround()` - 뱀 두리번거리기 애니메이션
+- `showBossAppear()` - 보스 등장 시퀀스
+- `showBossDialogue()` - 보스 대사 (타이핑 효과)
+- `drawBoss()` - 보스 그리기 (보라색 + 뿔)
+- `handleBossTrap()` - 독 먹이 먹었을 때 처리
+- `applyPoison()` - 독 효과 적용 (색상 변경)
+- `startPoisonGrowth()` - 독 성장 시작
+- `handlePoisonGrowth()` - 성장 처리 (속도/길이)
+- `startBossBattle()` - 배틀 페이즈 시작
+- `spawnBossAtCorner()` - 코너에 보스 생성
+- `handleBossHit()` - 보스 히트 처리
+- `handleBossFinalHit()` - 마지막 히트 (슬로우모션)
+- `showBossVictory()` - 보스 클리어 처리
+
 ---
 
 ## 스테이지별 특징
 
-| Stage | 속도 | 데드존 | 텔레포트 | 특이사항 |
-|-------|------|--------|----------|----------|
-| 1 | 130ms | 없음 | 1회 | 기본 |
-| 2 | 더 빠름 | 없음 | 2회 | 텔레포트 강화 |
-| 3 | 더 빠름 | 1개 | 2회 | 10번째 먹이 시 데드존 |
-| 4+ | 더 빠름 | +2개 | 2회 | 스테이지 시작 시 데드존 추가, 클리어 후 상점 |
+| Stage | 속도 | 데드존 | 텔레포트 | 상점 | 대출 | 특이사항 |
+|-------|------|--------|----------|------|------|----------|
+| 1 | 130ms | 없음 | 1회 | X | X | 십자가 후레쉬 |
+| 2 | 120ms | 없음 | 2회 | X | X | 십자가 후레쉬, 텔레포트 강화 |
+| 3 | 110ms | 1개 | 2회 | O | X | 10번째 먹이 시 데드존 |
+| 4 | 100ms | +2개 | 2회 | O | X | 스테이지 시작 시 데드존 추가 |
+| 5 | 90ms | +2개 | 2회 | O | X | **보스 스테이지** (1000점 보너스) |
+| 6+ | 더 빠름 | +2개 | 2회 | O | O | 대출 기능 해금 (Stage 6 = NEW 뱃지) |
+| 10,15,20... | - | - | - | O | O | **보스 스테이지** |
 
 ---
 
@@ -356,6 +500,9 @@ const earnedScore = Math.floor(10 * comboMultiplier);
 - 이동: `assets/sfx/moving.mp3`
 - 먹기: `assets/sfx/eating.mp3`
 
-### 테스트용 설정 (현재 활성화)
-- `foodCount >= 1` (원래 25) - 먹이 1개로 스테이지 클리어
-- `currentStage >= 1` (원래 4) - Stage 1부터 상점 오픈
+### 현재 설정 (정상 플레이용)
+- `foodCount >= 25` - 먹이 25개로 스테이지 클리어
+- `currentStage >= 3` - Stage 3 클리어 후 상점 오픈
+- `currentStage >= 6` - Stage 6 클리어 후 대출 기능
+- `bossHitCount >= 4` - 보스 먹이 4개로 클리어
+- `testBossStage = 5` - Stage 5부터 보스전

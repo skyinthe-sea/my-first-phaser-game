@@ -200,6 +200,10 @@ export default class SnakeGame extends Phaser.Scene {
     // 아이템 효과 상태
     this.comboShieldCount = 0; // 콤보 실드 개수 (여러 개 지원)
     this.hasHadShield = false; // 실드를 가졌던 적이 있는지 (NO SHIELD 표시용)
+    this.hasSpeedBoost = false; // 스피드 부스트 수트 활성화
+    this.speedBoostOrbitals = []; // 궤도 파티클들 (인게임용)
+    this.speedBoostAngle = 0; // 궤도 회전 각도
+    this.speedBoostOrbitalTimer = null; // 궤도 업데이트 타이머
 
     // 인게임 아이템 상태 UI (우측 하단)
     this.createItemStatusUI();
@@ -209,6 +213,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.loanTier = 0; // 현재 대출 티어 (0: 미대출, 1: 1차, 2: 2차, 3: 3차)
     this.totalDebt = 0; // 총 부채
     this.loanUIOpen = false; // 대출 UI 열림 상태
+    this.isLoanProcessing = false; // 대출 처리 중 (엔터 연타 방지)
     this.loanElements = []; // 대출 UI 요소들
     this.selectedBankIndex = 0; // 선택된 은행 인덱스
     this.availableBanks = []; // 현재 이용 가능한 은행 목록
@@ -234,7 +239,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.bossCorners = []; // 보스가 나타날 코너 위치들
     this.originalSnakeColor = 0x00ff00; // 원래 뱀 색상
     this.bossStageInterval = 5; // 보스 등장 스테이지 간격 (테스트: 2, 실제: 5)
-    this.testBossStage = 2; // 테스트용 보스 스테이지
+    this.testBossStage = 5; // 테스트용 보스 스테이지
 
     // 키 입력 (입력 큐 시스템)
     this.input.keyboard.on('keydown-LEFT', () => {
@@ -726,8 +731,8 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
-    // stage 4 이상이면 후레쉬 효과 없음
-    if (this.currentStage >= 4) {
+    // stage 3 이상이면 후레쉬 효과 없음
+    if (this.currentStage >= 3) {
       return;
     }
 
@@ -1159,7 +1164,7 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 스테이지 클리어 체크 (25개 먹으면 클리어) - 보스전 중에는 비활성화
-      if (!this.bossMode && this.foodCount >= 1) { // TODO: 테스트 후 25로 변경
+      if (!this.bossMode && this.foodCount >= 25) {
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -2763,6 +2768,8 @@ export default class SnakeGame extends Phaser.Scene {
       );
     });
 
+    // 스피드 부스트 궤도는 별도 타이머에서 업데이트 (60fps 부드러운 애니메이션)
+
     // 먹이 그리기 (보스 요소가 있으면 건너뛰기)
     if (!this.bossElement) {
       const isFinalFood = this.foodCount === 24; // 다음 먹이가 25번째
@@ -3012,7 +3019,7 @@ export default class SnakeGame extends Phaser.Scene {
       ease: 'Back.easeOut',
       onComplete: () => {
         // 상점 조건이면 바로 상점 열기 (카운트다운은 완료 후)
-        if (this.currentStage >= 1) { // TODO: 테스트 후 4로 변경
+        if (this.currentStage >= 3) { // Stage 3 클리어 후 상점 오픈
           this.time.delayedCall(500, () => {
             clearText.destroy();
             this.openShop();
@@ -3027,6 +3034,26 @@ export default class SnakeGame extends Phaser.Scene {
 
   startStageClearCountdown(clearText) {
     const { width, height } = this.cameras.main;
+
+    // 상점이 없을 때도 스코어를 돈으로 전환
+    if (this.score > 0) {
+      this.money += this.score;
+
+      // 간단한 스코어 전환 표시
+      const scoreText = this.add.text(width / 2, height / 2 + 30, `+$${this.score}`, {
+        fontSize: '24px',
+        fill: '#00ff00',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(5001);
+
+      this.tweens.add({
+        targets: scoreText,
+        y: height / 2,
+        alpha: 0,
+        duration: 800,
+        onComplete: () => scoreText.destroy()
+      });
+    }
 
     // 카운트다운 텍스트
     const countdownText = this.add.text(width / 2, height / 2 + 50, '', {
@@ -3112,6 +3139,11 @@ export default class SnakeGame extends Phaser.Scene {
       this.resetStage();
     }
 
+    // 스피드 부스트 궤도 초기화 (60fps 독립 애니메이션)
+    if (this.hasSpeedBoost) {
+      this.initSpeedBoostOrbitals();
+    }
+
     // STAGE X 텍스트 (상단에 투명하게 표시)
     const stageText = this.add.text(width / 2, height / 2 - 100, `STAGE ${this.currentStage}`, {
       fontSize: '96px',
@@ -3151,6 +3183,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   resetStage() {
+    // 스피드 부스트 궤도 정리 (새로 생성하기 전에)
+    this.cleanupSpeedBoostOrbitals();
+
     // 뱀 초기화
     this.snake = [
       { x: 10, y: 15 },
@@ -3207,6 +3242,9 @@ export default class SnakeGame extends Phaser.Scene {
   openShop() {
     // 이미 상점이 열려있으면 중복 호출 방지
     if (this.shopOpen) return;
+
+    // 인게임 스피드 부스트 궤도 정리 (상점에서는 프리뷰용으로 별도 표시)
+    this.cleanupSpeedBoostOrbitals();
 
     this.shopOpen = true;
     this.isPurchaseConfirmOpen = false;
@@ -3387,10 +3425,13 @@ export default class SnakeGame extends Phaser.Scene {
           ease: 'Power2'
         });
       });
-      // 빚 정보 표시 (대출이 있을 때만)
-      this.time.delayedCall(sidebarContent.length * 50 + 100, () => {
-        this.updateShopDebtInfo();
-      });
+      // 빚 정보 표시 - 정산 완료 후에 표시됨 (animateScoreToMoney에서 호출)
+      // 스코어가 있으면 정산이 진행되므로 여기서는 표시하지 않음
+      if (this.score === 0) {
+        this.time.delayedCall(sidebarContent.length * 50 + 100, () => {
+          this.updateShopDebtInfo();
+        });
+      }
     });
 
     // ===== 아이템 카드들 =====
@@ -3571,6 +3612,13 @@ export default class SnakeGame extends Phaser.Scene {
       this.shopElements.push(segment);
     }
 
+    // 프리뷰 좌표 저장 (수트 적용용)
+    this.shopPreviewInfo = {
+      headX: previewX + snakeStartCol * previewGridSize + previewGridSize / 2,
+      headY: previewY - previewHeight / 2 + snakeRow * previewGridSize + previewGridSize / 2,
+      gridSize: previewGridSize
+    };
+
     // 프리뷰 등장 애니메이션
     this.time.delayedCall(1000, () => {
       // 배경과 그리드
@@ -3598,6 +3646,11 @@ export default class SnakeGame extends Phaser.Scene {
           delay: 100 + i * 50,
           ease: 'Back.easeOut'
         });
+      });
+
+      // 장착된 수트 적용 (스피드 부스트 궤도 등)
+      this.time.delayedCall(400, () => {
+        this.applyShopPreviewSuits();
       });
     });
 
@@ -3637,36 +3690,83 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopNextBtn = { bg: nextBtnBg, text: nextBtnText, glow: nextBtnGlow, highlight: nextBtnHighlight };
     this.shopElements.push(nextBtnGlow, nextBtnBg, nextBtnHighlight, nextBtnText);
 
-    // Loan 버튼 (모던 스타일)
-    const loanBtnGlow = this.add.rectangle(loanBtnX, buttonY, loanBtnWidth + 8, 53, 0xff6b6b, 0.3)
-      .setDepth(6000)
-      .setAlpha(0);
+    // Loan 버튼 (Stage 6 클리어 후 오픈)
+    const showLoanBtn = this.currentStage >= 6;
+    const isFirstLoan = this.currentStage === 6; // 처음 대출 기능 해금
 
-    const loanBtnBg = this.add.rectangle(loanBtnX, buttonY, loanBtnWidth, 45, 0x4a1a1a, 1)
-      .setDepth(6001)
-      .setStrokeStyle(2, 0xff6b6b)
-      .setAlpha(0);
+    if (showLoanBtn) {
+      const loanBtnGlow = this.add.rectangle(loanBtnX, buttonY, loanBtnWidth + 8, 53, 0xff6b6b, 0.3)
+        .setDepth(6000)
+        .setAlpha(0);
 
-    const loanBtnHighlight = this.add.rectangle(loanBtnX, buttonY - 12, loanBtnWidth - 10, 8, 0xff6b6b, 0.2)
-      .setDepth(6001)
-      .setAlpha(0);
+      const loanBtnBg = this.add.rectangle(loanBtnX, buttonY, loanBtnWidth, 45, 0x4a1a1a, 1)
+        .setDepth(6001)
+        .setStrokeStyle(2, 0xff6b6b)
+        .setAlpha(0);
 
-    const loanBtnText = this.add.text(loanBtnX, buttonY, 'LOAN', {
-      fontSize: '16px',
-      fill: '#ff6b6b',
-      fontStyle: 'bold',
-      align: 'center'
-    }).setOrigin(0.5).setDepth(6002).setAlpha(0);
+      const loanBtnHighlight = this.add.rectangle(loanBtnX, buttonY - 12, loanBtnWidth - 10, 8, 0xff6b6b, 0.2)
+        .setDepth(6001)
+        .setAlpha(0);
 
-    this.shopLoanBtn = { bg: loanBtnBg, text: loanBtnText, glow: loanBtnGlow, highlight: loanBtnHighlight };
-    this.shopElements.push(loanBtnGlow, loanBtnBg, loanBtnHighlight, loanBtnText);
+      const loanBtnText = this.add.text(loanBtnX, buttonY, 'LOAN', {
+        fontSize: '16px',
+        fill: '#ff6b6b',
+        fontStyle: 'bold',
+        align: 'center'
+      }).setOrigin(0.5).setDepth(6002).setAlpha(0);
+
+      this.shopLoanBtn = { bg: loanBtnBg, text: loanBtnText, glow: loanBtnGlow, highlight: loanBtnHighlight };
+      this.shopElements.push(loanBtnGlow, loanBtnBg, loanBtnHighlight, loanBtnText);
+
+      // 처음 대출 기능 해금 시 NEW 뱃지 추가
+      if (isFirstLoan) {
+        const newBadge = this.add.text(loanBtnX + 25, buttonY - 25, 'NEW!', {
+          fontSize: '10px',
+          fill: '#ffff00',
+          fontStyle: 'bold',
+          stroke: '#ff6600',
+          strokeThickness: 2
+        }).setOrigin(0.5).setDepth(6003).setAlpha(0);
+        this.shopElements.push(newBadge);
+
+        // NEW 뱃지 펄스 애니메이션
+        this.time.delayedCall(1400, () => {
+          this.tweens.add({
+            targets: newBadge,
+            alpha: 1,
+            scale: { from: 0, to: 1.2 },
+            duration: 300,
+            ease: 'Back.easeOut',
+            onComplete: () => {
+              this.tweens.add({
+                targets: newBadge,
+                scale: { from: 1.2, to: 1 },
+                duration: 200,
+                yoyo: true,
+                repeat: -1,
+                ease: 'Sine.easeInOut'
+              });
+            }
+          });
+        });
+      }
+    } else {
+      this.shopLoanBtn = null;
+    }
 
     // 버튼 등장 애니메이션 (슬라이드 업 + 페이드)
     this.time.delayedCall(1200, () => {
       const allBtnElements = [
-        nextBtnGlow, nextBtnBg, nextBtnHighlight, nextBtnText,
-        loanBtnGlow, loanBtnBg, loanBtnHighlight, loanBtnText
+        nextBtnGlow, nextBtnBg, nextBtnHighlight, nextBtnText
       ];
+
+      // Loan 버튼이 있으면 추가
+      if (this.shopLoanBtn) {
+        allBtnElements.push(
+          this.shopLoanBtn.glow, this.shopLoanBtn.bg,
+          this.shopLoanBtn.highlight, this.shopLoanBtn.text
+        );
+      }
 
       allBtnElements.forEach((el, i) => {
         const originalY = el.y;
@@ -3674,7 +3774,7 @@ export default class SnakeGame extends Phaser.Scene {
         this.tweens.add({
           targets: el,
           y: originalY,
-          alpha: el === nextBtnGlow || el === loanBtnGlow ? 0.3 : 1,
+          alpha: (el === nextBtnGlow || (this.shopLoanBtn && el === this.shopLoanBtn.glow)) ? 0.3 : 1,
           duration: 400,
           delay: Math.floor(i / 4) * 150,
           ease: 'Back.easeOut'
@@ -4886,80 +4986,205 @@ export default class SnakeGame extends Phaser.Scene {
         });
       }
     } else if (item.id === 'speed_boost' && this.shopSnakePreview && this.shopSnakePreview.length > 0) {
-      // Speed Boost - 속도 증가 효과 (수트 기능은 Combo Shield로 이전됨)
+      // Speed Boost - 궤도 전자 수트 기능
+      this.hasSpeedBoost = true;
 
-      // 화려한 장착 애니메이션
       const head = this.shopSnakePreview[0];
       const headX = head.x;
       const headY = head.y;
 
-      // 1. 머리에서 파티클 폭발 (청록색 - 속도 느낌)
-      for (let i = 0; i < 12; i++) {
-        const angle = (i / 12) * Math.PI * 2;
-        const particle = this.add.circle(headX, headY, 3, 0x00ffff)
-          .setDepth(6010).setAlpha(1);
+      // 1. 화면 전체 플래시 (청록색 → 화이트)
+      const { width, height } = this.cameras.main;
+      const flash = this.add.rectangle(width / 2, height / 2, width, height, 0x00ffff, 0.6)
+        .setDepth(6020);
+      this.tweens.add({
+        targets: flash,
+        alpha: 0,
+        duration: 200,
+        onComplete: () => flash.destroy()
+      });
+
+      // 2. 에너지 집중 효과 - 바깥에서 머리로 수렴
+      for (let i = 0; i < 20; i++) {
+        const angle = (i / 20) * Math.PI * 2;
+        const startDist = 80 + Math.random() * 40;
+        const particle = this.add.circle(
+          headX + Math.cos(angle) * startDist,
+          headY + Math.sin(angle) * startDist,
+          4, 0x00ffff
+        ).setDepth(6015).setAlpha(0.8);
+
         this.tweens.add({
           targets: particle,
-          x: headX + Math.cos(angle) * 40,
-          y: headY + Math.sin(angle) * 40,
+          x: headX,
+          y: headY,
+          scale: 0.3,
           alpha: 0,
-          scale: 0,
-          duration: 400,
-          ease: 'Power2',
+          duration: 400 + Math.random() * 200,
+          ease: 'Power2.easeIn',
           onComplete: () => particle.destroy()
         });
       }
 
-      // 2. 전체 뱀 웨이브 효과 (머리→꼬리)
-      this.shopSnakePreview.forEach((segment, i) => {
-        // 순차적 스케일 업
+      // 3. 중앙 폭발 (에너지 수렴 완료 후)
+      this.time.delayedCall(500, () => {
+        // 큰 청록색 폭발
+        const explosion = this.add.circle(headX, headY, 5, 0x00ffff, 1)
+          .setDepth(6016);
         this.tweens.add({
-          targets: segment,
-          scaleX: 1.4,
-          scaleY: 1.4,
-          duration: 100,
-          delay: i * 50,
-          yoyo: true,
-          ease: 'Back.easeOut'
-        });
-
-        // 순차적 색상 플래시 (청록색 웨이브)
-        const originalColor = i === 0 ? 0x00ff00 : 0x00cc00;
-        this.time.delayedCall(i * 50, () => {
-          segment.setFillStyle(0x00ffff);
-          this.time.delayedCall(100, () => {
-            segment.setFillStyle(originalColor);
-          });
-        });
-      });
-
-      // 3. 머리 글로우 효과
-      this.time.delayedCall(300, () => {
-        const glow = this.add.circle(headX, headY, 15, 0x00ffff, 0.5)
-          .setDepth(6009);
-        this.tweens.add({
-          targets: glow,
+          targets: explosion,
+          scale: 8,
           alpha: 0,
-          scale: 2,
-          duration: 500,
-          onComplete: () => glow.destroy()
+          duration: 400,
+          ease: 'Power2',
+          onComplete: () => explosion.destroy()
+        });
+
+        // 화면 흔들림
+        this.cameras.main.shake(200, 0.015);
+
+        // 웨이브 링 3개
+        for (let r = 0; r < 3; r++) {
+          const ring = this.add.circle(headX, headY, 10, 0x000000, 0)
+            .setStrokeStyle(3, 0x00ffff, 1)
+            .setDepth(6015);
+          this.tweens.add({
+            targets: ring,
+            scale: 4 + r,
+            alpha: 0,
+            duration: 500,
+            delay: r * 100,
+            ease: 'Power2',
+            onComplete: () => ring.destroy()
+          });
+        }
+      });
+
+      // 4. 뱀 전체 순차 전기 웨이브
+      this.shopSnakePreview.forEach((segment, i) => {
+        this.time.delayedCall(600 + i * 60, () => {
+          // 스케일 펑!
+          this.tweens.add({
+            targets: segment,
+            scaleX: 1.6,
+            scaleY: 1.6,
+            duration: 80,
+            yoyo: true,
+            ease: 'Back.easeOut'
+          });
+
+          // 색상 플래시
+          const originalColor = i === 0 ? (this.comboShieldCount > 0 ? 0xffff00 : 0x00ff00) : 0x00cc00;
+          segment.setFillStyle(0xffffff);
+          this.time.delayedCall(80, () => {
+            segment.setFillStyle(0x00ffff);
+            this.time.delayedCall(80, () => {
+              segment.setFillStyle(originalColor);
+            });
+          });
+
+          // 개별 파티클
+          for (let p = 0; p < 4; p++) {
+            const pAngle = (p / 4) * Math.PI * 2;
+            const spark = this.add.circle(segment.x, segment.y, 2, 0x00ffff)
+              .setDepth(6014);
+            this.tweens.add({
+              targets: spark,
+              x: segment.x + Math.cos(pAngle) * 15,
+              y: segment.y + Math.sin(pAngle) * 15,
+              alpha: 0,
+              duration: 200,
+              onComplete: () => spark.destroy()
+            });
+          }
         });
       });
 
-      // 4. 에너지 라인 효과 (머리에서 꼬리로)
-      const tail = this.shopSnakePreview[this.shopSnakePreview.length - 1];
-      const energyLine = this.add.rectangle(headX, headY, 4, 4, 0x00ffff)
-        .setDepth(6008);
+      // 5. 궤도 파티클 등장 (상점 프리뷰용)
+      this.time.delayedCall(900, () => {
+        // 기존 상점 궤도 파티클 제거
+        if (this.shopOrbitalParticles) {
+          this.shopOrbitalParticles.forEach(p => {
+            this.tweens.killTweensOf(p);
+            p.destroy();
+          });
+        }
+        this.shopOrbitalParticles = [];
 
-      this.tweens.add({
-        targets: energyLine,
-        x: tail.x,
-        scaleX: 0.5,
-        alpha: 0,
-        duration: 400,
-        delay: 100,
-        ease: 'Power2',
-        onComplete: () => energyLine.destroy()
+        // 2개의 궤도 파티클 생성
+        for (let i = 0; i < 2; i++) {
+          const orbital = this.add.circle(headX, headY, 3, 0x00ffff)
+            .setDepth(6012).setAlpha(0);
+          this.shopElements.push(orbital);
+          this.shopOrbitalParticles.push(orbital);
+
+          // 등장 애니메이션
+          this.tweens.add({
+            targets: orbital,
+            alpha: 1,
+            scale: { from: 0, to: 1 },
+            duration: 200,
+            ease: 'Back.easeOut'
+          });
+        }
+
+        // 궤도 회전 애니메이션
+        let shopOrbitalAngle = 0;
+        this.shopOrbitalTween = this.time.addEvent({
+          delay: 16,
+          callback: () => {
+            if (!this.shopOpen || !this.shopOrbitalParticles) return;
+            shopOrbitalAngle += 0.1;
+            const orbitRadius = 12;
+
+            this.shopOrbitalParticles.forEach((orbital, idx) => {
+              if (orbital && orbital.active) {
+                const angle = shopOrbitalAngle + (idx * Math.PI);
+                orbital.setPosition(
+                  headX + Math.cos(angle) * orbitRadius,
+                  headY + Math.sin(angle) * orbitRadius
+                );
+              }
+            });
+          },
+          loop: true
+        });
+
+        // 글로우 링
+        const glowRing = this.add.circle(headX, headY, 12, 0x000000, 0)
+          .setStrokeStyle(1, 0x00ffff, 0.3)
+          .setDepth(6011);
+        this.shopElements.push(glowRing);
+      });
+
+      // 6. "BOOST EQUIPPED!" 텍스트
+      this.time.delayedCall(700, () => {
+        const equipText = this.add.text(headX, headY - 40, 'BOOST!', {
+          fontSize: '14px',
+          fill: '#00ffff',
+          fontStyle: 'bold',
+          stroke: '#004444',
+          strokeThickness: 3
+        }).setOrigin(0.5).setDepth(6017).setAlpha(0).setScale(0.5);
+
+        this.tweens.add({
+          targets: equipText,
+          alpha: 1,
+          scale: 1.2,
+          y: headY - 55,
+          duration: 300,
+          ease: 'Back.easeOut',
+          onComplete: () => {
+            this.tweens.add({
+              targets: equipText,
+              alpha: 0,
+              y: headY - 70,
+              duration: 400,
+              delay: 400,
+              onComplete: () => equipText.destroy()
+            });
+          }
+        });
       });
     }
 
@@ -5049,6 +5274,272 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
+  // 인게임 스피드 부스트 궤도 초기화
+  initSpeedBoostOrbitals() {
+    // 기존 궤도 정리
+    this.cleanupSpeedBoostOrbitals();
+
+    const orbitRadius = 14;
+    this.speedBoostOrbitals = [];
+
+    // 궤도 링
+    const orbitRing = this.add.circle(0, 0, orbitRadius)
+      .setStrokeStyle(1, 0x00ffff, 0.2)
+      .setDepth(1000)
+      .setVisible(false);
+    orbitRing.isRing = true;
+    this.speedBoostOrbitals.push(orbitRing);
+
+    // 2개의 전자 파티클
+    for (let i = 0; i < 2; i++) {
+      // 트레일 (각 전자당 3개)
+      for (let t = 0; t < 3; t++) {
+        const trail = this.add.circle(0, 0, 3 - t * 0.6, 0x00ffff, 0.2 - t * 0.05)
+          .setDepth(1000)
+          .setVisible(false);
+        trail.trailIndex = t;
+        trail.electronIndex = i;
+        this.speedBoostOrbitals.push(trail);
+      }
+
+      // 글로우
+      const glow = this.add.circle(0, 0, 5.5, 0x00ffff, 0.35)
+        .setDepth(1001)
+        .setVisible(false);
+      glow.isGlow = true;
+      glow.electronIndex = i;
+      this.speedBoostOrbitals.push(glow);
+
+      // 외곽
+      const outer = this.add.circle(0, 0, 3, 0x00ffff, 0.9)
+        .setDepth(1002)
+        .setVisible(false);
+      outer.isOuter = true;
+      outer.electronIndex = i;
+      this.speedBoostOrbitals.push(outer);
+
+      // 코어
+      const core = this.add.circle(0, 0, 1.5, 0xffffff, 1)
+        .setDepth(1003)
+        .setVisible(false);
+      core.isCore = true;
+      core.electronIndex = i;
+      this.speedBoostOrbitals.push(core);
+    }
+
+    // 60fps 타이머로 업데이트
+    this.speedBoostOrbitalTimer = this.time.addEvent({
+      delay: 16,
+      loop: true,
+      callback: () => this.updateSpeedBoostOrbitals()
+    });
+
+    // 즉시 표시
+    this.speedBoostOrbitals.forEach(p => p.setVisible(true));
+  }
+
+  // 인게임 스피드 부스트 궤도 업데이트
+  updateSpeedBoostOrbitals() {
+    if (!this.hasSpeedBoost || !this.speedBoostOrbitals || this.speedBoostOrbitals.length === 0) return;
+    if (!this.snake || this.snake.length === 0) return;
+
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 인게임은 크기가 커서 느리게 돌아야 프리뷰와 비슷하게 느껴짐
+    const angle = this.time.now * 0.011;
+    const orbitRadius = 14;
+    const pulseSize = 1 + Math.sin(angle * 3) * 0.4;
+    const ringAlpha = 0.12 + Math.sin(angle * 2) * 0.08;
+
+    this.speedBoostOrbitals.forEach(p => {
+      if (!p || !p.active) return;
+
+      // 궤도 링
+      if (p.isRing) {
+        p.setPosition(headX, headY);
+        p.setStrokeStyle(1, 0x00ffff, ringAlpha);
+        return;
+      }
+
+      const electronAngle = angle + (p.electronIndex * Math.PI);
+
+      // 트레일
+      if (p.trailIndex !== undefined) {
+        const trailAngle = electronAngle - ((p.trailIndex + 1) * 0.18);
+        p.setPosition(
+          headX + Math.cos(trailAngle) * orbitRadius,
+          headY + Math.sin(trailAngle) * orbitRadius
+        );
+        p.setRadius((3 - p.trailIndex * 0.6) * pulseSize);
+      }
+      // 글로우
+      else if (p.isGlow) {
+        p.setPosition(
+          headX + Math.cos(electronAngle) * orbitRadius,
+          headY + Math.sin(electronAngle) * orbitRadius
+        );
+        p.setRadius(4.5 + pulseSize);
+      }
+      // 외곽
+      else if (p.isOuter) {
+        p.setPosition(
+          headX + Math.cos(electronAngle) * orbitRadius,
+          headY + Math.sin(electronAngle) * orbitRadius
+        );
+        p.setRadius(3 * pulseSize);
+      }
+      // 코어
+      else if (p.isCore) {
+        p.setPosition(
+          headX + Math.cos(electronAngle) * orbitRadius,
+          headY + Math.sin(electronAngle) * orbitRadius
+        );
+        p.setRadius(1.5 * pulseSize);
+      }
+    });
+  }
+
+  // 인게임 스피드 부스트 궤도 정리
+  cleanupSpeedBoostOrbitals() {
+    if (this.speedBoostOrbitalTimer) {
+      this.speedBoostOrbitalTimer.destroy();
+      this.speedBoostOrbitalTimer = null;
+    }
+    if (this.speedBoostOrbitals) {
+      this.speedBoostOrbitals.forEach(p => {
+        if (p && p.active) p.destroy();
+      });
+      this.speedBoostOrbitals = [];
+    }
+  }
+
+  // 상점 프리뷰에 장착된 수트들 적용
+  applyShopPreviewSuits() {
+    if (!this.shopPreviewInfo || !this.shopSnakePreview || this.shopSnakePreview.length === 0) return;
+
+    const { headX, headY, gridSize } = this.shopPreviewInfo;
+    const scale = gridSize / this.gridSize; // 12/20 = 0.6
+
+    // 스피드 부스트 궤도 파티클 적용
+    if (this.hasSpeedBoost) {
+      const orbitRadius = 14 * scale; // 8.4
+      this.shopOrbitalParticles = [];
+      let angle = 0;
+
+      // 궤도 링
+      const orbitRing = this.add.circle(headX, headY, orbitRadius)
+        .setStrokeStyle(1, 0x00ffff, 0.2)
+        .setDepth(6003)
+        .setAlpha(0);
+      this.shopOrbitalParticles.push(orbitRing);
+      this.shopElements.push(orbitRing);
+
+      // 2개의 전자 파티클
+      for (let i = 0; i < 2; i++) {
+        // 트레일 파티클 (각 전자당 3개)
+        for (let t = 0; t < 3; t++) {
+          const trail = this.add.circle(headX, headY, (2.5 - t * 0.4) * scale, 0x00ffff, 0.15 - t * 0.04)
+            .setDepth(6003)
+            .setAlpha(0);
+          trail.trailIndex = t;
+          trail.electronIndex = i;
+          this.shopOrbitalParticles.push(trail);
+          this.shopElements.push(trail);
+        }
+
+        // 글로우 (큰 것)
+        const glow = this.add.circle(headX, headY, 4 * scale, 0x00ffff, 0.35)
+          .setDepth(6003)
+          .setAlpha(0);
+        glow.isGlow = true;
+        glow.electronIndex = i;
+        this.shopOrbitalParticles.push(glow);
+        this.shopElements.push(glow);
+
+        // 외곽 (청록색)
+        const outer = this.add.circle(headX, headY, 2.5 * scale, 0x00ffff, 0.9)
+          .setDepth(6004)
+          .setAlpha(0);
+        outer.isOuter = true;
+        outer.electronIndex = i;
+        this.shopOrbitalParticles.push(outer);
+        this.shopElements.push(outer);
+
+        // 코어 (흰색)
+        const core = this.add.circle(headX, headY, 1.2 * scale, 0xffffff, 1)
+          .setDepth(6005)
+          .setAlpha(0);
+        core.isCore = true;
+        core.electronIndex = i;
+        this.shopOrbitalParticles.push(core);
+        this.shopElements.push(core);
+      }
+
+      // 페이드인 애니메이션
+      this.shopOrbitalParticles.forEach(p => {
+        this.tweens.add({
+          targets: p,
+          alpha: p.fillAlpha || p.strokeAlpha || 1,
+          duration: 300,
+          ease: 'Power2'
+        });
+      });
+
+      // 궤도 회전 애니메이션
+      this.shopOrbitalTween = this.time.addEvent({
+        delay: 16,
+        loop: true,
+        callback: () => {
+          if (!this.shopOrbitalParticles || this.shopOrbitalParticles.length === 0) return;
+
+          angle += 0.25;
+          const pulseSize = 1 + Math.sin(angle * 3) * 0.4;
+          const ringAlpha = 0.12 + Math.sin(angle * 2) * 0.08;
+
+          this.shopOrbitalParticles.forEach(p => {
+            if (!p || !p.active) return;
+
+            // 궤도 링 펄스
+            if (p === orbitRing) {
+              p.setStrokeStyle(1, 0x00ffff, ringAlpha);
+              return;
+            }
+
+            const electronAngle = angle + (p.electronIndex * Math.PI);
+
+            // 트레일 파티클
+            if (p.trailIndex !== undefined) {
+              const trailAngle = electronAngle - ((p.trailIndex + 1) * 0.18);
+              p.x = headX + Math.cos(trailAngle) * orbitRadius;
+              p.y = headY + Math.sin(trailAngle) * orbitRadius;
+              p.setRadius((2.5 - p.trailIndex * 0.4) * scale * pulseSize);
+            }
+            // 글로우
+            else if (p.isGlow) {
+              p.x = headX + Math.cos(electronAngle) * orbitRadius;
+              p.y = headY + Math.sin(electronAngle) * orbitRadius;
+              p.setRadius((4 + pulseSize) * scale);
+            }
+            // 외곽
+            else if (p.isOuter) {
+              p.x = headX + Math.cos(electronAngle) * orbitRadius;
+              p.y = headY + Math.sin(electronAngle) * orbitRadius;
+              p.setRadius(2.5 * scale * pulseSize);
+            }
+            // 코어
+            else if (p.isCore) {
+              p.x = headX + Math.cos(electronAngle) * orbitRadius;
+              p.y = headY + Math.sin(electronAngle) * orbitRadius;
+              p.setRadius(1.2 * scale * pulseSize);
+            }
+          });
+        }
+      });
+    }
+  }
+
   closeShop() {
     this.shopKeyboardEnabled = false;
     this.shopOpen = false;
@@ -5059,6 +5550,18 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.shopNeonTween) {
       this.shopNeonTween.stop();
       this.shopNeonTween = null;
+    }
+
+    // 상점 궤도 파티클 정리
+    if (this.shopOrbitalTween) {
+      this.shopOrbitalTween.destroy();
+      this.shopOrbitalTween = null;
+    }
+    if (this.shopOrbitalParticles) {
+      this.shopOrbitalParticles.forEach(p => {
+        if (p && p.active) p.destroy();
+      });
+      this.shopOrbitalParticles = [];
     }
 
     // 카드 float tween 정리
@@ -5169,6 +5672,7 @@ export default class SnakeGame extends Phaser.Scene {
   openLoanUI() {
     if (this.loanUIOpen) return;
     this.loanUIOpen = true;
+    this.isLoanProcessing = false; // 대출 처리 플래그 리셋
     this.shopKeyboardEnabled = false;
     this.loanMode = 'borrow';
 
@@ -6015,8 +6519,12 @@ export default class SnakeGame extends Phaser.Scene {
       this.selectedBankIndex = (this.selectedBankIndex + 1) % this.availableBanks.length;
       this.updateBankSelection();
     } else if (direction === 'ENTER') {
+      // 대출 처리 중이면 무시 (엔터 연타 방지)
+      if (this.isLoanProcessing) return;
+
       const selectedBank = this.availableBanks[this.selectedBankIndex];
       if (selectedBank) {
+        this.isLoanProcessing = true;
         this.takeLoanFromBank(selectedBank);
       }
     }
@@ -7103,6 +7611,7 @@ export default class SnakeGame extends Phaser.Scene {
   closeLoanUI() {
     if (!this.loanUIOpen) return;
     this.loanUIOpen = false;
+    this.isLoanProcessing = false; // 대출 처리 플래그 리셋
 
     // 요소 정리 - 흩어지며 사라짐
     this.loanElements.forEach((el, i) => {
@@ -7589,12 +8098,12 @@ export default class SnakeGame extends Phaser.Scene {
     this.bossPhase = 'battle';
     this.bossHitCount = 0;
 
-    // 코너 위치 설정 (4개) - 모서리 근처 (벽 충돌 방지를 위해 1칸 안쪽)
+    // 코너 위치 설정 (4개) - 정확히 벽에 붙은 모서리
     this.bossCorners = [
-      { x: 1, y: 1 }, // 좌상단
-      { x: this.cols - 2, y: 1 }, // 우상단
-      { x: 1, y: this.rows - 2 }, // 좌하단
-      { x: this.cols - 2, y: this.rows - 2 } // 우하단
+      { x: 0, y: 0 }, // 좌상단
+      { x: this.cols - 1, y: 0 }, // 우상단
+      { x: 0, y: this.rows - 1 }, // 좌하단
+      { x: this.cols - 1, y: this.rows - 1 } // 우하단
     ];
 
     // 배틀 시작 메시지
@@ -7697,8 +8206,10 @@ export default class SnakeGame extends Phaser.Scene {
         scale: 1.5,
         duration: 200,
         onComplete: () => {
-          this.bossElement.destroy();
-          this.bossElement = null;
+          if (this.bossElement) {
+            this.bossElement.destroy();
+            this.bossElement = null;
+          }
         }
       });
     }
