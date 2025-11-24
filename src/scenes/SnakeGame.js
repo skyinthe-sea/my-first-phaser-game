@@ -189,9 +189,10 @@ export default class SnakeGame extends Phaser.Scene {
     this.itemDelays = [5000, 4000, 3000, 2000]; // 아이템 생성 간격 (5초 -> 4초 -> 3초 -> 2초)
     this.itemDelayIndex = 0; // 현재 딜레이 인덱스
 
-    // 상점 시스템 (Stage 4 클리어 후 오픈)
+    // 상점 시스템 (Stage 2 클리어 후 오픈)
     this.money = 0; // 보유 돈
     this.shopOpen = false; // 상점 열림 상태
+    this.hasOpenedShopBefore = false; // 첫 상점 오픈 여부
     this.shopElements = []; // 상점 UI 요소들
     this.selectedShopIndex = 0; // 선택된 아이템 인덱스
     this.shopItems = getShopItems(); // items.js에서 아이템 데이터 로드
@@ -245,8 +246,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.savedComboShieldCount = 0; // 보스전 전 실드 저장
     this.bossCorners = []; // 보스가 나타날 코너 위치들
     this.originalSnakeColor = 0x00ff00; // 원래 뱀 색상
-    this.bossStageInterval = 5; // 보스 등장 스테이지 간격 (테스트: 2, 실제: 5)
-    this.testBossStage = 5; // 테스트용 보스 스테이지
+    this.bossStageInterval = 3; // 보스 등장 스테이지 간격
+    this.testBossStage = 3; // 보스 스테이지
 
     // 키 입력 (입력 큐 시스템)
     this.input.keyboard.on('keydown-LEFT', () => {
@@ -437,8 +438,8 @@ export default class SnakeGame extends Phaser.Scene {
     let foodPos;
     let validPosition = false;
 
-    // 10번째 먹이(foodCount === 9)는 중앙 부근에 생성
-    const shouldSpawnCenter = this.foodCount === 9;
+    // 9번째 먹이(foodCount === 8)는 중앙 부근에 생성 (데드존 생성용)
+    const shouldSpawnCenter = this.foodCount === 8;
 
     while (!validPosition) {
       if (shouldSpawnCenter) {
@@ -744,8 +745,8 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
-    // 0~9번째 먹이가 아니면 리턴 (첫 번째 먹이부터 10번째 먹이 전까지)
-    if (this.foodCount >= 10) {
+    // 0~4번째 먹이가 아니면 리턴 (첫 번째 먹이부터 5번째 먹이까지)
+    if (this.foodCount >= 5) {
       return;
     }
 
@@ -1013,8 +1014,8 @@ export default class SnakeGame extends Phaser.Scene {
 
       this.foodCount++;
 
-      // 10번째 먹이 먹으면 데드존 생성 시퀀스 시작 (stage 3에만)
-      if (this.foodCount === 10 && this.currentStage === 3) {
+      // 9번째 먹이 먹으면 데드존 생성 시퀀스 시작 (stage 4에만)
+      if (this.foodCount === 9 && this.currentStage === 4) {
         // 먼저 새 먹이 생성 및 파티클 효과
         this.playFoodEffect();
 
@@ -1155,24 +1156,25 @@ export default class SnakeGame extends Phaser.Scene {
 
       this.food = this.generateFood();
 
-      // 21번째 먹이부터 25번째까지 텔레포트 활성화
-      if (this.foodCount >= 21 && this.foodCount < 25) {
+      // 16번째 먹이부터 20번째까지 텔레포트 활성화
+      if (this.foodCount >= 15 && this.foodCount < 20) {
         this.foodTeleportEnabled = true;
         // 새 먹이에 대한 텔레포트 준비
         this.currentFoodTeleportCount = 0; // 새 먹이는 아직 텔레포트 안됨
         this.nextTeleportStep = Phaser.Math.Between(1, 5); // 1~5 스텝 랜덤
       } else {
-        // 25번째 이후는 텔레포트 비활성화
+        // 20번째 이후는 텔레포트 비활성화
         this.foodTeleportEnabled = false;
       }
 
-      // 10번째부터 먹이 파티클 효과
-      if (this.foodCount >= 10) {
+      // 6번째부터 먹이 파티클 효과 (마지막 먹이 제외)
+      if (this.foodCount >= 5 && this.foodCount < 19) {
         this.createFoodParticles();
       }
 
-      // 스테이지 클리어 체크 (25개 먹으면 클리어) - 보스전 중에는 비활성화
-      if (!this.bossMode && this.foodCount >= 5) { // 임시: 테스트용 (원래 25)
+      // 스테이지 클리어 체크 - 보스전 중에는 비활성화
+      // [임시] 테스트용: 5개 먹으면 클리어 (원래 20개)
+      if (!this.bossMode && this.foodCount >= 5) {
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -2346,8 +2348,8 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // 21개 이상: 강한 효과
-    if (this.foodCount >= 21) {
+    // 16개 이상: 강한 효과
+    if (this.foodCount >= 16) {
       // 강력한 스플래시 폭발
       const splash = this.add.circle(foodPos.x, foodPos.y, 20, 0xff0000, 1);
       this.tweens.add({
@@ -2782,7 +2784,7 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 먹이 그리기 (보스 요소가 있으면 건너뛰기)
     if (!this.bossElement) {
-      const isFinalFood = this.foodCount === 24; // 다음 먹이가 25번째
+      const isFinalFood = this.foodCount === 19; // 다음 먹이가 20번째 (마지막)
       this.graphics.fillStyle(isFinalFood ? 0x00ff00 : 0xff0000);
       this.graphics.fillCircle(
         this.food.x * this.gridSize + this.gridSize / 2,
@@ -3029,7 +3031,8 @@ export default class SnakeGame extends Phaser.Scene {
       ease: 'Back.easeOut',
       onComplete: () => {
         // 상점 조건이면 바로 상점 열기 (카운트다운은 완료 후)
-        if (this.currentStage >= 2) { // Stage 2 클리어 후 상점 오픈
+        // [임시] 테스트용: Stage 1 클리어 후 상점 오픈 (원래 Stage 2)
+        if (this.currentStage >= 1) {
           this.time.delayedCall(500, () => {
             clearText.destroy();
             this.openShop();
@@ -3181,8 +3184,8 @@ export default class SnakeGame extends Phaser.Scene {
             onComplete: () => {
               stageText.destroy();
 
-              // Stage 4 시작 시 데드존 2개 추가 애니메이션
-              if (this.currentStage === 4) {
+              // Stage 5 시작 시 데드존 2개 추가 애니메이션
+              if (this.currentStage === 5) {
                 this.addDeadZonesForStage4();
               }
             }
@@ -3295,6 +3298,12 @@ export default class SnakeGame extends Phaser.Scene {
     // 대출 이자 적용은 animateScoreToMoney에서 스코어 합산 후 처리
     // (스코어 + 기존돈 → 상환 → 최종금액)
 
+    // 첫 상점 오픈 여부 확인
+    const isFirstShop = !this.hasOpenedShopBefore;
+    if (isFirstShop) {
+      this.hasOpenedShopBefore = true;
+    }
+
     // 어두운 오버레이 (페이드인)
     const overlay = this.add.rectangle(0, 0, width, height, 0x0a1628, 0)
       .setOrigin(0, 0)
@@ -3307,6 +3316,146 @@ export default class SnakeGame extends Phaser.Scene {
       duration: 600,
       ease: 'Power2'
     });
+
+    // 첫 상점 오픈 축하 애니메이션
+    if (isFirstShop) {
+      // 화면 플래시 효과
+      const flash = this.add.rectangle(0, 0, width, height, 0xffffff, 0)
+        .setOrigin(0, 0).setDepth(6150);
+      this.tweens.add({
+        targets: flash,
+        fillAlpha: { from: 0, to: 0.8 },
+        duration: 150,
+        yoyo: true,
+        onComplete: () => flash.destroy()
+      });
+
+      // 메인 축하 텍스트
+      const unlockText = this.add.text(width / 2, height / 2 - 60, '🎊 SHOP UNLOCKED! 🎊', {
+        fontSize: '48px',
+        fill: '#ffff00',
+        fontStyle: 'bold',
+        stroke: '#ff0000',
+        strokeThickness: 6
+      }).setOrigin(0.5).setDepth(6100).setAlpha(0).setScale(0);
+
+      // 서브 텍스트
+      const subText = this.add.text(width / 2, height / 2 + 10, '✨ You can now buy powerful items! ✨', {
+        fontSize: '22px',
+        fill: '#00ffff',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 3
+      }).setOrigin(0.5).setDepth(6100).setAlpha(0);
+
+      // 대형 파티클 폭발 효과
+      const colors = [0xffff00, 0xff6600, 0x00ff00, 0xff00ff, 0x00ffff, 0xff0000];
+
+      // 중앙에서 퍼지는 파티클
+      for (let i = 0; i < 60; i++) {
+        const angle = (i / 60) * Math.PI * 2;
+        const distance = Phaser.Math.Between(100, 250);
+        const particle = this.add.circle(
+          width / 2,
+          height / 2,
+          Phaser.Math.Between(4, 12),
+          colors[i % colors.length],
+          1
+        ).setDepth(6099).setAlpha(0);
+
+        this.tweens.add({
+          targets: particle,
+          alpha: { from: 0, to: 1 },
+          x: width / 2 + Math.cos(angle) * distance,
+          y: height / 2 + Math.sin(angle) * distance,
+          scaleX: { from: 1.5, to: 0 },
+          scaleY: { from: 1.5, to: 0 },
+          duration: Phaser.Math.Between(1000, 2000),
+          delay: Phaser.Math.Between(0, 300),
+          ease: 'Power2',
+          onComplete: () => particle.destroy()
+        });
+      }
+
+      // 별 파티클 (위로 올라가는)
+      for (let i = 0; i < 30; i++) {
+        const star = this.add.text(
+          Phaser.Math.Between(100, width - 100),
+          height + 50,
+          '⭐',
+          { fontSize: Phaser.Math.Between(16, 32) + 'px' }
+        ).setOrigin(0.5).setDepth(6098).setAlpha(0);
+
+        this.tweens.add({
+          targets: star,
+          alpha: { from: 0, to: 1 },
+          y: Phaser.Math.Between(-50, height / 2),
+          rotation: Phaser.Math.Between(-2, 2),
+          duration: Phaser.Math.Between(1500, 2500),
+          delay: Phaser.Math.Between(100, 800),
+          ease: 'Power1',
+          onComplete: () => star.destroy()
+        });
+      }
+
+      // 메인 텍스트 등장 (강렬한 바운스)
+      this.tweens.add({
+        targets: unlockText,
+        alpha: 1,
+        scale: { from: 0, to: 1.5 },
+        duration: 600,
+        ease: 'Back.easeOut',
+        onComplete: () => {
+          // 펄스 효과
+          this.tweens.add({
+            targets: unlockText,
+            scale: { from: 1.5, to: 1.3 },
+            duration: 300,
+            yoyo: true,
+            repeat: 2,
+            ease: 'Sine.easeInOut'
+          });
+
+          // 무지개 색상 변화
+          let colorIndex = 0;
+          const rainbowColors = ['#ffff00', '#ff6600', '#ff00ff', '#00ffff', '#00ff00'];
+          this.time.addEvent({
+            delay: 150,
+            repeat: 10,
+            callback: () => {
+              unlockText.setFill(rainbowColors[colorIndex % rainbowColors.length]);
+              colorIndex++;
+            }
+          });
+        }
+      });
+
+      // 서브 텍스트 등장
+      this.tweens.add({
+        targets: subText,
+        alpha: 1,
+        y: height / 2 + 30,
+        scale: { from: 0.5, to: 1 },
+        duration: 500,
+        delay: 400,
+        ease: 'Back.easeOut'
+      });
+
+      // 축하 텍스트 페이드아웃 후 상점 UI 표시
+      this.time.delayedCall(2500, () => {
+        this.tweens.add({
+          targets: [unlockText, subText],
+          alpha: 0,
+          scale: 0.5,
+          duration: 400,
+          ease: 'Power2',
+          onComplete: () => {
+            unlockText.destroy();
+            subText.destroy();
+          }
+        });
+      });
+    }
 
     // ===== 레이아웃 계산 =====
     const sidebarMargin = 10; // 화면 끝에서 간격
@@ -3665,8 +3814,10 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     // ===== 하단 버튼들 =====
-    // 사이드바 하단 끝에 맞추고, Loan 버튼 우측은 5번째 카드 우측에 맞춤
-    const buttonY = 520;
+    // 사이드바 하단과 버튼 하단 정렬 (사이드바 하단: height - 40, 버튼 높이: 45)
+    const sidebarBottom = height - 40;
+    const buttonHeight = 45;
+    const buttonY = sidebarBottom - buttonHeight / 2;
     const buttonGap = 12;
     const nextBtnWidth = 110;
     const loanBtnWidth = 70;
@@ -3678,10 +3829,10 @@ export default class SnakeGame extends Phaser.Scene {
     // Loan 버튼 표시 여부 먼저 확인
     const showLoanBtn = this.currentStage >= 6;
 
-    // Loan 버튼이 없으면 Next Stage를 우측(Loan 위치)에 배치, 있으면 왼쪽에 배치
+    // Loan 버튼이 없으면 Next Stage 우측을 카드 우측에 맞춤, 있으면 Loan 왼쪽에 배치
     const nextBtnX = showLoanBtn
       ? loanBtnX - loanBtnWidth / 2 - buttonGap - nextBtnWidth / 2
-      : loanBtnX;
+      : lastCardRightX - nextBtnWidth / 2;
 
     // Next Stage 버튼 (모던 그라데이션 스타일)
     const nextBtnGlow = this.add.rectangle(nextBtnX, buttonY, nextBtnWidth + 8, 53, 0x00ff88, 0.3)
@@ -3823,13 +3974,15 @@ export default class SnakeGame extends Phaser.Scene {
       this.selectedShopIndex = this.shopItems.length;
     }
 
-    // 스코어 → 돈 전환 애니메이션
-    this.time.delayedCall(800, () => {
+    // 스코어 → 돈 전환 애니메이션 (첫 상점은 축하 후 시작)
+    const settleDelay = isFirstShop ? 3000 : 800;
+    this.time.delayedCall(settleDelay, () => {
       this.animateScoreToMoney();
     });
 
-    // 키보드 활성화
-    this.time.delayedCall(1500, () => {
+    // 키보드 활성화 (첫 상점은 축하 후 활성화)
+    const keyboardDelay = isFirstShop ? 3700 : 1500;
+    this.time.delayedCall(keyboardDelay, () => {
       this.updateShopSelection();
       this.shopKeyboardEnabled = true;
     });
@@ -8186,28 +8339,6 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 보스 그리기
     this.drawBoss(corner.x, corner.y);
-
-    // 등장 효과
-    const { width, height } = this.cameras.main;
-    const bossX = corner.x * this.gridSize + this.gridSize / 2;
-    const bossY = corner.y * this.gridSize + this.gridSize / 2 + 60;
-
-    // 경고 표시
-    const warning = this.add.text(bossX, bossY - 30, '!', {
-      fontSize: '24px',
-      fill: '#ff0000',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(5001).setAlpha(0);
-
-    this.tweens.add({
-      targets: warning,
-      alpha: 1,
-      y: bossY - 40,
-      duration: 200,
-      yoyo: true,
-      repeat: 2,
-      onComplete: () => warning.destroy()
-    });
   }
 
   handleBossHit() {
