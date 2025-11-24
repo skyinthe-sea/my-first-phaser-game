@@ -95,6 +95,22 @@ export default class SnakeGame extends Phaser.Scene {
     this.deadZones = []; // 밟으면 죽는 칸들 [{x, y, rect}]
     this.deadZoneGraphics = this.add.graphics(); // 데드존 그리기용
 
+    // 시야 제한(Fog of War)
+    this.fogStageStart = 6;
+    this.fogTestForceEnable = true; // TODO: stage 6 적용 시 false로 전환
+    this.fogVisibleTiles = 4.0;
+    this.fogBaseAlpha = 0.94;
+    this.fogFlashAlpha = 0.32;
+    this.fogFlashDuration = 900;
+    this.fogRenderTexture = null;
+    this.fogLightSprite = null;
+    this.fogLightTextureKey = 'fog_light_mask';
+    this.fogFlashEndTime = 0;
+    this.fogLastRenderKey = null;
+    this.fogEnabled = false;
+    this.fogIntroShown = false;
+    this.fogIntroPlaying = false;
+
     // 먹이
     this.food = this.generateFood();
     // this.foodBubble은 generateFood()에서 checkAndShowFoodBubble()을 통해 자동으로 설정됨
@@ -324,6 +340,8 @@ export default class SnakeGame extends Phaser.Scene {
       callbackScope: this,
       loop: true
     });
+
+    this.startFogIntroIfNeeded();
   }
 
   drawGrid() {
@@ -960,6 +978,8 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 먹이를 먹었는지 체크
     if (newHead.x === this.food.x && newHead.y === this.food.y) {
+      this.triggerFogFlash();
+
       // 먹이 먹는 효과음 재생
       if (this.eatingSound) {
         this.eatingSound.play();
@@ -2792,11 +2812,274 @@ export default class SnakeGame extends Phaser.Scene {
         this.gridSize / 2 - 2
       );
     }
+
+    this.updateFogOfWar();
+  }
+
+  shouldUseFog() {
+    return this.fogTestForceEnable || this.currentStage >= this.fogStageStart;
+  }
+
+  isFogOfWarActive() {
+    if (this.gameOver) return false;
+    return this.shouldUseFog() && this.fogEnabled;
+  }
+
+  ensureFogAssets() {
+    if (!this.fogRenderTexture) {
+      const { width, height } = this.cameras.main;
+      this.fogRenderTexture = this.add.renderTexture(0, 0, width, height);
+      this.fogRenderTexture.setOrigin(0, 0);
+      this.fogRenderTexture.setDepth(1200); // 게임 오브젝트 위, UI 아래
+      this.fogRenderTexture.setScrollFactor(0);
+    }
+
+    if (!this.fogLightSprite) {
+      const lightRadius = this.gridSize * this.fogVisibleTiles;
+      const textureSize = Math.ceil(lightRadius * 2);
+      const textureKey = `${this.fogLightTextureKey}_v2`;
+
+      if (!this.textures.exists(textureKey)) {
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        const steps = 12;
+        for (let i = 0; i < steps; i++) {
+          const t = i / (steps - 1);
+          const alpha = Math.pow(t, 1.8); // 중심부는 밝게, 바깥은 급격히 어둡게
+          const radius = lightRadius * (1 - 0.85 * t);
+          g.fillStyle(0xffffff, alpha);
+          g.fillCircle(lightRadius, lightRadius, radius);
+        }
+        // 완전한 밝기의 작은 코어로 토치 느낌 강화
+        g.fillStyle(0xffffff, 1);
+        g.fillCircle(lightRadius, lightRadius, lightRadius * 0.14);
+        g.generateTexture(textureKey, textureSize, textureSize);
+        g.destroy();
+      }
+
+      this.fogLightSprite = this.add.image(0, 0, textureKey);
+      this.fogLightSprite.setOrigin(0.5);
+      this.fogLightSprite.setVisible(false); // renderTexture.erase에서만 사용
+    }
+  }
+
+  resetFogOfWar() {
+    this.fogFlashEndTime = 0;
+    this.fogLastRenderKey = null;
+    if (this.fogRenderTexture) {
+      this.fogRenderTexture.clear();
+      this.fogRenderTexture.setVisible(false);
+    }
+  }
+
+  triggerFogFlash() {
+    if (!this.isFogOfWarActive()) return;
+    this.fogFlashEndTime = this.time.now + this.fogFlashDuration;
+  }
+
+  startFogIntroIfNeeded() {
+    if (this.fogIntroShown || this.fogIntroPlaying || !this.shouldUseFog()) {
+      this.fogEnabled = this.shouldUseFog();
+      return;
+    }
+
+    this.fogEnabled = false;
+    this.fogIntroPlaying = true;
+    if (this.moveTimer) {
+      this.moveTimer.paused = true;
+    }
+    this.resetFogOfWar();
+
+    const { width, height } = this.cameras.main;
+    const flickerOverlayDepth = 6000;
+    const introDialogueDepth = 6200;
+    const flickerOverlay = this.add.rectangle(
+      0,
+      0,
+      width,
+      height,
+      0x000000,
+      0
+    ).setOrigin(0, 0).setDepth(flickerOverlayDepth).setScrollFactor(0).setVisible(true);
+
+    const flickerSteps = [
+      { alpha: 1.0, duration: 140 },
+      { alpha: 0.55, duration: 140 },
+      { alpha: 1.0, duration: 140 },
+      { alpha: 0.45, duration: 140 },
+      { alpha: 1.0, duration: 160 }
+    ];
+
+    const applyOverlayAlpha = (a) => {
+      flickerOverlay.setVisible(true);
+      flickerOverlay.setFillStyle(0x000000, a);
+      flickerOverlay.setAlpha(a);
+    };
+
+    const showExclaim = () => {
+      const head = this.snake[0];
+      if (!head) return;
+      const headX = head.x * this.gridSize + this.gridSize / 2;
+      const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY - this.gridSize * 1.2;
+      const mark = this.add.text(headX, headY, '!', {
+        fontSize: '26px',
+        fontStyle: 'bold',
+        fill: '#ffcc00',
+        stroke: '#000000',
+        strokeThickness: 3
+      }).setOrigin(0.5).setDepth(introDialogueDepth);
+      mark.setScale(0);
+      this.tweens.add({
+        targets: mark,
+        scale: 1.2,
+        alpha: 1,
+        duration: 150,
+        ease: 'Back.easeOut',
+        yoyo: true,
+        hold: 80,
+        onComplete: () => mark.destroy()
+      });
+    };
+
+    const playSpark = (power = 1) => {
+      const head = this.snake[0];
+      if (!head) return;
+      const headX = head.x * this.gridSize + this.gridSize / 2;
+      const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+      const jitter = this.gridSize * 0.15;
+      const spark = this.add.circle(
+        headX + Phaser.Math.FloatBetween(-jitter, jitter),
+        headY - this.gridSize * 0.4 + Phaser.Math.FloatBetween(-jitter, jitter),
+        this.gridSize * 0.18 * (1 + power * 0.6),
+        0xffcc55,
+        1
+      ).setDepth(introDialogueDepth + 1);
+      spark.setStrokeStyle(2, 0xff8800, 0.9);
+      this.tweens.add({
+        targets: spark,
+        scale: 1.4 + power * 0.4,
+        alpha: 0,
+        duration: 160 + power * 80,
+        ease: 'Cubic.easeOut',
+        onComplete: () => spark.destroy()
+      });
+    };
+
+    const playFlicker = (idx = 0) => {
+      if (idx >= flickerSteps.length) {
+        // 완전 어둠 유지
+        applyOverlayAlpha(1);
+        // 호기심 대사 (보스 말풍선이 아닌 뱀 말풍선 스타일)
+        const head = this.snake[0];
+        const headX = head.x * this.gridSize + this.gridSize / 2;
+        const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+        this.showSnakeStyleDialogue('What the...?', () => {
+          // 횃불 점화 시도 2회 후 성공
+          const tryIgnite = attempt => {
+            if (attempt < 2) {
+              playSpark(0.4);
+              this.tweens.add({
+                targets: flickerOverlay,
+                alpha: 0.7,
+                duration: 130,
+                yoyo: true,
+                ease: 'Sine.easeInOut'
+              });
+              this.time.delayedCall(260, () => tryIgnite(attempt + 1));
+            } else {
+              // 마지막 점화 성공
+              playSpark(1.2);
+              this.triggerFogFlash();
+              this.fogEnabled = true;
+              this.fogLastRenderKey = null;
+              this.updateFogOfWar();
+              this.tweens.add({
+                targets: flickerOverlay,
+                alpha: 0,
+                duration: 240,
+                ease: 'Sine.easeOut',
+                onComplete: () => flickerOverlay.destroy()
+              });
+              // 잠시 멈칫 후 시작 대사
+              this.time.delayedCall(420, () => {
+                this.showSnakeStyleDialogue("Okay... let's give this a shot!", () => {
+                  this.fogIntroPlaying = false;
+                  this.fogIntroShown = true;
+                  if (this.moveTimer) {
+                    this.moveTimer.paused = false;
+                  }
+                  this.updateFogOfWar();
+                }, { x: headX, y: headY - this.gridSize * 1.8, depth: introDialogueDepth, fontSize: '14px' });
+              }, null, this);
+            }
+          };
+          tryIgnite(0);
+        }, { x: headX, y: headY - this.gridSize * 1.8, depth: introDialogueDepth, fontSize: '14px' });
+        return;
+      }
+
+      if (idx === 0) {
+        applyOverlayAlpha(1);
+        showExclaim();
+      }
+
+      const step = flickerSteps[idx];
+      applyOverlayAlpha(step.alpha);
+      this.time.delayedCall(step.duration, () => playFlicker(idx + 1));
+    };
+
+    // 바로 깜빡임 시작
+    playFlicker(0);
+  }
+
+  updateFogOfWar() {
+    if (!this.isFogOfWarActive()) {
+      if (this.fogRenderTexture) {
+        this.fogRenderTexture.setVisible(false);
+      }
+      return;
+    }
+
+    if (!this.snake || this.snake.length === 0) return;
+
+    this.ensureFogAssets();
+
+    const head = this.snake[0];
+    const headPixelX = head.x * this.gridSize + this.gridSize / 2;
+    const headPixelY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const { width, height } = this.cameras.main;
+    const fogHeight = Math.max(0, height - this.gameAreaY - this.bottomUIHeight);
+
+    let alpha = this.fogBaseAlpha;
+    let scale = 1;
+
+    if (this.fogFlashEndTime > this.time.now) {
+      const remaining = this.fogFlashEndTime - this.time.now;
+      const t = 1 - remaining / this.fogFlashDuration;
+      const eased = Phaser.Math.Easing.Quadratic.InOut(Phaser.Math.Clamp(t, 0, 1));
+      alpha = Phaser.Math.Linear(this.fogFlashAlpha, this.fogBaseAlpha, eased);
+      scale = Phaser.Math.Linear(1.25, 1, eased);
+    }
+
+    const renderKey = `${head.x},${head.y},${alpha.toFixed(3)},${scale.toFixed(2)}`;
+    if (this.fogLastRenderKey === renderKey) {
+      this.fogRenderTexture.setVisible(true);
+      return;
+    }
+    this.fogLastRenderKey = renderKey;
+
+    this.fogRenderTexture.clear();
+    this.fogRenderTexture.fill(0x000000, alpha, 0, this.gameAreaY, width, fogHeight);
+
+    this.fogLightSprite.setScale(scale);
+    this.fogRenderTexture.erase(this.fogLightSprite, headPixelX, headPixelY);
+    this.fogRenderTexture.setVisible(true);
   }
 
   endGame() {
     this.gameOver = true;
     this.moveTimer.remove();
+
+    this.resetFogOfWar();
 
     // 아이템 타이머 정리
     if (this.itemSpawnTimer) {
@@ -3198,6 +3481,7 @@ export default class SnakeGame extends Phaser.Scene {
   resetStage() {
     // 스피드 부스트 궤도 정리 (새로 생성하기 전에)
     this.cleanupSpeedBoostOrbitals();
+    this.resetFogOfWar();
 
     // 뱀 초기화
     this.snake = [
@@ -3246,6 +3530,9 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 게임 재개
     this.moveTimer.paused = false;
+
+    // 스테이지 6에서 처음 진입 시 안개 인트로 실행
+    this.startFogIntroIfNeeded();
   }
 
   // =====================
@@ -8047,16 +8334,24 @@ export default class SnakeGame extends Phaser.Scene {
     this.food = { x, y };
   }
 
-  showBossDialogue(text, callback) {
+  showBossDialogue(text, callback, options = {}) {
     const { width, height } = this.cameras.main;
+    const posX = options.x !== undefined ? options.x : width / 2;
+    const posY = options.y !== undefined ? options.y : height / 2;
+    const depth = options.depth !== undefined ? options.depth : 5002;
 
-    const dialogue = this.add.text(width / 2, height / 2, '', {
+    const baseStyle = {
       fontSize: '20px',
       fill: '#ff00ff',
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 3
-    }).setOrigin(0.5).setDepth(5002);
+    };
+    const style = options.style ? { ...baseStyle, ...options.style } : baseStyle;
+
+    const dialogue = this.add.text(posX, posY, '', style)
+      .setOrigin(0.5)
+      .setDepth(depth);
 
     let charIndex = 0;
     const typeTimer = this.time.addEvent({
@@ -8073,6 +8368,61 @@ export default class SnakeGame extends Phaser.Scene {
               duration: 300,
               onComplete: () => {
                 dialogue.destroy();
+                if (callback) callback();
+              }
+            });
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  showSnakeStyleDialogue(text, callback, options = {}) {
+    const head = this.snake[0];
+    const defaultX = head ? head.x * this.gridSize + this.gridSize / 2 : this.cameras.main.width / 2;
+    const defaultY = head ? head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY - 50 : this.cameras.main.height / 2;
+    const posX = options.x !== undefined ? options.x : defaultX;
+    const posY = options.y !== undefined ? options.y : defaultY;
+    const depth = options.depth !== undefined ? options.depth : 1300;
+    const fontSize = options.fontSize || '12px';
+
+    const bubbleWidth = 260;
+    const bubble = this.add.rectangle(posX, posY, bubbleWidth, 52, 0xffffff, 0.95)
+      .setDepth(depth)
+      .setScale(0)
+      .setStrokeStyle(2, 0x000000);
+
+    this.tweens.add({
+      targets: bubble,
+      scale: 1,
+      duration: 200,
+      ease: 'Back.easeOut'
+    });
+
+    const dialogueText = this.add.text(posX, posY, '', {
+      fontSize,
+      fill: '#000000',
+      fontStyle: 'bold',
+      wordWrap: { width: bubbleWidth - 16 }
+    }).setOrigin(0.5).setDepth(depth + 1);
+
+    let charIndex = 0;
+    const typeTimer = this.time.addEvent({
+      delay: 45,
+      callback: () => {
+        dialogueText.setText(text.substring(0, charIndex + 1));
+        charIndex++;
+        if (charIndex >= text.length) {
+          typeTimer.destroy();
+          this.time.delayedCall(1100, () => {
+            this.tweens.add({
+              targets: [bubble, dialogueText],
+              alpha: 0,
+              duration: 200,
+              onComplete: () => {
+                bubble.destroy();
+                dialogueText.destroy();
                 if (callback) callback();
               }
             });
