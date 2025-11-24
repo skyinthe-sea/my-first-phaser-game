@@ -95,6 +95,17 @@ export default class SnakeGame extends Phaser.Scene {
     this.deadZones = []; // 밟으면 죽는 칸들 [{x, y, rect}]
     this.deadZoneGraphics = this.add.graphics(); // 데드존 그리기용
 
+    // 확산형 독가스 시스템 (배틀로얄 자기장)
+    this.gasZoneEnabled = false;
+    this.gasZoneLevel = 0; // 현재 독가스 레벨 (가장자리부터 몇 칸)
+    this.gasZoneMaxLevel = 0; // 최대 레벨 (동적 계산)
+    this.gasZoneTimer = null; // 확장 타이머
+    this.gasZoneExpandInterval = 2000; // 2초마다 확장
+    this.gasZoneGraphics = this.add.graphics();
+    this.gasZoneGraphics.setDepth(50); // 뱀보다 아래, 그리드보다 위
+    this.gasZoneParticles = []; // EMP 파티클들
+    this.gasZonePulseTime = 0; // 펄스 애니메이션용
+
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
     this.fogTestForceEnable = false; // stage 7부터 적용
@@ -342,6 +353,14 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     this.startFogIntroIfNeeded();
+
+    // 테스트용: Stage 1에서 독가스 시스템 활성화 (게임 시작 1초 후)
+    // TODO: 테스트 후 적절한 스테이지로 변경 필요
+    if (this.currentStage === 1) {
+      this.time.delayedCall(1000, () => {
+        this.startGasZone();
+      });
+    }
   }
 
   drawGrid() {
@@ -486,7 +505,10 @@ export default class SnakeGame extends Phaser.Scene {
         dz.x === foodPos.x && dz.y === foodPos.y
       );
 
-      validPosition = notOnSnake && notOnDeadZone;
+      // 독가스 영역과 겹치지 않는지 체크
+      const notOnGasZone = !this.isInGasZone(foodPos.x, foodPos.y);
+
+      validPosition = notOnSnake && notOnDeadZone && notOnGasZone;
     }
 
     // 먹이가 벽에 붙어있으면 말풍선 표시
@@ -963,6 +985,12 @@ export default class SnakeGame extends Phaser.Scene {
       dz.x === newHead.x && dz.y === newHead.y
     );
     if (hitDeadZone) {
+      this.endGame();
+      return;
+    }
+
+    // 독가스 영역 충돌 체크
+    if (this.isInGasZone(newHead.x, newHead.y)) {
       this.endGame();
       return;
     }
@@ -3486,6 +3514,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.cleanupSpeedBoostOrbitals();
     this.resetFogOfWar();
 
+    // 독가스 정리
+    this.stopGasZone();
+
     // 뱀 초기화
     this.snake = [
       { x: 10, y: 15 },
@@ -3536,6 +3567,14 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 스테이지 6에서 처음 진입 시 안개 인트로 실행
     this.startFogIntroIfNeeded();
+
+    // 테스트용: Stage 1에서 독가스 시스템 활성화
+    // TODO: 테스트 후 적절한 스테이지로 변경 필요
+    if (this.currentStage === 1) {
+      this.time.delayedCall(1000, () => {
+        this.startGasZone();
+      });
+    }
   }
 
   // =====================
@@ -8981,6 +9020,405 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     this.time.delayedCall(800, callback);
+  }
+
+  // =====================
+  // 확산형 독가스 시스템
+  // =====================
+
+  startGasZone() {
+    if (this.gasZoneEnabled) return;
+
+    this.gasZoneEnabled = true;
+    this.gasZoneLevel = 0;
+    // 최대 레벨: 중앙까지 도달하면 게임 불가능 (최소 5x5 영역 남김)
+    this.gasZoneMaxLevel = Math.min(Math.floor(this.cols / 2) - 3, Math.floor(this.rows / 2) - 3);
+
+    // 독가스 확장 타이머 시작
+    this.gasZoneTimer = this.time.addEvent({
+      delay: this.gasZoneExpandInterval,
+      callback: this.expandGasZone,
+      callbackScope: this,
+      loop: true
+    });
+
+    // 애니메이션 업데이트용 타이머 (60fps)
+    this.gasZoneAnimTimer = this.time.addEvent({
+      delay: 16, // ~60fps
+      callback: this.updateGasZoneAnimation,
+      callbackScope: this,
+      loop: true
+    });
+
+    // 초기 렌더링
+    this.renderGasZone();
+  }
+
+  stopGasZone() {
+    this.gasZoneEnabled = false;
+    this.gasZoneLevel = 0;
+
+    if (this.gasZoneTimer) {
+      this.gasZoneTimer.destroy();
+      this.gasZoneTimer = null;
+    }
+
+    if (this.gasZoneAnimTimer) {
+      this.gasZoneAnimTimer.destroy();
+      this.gasZoneAnimTimer = null;
+    }
+
+    // 파티클 정리
+    this.gasZoneParticles.forEach(p => {
+      if (p && p.destroy) p.destroy();
+    });
+    this.gasZoneParticles = [];
+
+    // 그래픽 정리
+    if (this.gasZoneGraphics) {
+      this.gasZoneGraphics.clear();
+    }
+  }
+
+  expandGasZone() {
+    if (!this.gasZoneEnabled) return;
+    if (this.gasZoneLevel >= this.gasZoneMaxLevel) return;
+
+    // 먼저 경고 표시 후 확장
+    this.showGasZonePreWarning(() => {
+      this.gasZoneLevel++;
+
+      // 확장 시 EMP 펄스 효과
+      this.showGasZoneExpandEffect();
+
+      // 렌더링 업데이트
+      this.renderGasZone();
+
+      // 먹이가 독가스 영역에 들어갔는지 체크 - 안전 영역에 재생성 (카운트 증가 없음)
+      if (this.food && this.isInGasZone(this.food.x, this.food.y)) {
+        // 기존 말풍선 제거
+        if (this.foodBubble) {
+          if (this.foodBubble.image) this.foodBubble.image.destroy();
+          if (this.foodBubble.text) this.foodBubble.text.destroy();
+          this.foodBubble = null;
+        }
+        this.food = this.generateFood();
+      }
+
+      // 경고 표시
+      if (this.gasZoneLevel === this.gasZoneMaxLevel - 2) {
+        this.showGasZoneWarning('DANGER! GAS CLOSING IN!');
+      }
+    });
+  }
+
+  showGasZonePreWarning(callback) {
+    const nextLevel = this.gasZoneLevel + 1;
+    const gs = this.gridSize;
+    const warningElements = [];
+
+    // 다음에 독가스가 될 영역 (경계선 한 줄)
+    // 상단 줄
+    for (let x = nextLevel - 1; x < this.cols - nextLevel + 1; x++) {
+      warningElements.push({ x, y: nextLevel - 1 });
+    }
+    // 하단 줄
+    for (let x = nextLevel - 1; x < this.cols - nextLevel + 1; x++) {
+      warningElements.push({ x, y: this.rows - nextLevel });
+    }
+    // 좌측 줄 (상하 제외)
+    for (let y = nextLevel; y < this.rows - nextLevel; y++) {
+      warningElements.push({ x: nextLevel - 1, y });
+    }
+    // 우측 줄 (상하 제외)
+    for (let y = nextLevel; y < this.rows - nextLevel; y++) {
+      warningElements.push({ x: this.cols - nextLevel, y });
+    }
+
+    // 경고 그래픽 생성
+    const warningGraphics = this.add.graphics();
+    warningGraphics.setDepth(55);
+
+    // 긴박한 깜빡임 애니메이션
+    let blinkCount = 0;
+    const maxBlinks = 6;
+    const blinkInterval = 80;
+
+    const blinkTimer = this.time.addEvent({
+      delay: blinkInterval,
+      callback: () => {
+        warningGraphics.clear();
+
+        if (blinkCount % 2 === 0) {
+          // 경고 색상 (빨간색/노란색 교차)
+          const color = blinkCount % 4 === 0 ? 0xff0000 : 0xffff00;
+          const alpha = 0.7;
+
+          warningElements.forEach(({ x, y }) => {
+            warningGraphics.fillStyle(color, alpha);
+            warningGraphics.fillRect(
+              x * gs,
+              y * gs + this.gameAreaY,
+              gs,
+              gs
+            );
+          });
+
+          // 경계선 강조
+          warningGraphics.lineStyle(2, 0xffffff, 0.9);
+          warningGraphics.strokeRect(
+            (nextLevel - 1) * gs,
+            (nextLevel - 1) * gs + this.gameAreaY,
+            (this.cols - (nextLevel - 1) * 2) * gs,
+            (this.rows - (nextLevel - 1) * 2) * gs
+          );
+        }
+
+        blinkCount++;
+
+        if (blinkCount >= maxBlinks) {
+          blinkTimer.destroy();
+          warningGraphics.destroy();
+          callback();
+        }
+      },
+      callbackScope: this,
+      loop: true
+    });
+
+    // 경고 사운드 효과 (시각적 피드백만)
+    // 화면 가장자리 빨간 글로우
+    const edgeGlow = this.add.rectangle(
+      this.cameras.main.width / 2,
+      this.cameras.main.height / 2,
+      this.cameras.main.width,
+      this.cameras.main.height,
+      0xff0000, 0
+    ).setDepth(54).setStrokeStyle(8, 0xff0000, 0.8);
+
+    this.tweens.add({
+      targets: edgeGlow,
+      alpha: { from: 0.8, to: 0 },
+      duration: maxBlinks * blinkInterval,
+      ease: 'Power2.easeIn',
+      onComplete: () => edgeGlow.destroy()
+    });
+  }
+
+  isInGasZone(x, y) {
+    if (!this.gasZoneEnabled || this.gasZoneLevel === 0) return false;
+
+    const level = this.gasZoneLevel;
+    return x < level || x >= this.cols - level ||
+           y < level || y >= this.rows - level;
+  }
+
+  renderGasZone() {
+    if (!this.gasZoneGraphics) return;
+    this.gasZoneGraphics.clear();
+
+    if (!this.gasZoneEnabled || this.gasZoneLevel === 0) return;
+
+    const level = this.gasZoneLevel;
+    const time = this.gasZonePulseTime;
+    const gs = this.gridSize;
+
+    // 펄스 효과를 위한 알파값 변동
+    const pulseAlpha = 0.6 + Math.sin(time * 0.005) * 0.15;
+
+    // EMP 색상 (시간에 따라 변화)
+    const colorPhase = (time * 0.003) % (Math.PI * 2);
+    const r = Math.floor(80 + Math.sin(colorPhase) * 40);
+    const g = Math.floor(20 + Math.sin(colorPhase + 2) * 20);
+    const b = Math.floor(180 + Math.sin(colorPhase + 4) * 60);
+    const baseColor = (r << 16) | (g << 8) | b;
+
+    // 최적화: 4개의 큰 사각형으로 독가스 영역 그리기
+    const levelPx = level * gs;
+    const gameWidth = this.cols * gs;
+    const gameHeight = this.rows * gs;
+
+    // 상단 영역
+    this.gasZoneGraphics.fillStyle(baseColor, pulseAlpha);
+    this.gasZoneGraphics.fillRect(0, this.gameAreaY, gameWidth, levelPx);
+
+    // 하단 영역
+    this.gasZoneGraphics.fillRect(0, this.gameAreaY + gameHeight - levelPx, gameWidth, levelPx);
+
+    // 좌측 영역 (상하 제외)
+    this.gasZoneGraphics.fillRect(0, this.gameAreaY + levelPx, levelPx, gameHeight - levelPx * 2);
+
+    // 우측 영역 (상하 제외)
+    this.gasZoneGraphics.fillRect(gameWidth - levelPx, this.gameAreaY + levelPx, levelPx, gameHeight - levelPx * 2);
+
+    // 경계선 강조 (사각형 형태)
+    const edgeAlpha = 0.8 + Math.sin(time * 0.01) * 0.2;
+    this.gasZoneGraphics.lineStyle(3, 0x00ffff, edgeAlpha);
+    this.gasZoneGraphics.strokeRect(
+      levelPx,
+      this.gameAreaY + levelPx,
+      gameWidth - levelPx * 2,
+      gameHeight - levelPx * 2
+    );
+
+    // 내부 글로우 효과 (두 번째 경계선)
+    const innerGlow = 0.4 + Math.sin(time * 0.008) * 0.2;
+    this.gasZoneGraphics.lineStyle(1, 0xff00ff, innerGlow);
+    this.gasZoneGraphics.strokeRect(
+      levelPx - gs / 2,
+      this.gameAreaY + levelPx - gs / 2,
+      gameWidth - levelPx * 2 + gs,
+      gameHeight - levelPx * 2 + gs
+    );
+
+    // 전기 스파크 효과 (경계선에서)
+    this.renderGasZoneSparks(level, time);
+  }
+
+  renderGasZoneSparks(level, time) {
+    if (level === 0) return;
+
+    const sparkCount = 8;
+    for (let i = 0; i < sparkCount; i++) {
+      const sparkPhase = (time * 0.008 + i * (Math.PI * 2 / sparkCount)) % (Math.PI * 2);
+      const sparkIntensity = Math.pow(Math.sin(sparkPhase), 4);
+
+      if (sparkIntensity > 0.3) {
+        // 경계선 위의 랜덤 위치
+        let sparkX, sparkY;
+        const side = Math.floor((time * 0.001 + i) % 4);
+
+        switch (side) {
+          case 0: // 상단
+            sparkX = level + Math.random() * (this.cols - level * 2);
+            sparkY = level;
+            break;
+          case 1: // 우측
+            sparkX = this.cols - level;
+            sparkY = level + Math.random() * (this.rows - level * 2);
+            break;
+          case 2: // 하단
+            sparkX = level + Math.random() * (this.cols - level * 2);
+            sparkY = this.rows - level;
+            break;
+          case 3: // 좌측
+            sparkX = level;
+            sparkY = level + Math.random() * (this.rows - level * 2);
+            break;
+        }
+
+        const px = sparkX * this.gridSize;
+        const py = sparkY * this.gridSize + this.gameAreaY;
+
+        // 스파크 글로우
+        this.gasZoneGraphics.fillStyle(0x00ffff, sparkIntensity * 0.8);
+        this.gasZoneGraphics.fillCircle(px, py, 6 + sparkIntensity * 4);
+
+        // 스파크 코어
+        this.gasZoneGraphics.fillStyle(0xffffff, sparkIntensity);
+        this.gasZoneGraphics.fillCircle(px, py, 2 + sparkIntensity * 2);
+      }
+    }
+  }
+
+  updateGasZoneAnimation() {
+    if (!this.gasZoneEnabled) return;
+    this.gasZonePulseTime += 16;
+    this.renderGasZone();
+  }
+
+  showGasZoneExpandEffect() {
+    const { width, height } = this.cameras.main;
+
+    // 화면 전체 EMP 플래시
+    const flash = this.add.rectangle(
+      width / 2, height / 2, width, height,
+      0x00ffff, 0.4
+    ).setDepth(5500);
+
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 300,
+      ease: 'Power2.easeOut',
+      onComplete: () => flash.destroy()
+    });
+
+    // 경계선에서 안쪽으로 확장되는 링 효과
+    const centerX = width / 2;
+    const centerY = this.gameAreaY + (this.rows * this.gridSize) / 2;
+
+    const ring = this.add.graphics();
+    ring.setDepth(5501);
+
+    let ringSize = Math.max(width, height);
+    const targetSize = (this.cols - this.gasZoneLevel * 2) * this.gridSize;
+
+    this.tweens.add({
+      targets: { size: ringSize },
+      size: targetSize,
+      duration: 400,
+      ease: 'Power2.easeIn',
+      onUpdate: (tween) => {
+        const size = tween.targets[0].size;
+        ring.clear();
+        ring.lineStyle(4, 0xff00ff, 0.8 * (1 - tween.progress));
+        ring.strokeRect(
+          centerX - size / 2,
+          centerY - size / 2,
+          size,
+          size
+        );
+      },
+      onComplete: () => ring.destroy()
+    });
+
+    // 전기 파티클 폭발
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const dist = 50 + Math.random() * 100;
+
+      const particle = this.add.circle(
+        centerX + Math.cos(angle) * dist,
+        centerY + Math.sin(angle) * dist,
+        3 + Math.random() * 3,
+        0x00ffff
+      ).setDepth(5502).setAlpha(0.9);
+
+      this.tweens.add({
+        targets: particle,
+        x: centerX + Math.cos(angle) * (dist - 80),
+        y: centerY + Math.sin(angle) * (dist - 80),
+        alpha: 0,
+        scale: 0,
+        duration: 400,
+        ease: 'Power2.easeIn',
+        onComplete: () => particle.destroy()
+      });
+    }
+  }
+
+  showGasZoneWarning(message) {
+    const { width, height } = this.cameras.main;
+
+    const warningText = this.add.text(width / 2, height / 2, message, {
+      fontSize: '24px',
+      fontStyle: 'bold',
+      fill: '#ff0000',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(6000).setAlpha(0);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      scale: { from: 0.5, to: 1.2 },
+      duration: 300,
+      ease: 'Back.easeOut',
+      yoyo: true,
+      hold: 1000,
+      onComplete: () => warningText.destroy()
+    });
   }
 
   update() {
