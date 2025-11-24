@@ -424,9 +424,10 @@ export default class SnakeGame extends Phaser.Scene {
       } else {
         // 실드 없음 - 콤보 끊김 예고
         this.comboLost = true;
-        // 실드를 가졌다가 다 쓴 경우에만 NO SHIELD 표시
+        // 실드를 가졌다가 다 쓴 경우에만 NO SHIELD 표시 (최초 1회만)
         if (this.hasHadShield) {
           this.showComboLostWarning();
+          this.hasHadShield = false; // 한 번 표시 후 리셋
         }
       }
     }
@@ -1171,7 +1172,7 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 스테이지 클리어 체크 (25개 먹으면 클리어) - 보스전 중에는 비활성화
-      if (!this.bossMode && this.foodCount >= 25) {
+      if (!this.bossMode && this.foodCount >= 5) { // 임시: 테스트용 (원래 25)
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -3028,7 +3029,7 @@ export default class SnakeGame extends Phaser.Scene {
       ease: 'Back.easeOut',
       onComplete: () => {
         // 상점 조건이면 바로 상점 열기 (카운트다운은 완료 후)
-        if (this.currentStage >= 3) { // Stage 3 클리어 후 상점 오픈
+        if (this.currentStage >= 2) { // Stage 2 클리어 후 상점 오픈
           this.time.delayedCall(500, () => {
             clearText.destroy();
             this.openShop();
@@ -3673,7 +3674,14 @@ export default class SnakeGame extends Phaser.Scene {
     // 5번째 카드 우측 = cardStartX + 4 * cardSpacing + cardWidth / 2
     const lastCardRightX = cardStartX + 4 * cardSpacing + cardWidth / 2;
     const loanBtnX = lastCardRightX - loanBtnWidth / 2;
-    const nextBtnX = loanBtnX - loanBtnWidth / 2 - buttonGap - nextBtnWidth / 2;
+
+    // Loan 버튼 표시 여부 먼저 확인
+    const showLoanBtn = this.currentStage >= 6;
+
+    // Loan 버튼이 없으면 Next Stage를 우측(Loan 위치)에 배치, 있으면 왼쪽에 배치
+    const nextBtnX = showLoanBtn
+      ? loanBtnX - loanBtnWidth / 2 - buttonGap - nextBtnWidth / 2
+      : loanBtnX;
 
     // Next Stage 버튼 (모던 그라데이션 스타일)
     const nextBtnGlow = this.add.rectangle(nextBtnX, buttonY, nextBtnWidth + 8, 53, 0x00ff88, 0.3)
@@ -3700,7 +3708,6 @@ export default class SnakeGame extends Phaser.Scene {
     this.shopElements.push(nextBtnGlow, nextBtnBg, nextBtnHighlight, nextBtnText);
 
     // Loan 버튼 (Stage 6 클리어 후 오픈)
-    const showLoanBtn = this.currentStage >= 6;
     const isFirstLoan = this.currentStage === 6; // 처음 대출 기능 해금
 
     if (showLoanBtn) {
