@@ -96,8 +96,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.deadZoneGraphics = this.add.graphics(); // 데드존 그리기용
 
     // 시야 제한(Fog of War)
-    this.fogStageStart = 6;
-    this.fogTestForceEnable = true; // TODO: stage 6 적용 시 false로 전환
+    this.fogStageStart = 7;
+    this.fogTestForceEnable = false; // stage 7부터 적용
     this.fogVisibleTiles = 4.0;
     this.fogBaseAlpha = 0.94;
     this.fogFlashAlpha = 0.32;
