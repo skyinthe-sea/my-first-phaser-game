@@ -101,7 +101,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogVisibleTiles = 4.0;
     this.fogBaseAlpha = 0.94;
     this.fogFlashAlpha = 0.32;
-    this.fogFlashDuration = 900;
+    this.fogFlashDuration = 300;
     this.fogRenderTexture = null;
     this.fogLightSprite = null;
     this.fogLightTextureKey = 'fog_light_mask';
@@ -2879,6 +2879,9 @@ export default class SnakeGame extends Phaser.Scene {
   startFogIntroIfNeeded() {
     if (this.fogIntroShown || this.fogIntroPlaying || !this.shouldUseFog()) {
       this.fogEnabled = this.shouldUseFog();
+      if (this.fogEnabled) {
+        this.draw(); // 뱀이 안보이는 버그 수정 - fog 활성화 후 다시 그리기
+      }
       return;
     }
 
@@ -3007,7 +3010,7 @@ export default class SnakeGame extends Phaser.Scene {
                   if (this.moveTimer) {
                     this.moveTimer.paused = false;
                   }
-                  this.updateFogOfWar();
+                  this.draw(); // 뱀이 안보이는 버그 수정 - fog 활성화 후 다시 그리기
                 }, { x: headX, y: headY - this.gridSize * 1.8, depth: introDialogueDepth, fontSize: '14px' });
               }, null, this);
             }
@@ -8617,12 +8620,13 @@ export default class SnakeGame extends Phaser.Scene {
     this.bossPhase = 'battle';
     this.bossHitCount = 0;
 
-    // 코너 위치 설정 (4개) - 정확히 벽에 붙은 모서리
+    // TODO: 원래는 모서리 4개 - { x: 0, y: 0 }, { x: cols-1, y: 0 }, { x: 0, y: rows-1 }, { x: cols-1, y: rows-1 }
+    // 테스트용으로 중앙 부근 4군데로 변경
     this.bossCorners = [
-      { x: 0, y: 0 }, // 좌상단
-      { x: this.cols - 1, y: 0 }, // 우상단
-      { x: 0, y: this.rows - 1 }, // 좌하단
-      { x: this.cols - 1, y: this.rows - 1 } // 우하단
+      { x: Math.floor(this.cols / 3), y: Math.floor(this.rows / 3) }, // 좌상 중앙
+      { x: Math.floor(this.cols * 2 / 3), y: Math.floor(this.rows / 3) }, // 우상 중앙
+      { x: Math.floor(this.cols / 3), y: Math.floor(this.rows * 2 / 3) }, // 좌하 중앙
+      { x: Math.floor(this.cols * 2 / 3), y: Math.floor(this.rows * 2 / 3) } // 우하 중앙
     ];
 
     // 배틀 시작 메시지
