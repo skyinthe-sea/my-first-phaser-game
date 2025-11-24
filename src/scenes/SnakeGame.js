@@ -95,16 +95,18 @@ export default class SnakeGame extends Phaser.Scene {
     this.deadZones = []; // 밟으면 죽는 칸들 [{x, y, rect}]
     this.deadZoneGraphics = this.add.graphics(); // 데드존 그리기용
 
-    // 확산형 독가스 시스템 (배틀로얄 자기장)
+    // 확산형 독가스 시스템 (배틀로얄 자기장) - 원형
     this.gasZoneEnabled = false;
-    this.gasZoneLevel = 0; // 현재 독가스 레벨 (가장자리부터 몇 칸)
-    this.gasZoneMaxLevel = 0; // 최대 레벨 (동적 계산)
+    this.gasZoneRadius = 0; // 현재 안전 영역 반경 (타일 단위)
+    this.gasZoneMinRadius = 4; // 최소 반경 (게임 가능 영역)
     this.gasZoneTimer = null; // 확장 타이머
     this.gasZoneExpandInterval = 2000; // 2초마다 확장
     this.gasZoneGraphics = this.add.graphics();
     this.gasZoneGraphics.setDepth(50); // 뱀보다 아래, 그리드보다 위
     this.gasZoneParticles = []; // EMP 파티클들
     this.gasZonePulseTime = 0; // 펄스 애니메이션용
+    this.gasZoneCenterX = 0; // 원 중심 X
+    this.gasZoneCenterY = 0; // 원 중심 Y
 
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
@@ -9030,9 +9032,15 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.gasZoneEnabled) return;
 
     this.gasZoneEnabled = true;
-    this.gasZoneLevel = 0;
-    // 최대 레벨: 중앙까지 도달하면 게임 불가능 (최소 5x5 영역 남김)
-    this.gasZoneMaxLevel = Math.min(Math.floor(this.cols / 2) - 3, Math.floor(this.rows / 2) - 3);
+
+    // 원 중심 계산 (맵 중앙)
+    this.gasZoneCenterX = this.cols / 2;
+    this.gasZoneCenterY = this.rows / 2;
+
+    // 초기 반경: 맵 모서리까지의 거리 (전체 맵 커버)
+    this.gasZoneRadius = Math.sqrt(
+      Math.pow(this.cols / 2, 2) + Math.pow(this.rows / 2, 2)
+    ) + 1;
 
     // 독가스 확장 타이머 시작
     this.gasZoneTimer = this.time.addEvent({
@@ -9056,7 +9064,7 @@ export default class SnakeGame extends Phaser.Scene {
 
   stopGasZone() {
     this.gasZoneEnabled = false;
-    this.gasZoneLevel = 0;
+    this.gasZoneRadius = 0;
 
     if (this.gasZoneTimer) {
       this.gasZoneTimer.destroy();
@@ -9082,11 +9090,12 @@ export default class SnakeGame extends Phaser.Scene {
 
   expandGasZone() {
     if (!this.gasZoneEnabled) return;
-    if (this.gasZoneLevel >= this.gasZoneMaxLevel) return;
+    if (this.gasZoneRadius <= this.gasZoneMinRadius) return;
 
     // 먼저 경고 표시 후 확장
     this.showGasZonePreWarning(() => {
-      this.gasZoneLevel++;
+      // 반경 감소 (1.5 타일씩)
+      this.gasZoneRadius = Math.max(this.gasZoneMinRadius, this.gasZoneRadius - 1.5);
 
       // 확장 시 EMP 펄스 효과
       this.showGasZoneExpandEffect();
@@ -9106,34 +9115,17 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 경고 표시
-      if (this.gasZoneLevel === this.gasZoneMaxLevel - 2) {
+      if (this.gasZoneRadius <= this.gasZoneMinRadius + 3) {
         this.showGasZoneWarning('DANGER! GAS CLOSING IN!');
       }
     });
   }
 
   showGasZonePreWarning(callback) {
-    const nextLevel = this.gasZoneLevel + 1;
     const gs = this.gridSize;
-    const warningElements = [];
-
-    // 다음에 독가스가 될 영역 (경계선 한 줄)
-    // 상단 줄
-    for (let x = nextLevel - 1; x < this.cols - nextLevel + 1; x++) {
-      warningElements.push({ x, y: nextLevel - 1 });
-    }
-    // 하단 줄
-    for (let x = nextLevel - 1; x < this.cols - nextLevel + 1; x++) {
-      warningElements.push({ x, y: this.rows - nextLevel });
-    }
-    // 좌측 줄 (상하 제외)
-    for (let y = nextLevel; y < this.rows - nextLevel; y++) {
-      warningElements.push({ x: nextLevel - 1, y });
-    }
-    // 우측 줄 (상하 제외)
-    for (let y = nextLevel; y < this.rows - nextLevel; y++) {
-      warningElements.push({ x: this.cols - nextLevel, y });
-    }
+    const nextRadius = this.gasZoneRadius - 1.5;
+    const centerX = this.gasZoneCenterX;
+    const centerY = this.gasZoneCenterY;
 
     // 경고 그래픽 생성
     const warningGraphics = this.add.graphics();
@@ -9152,26 +9144,31 @@ export default class SnakeGame extends Phaser.Scene {
         if (blinkCount % 2 === 0) {
           // 경고 색상 (빨간색/노란색 교차)
           const color = blinkCount % 4 === 0 ? 0xff0000 : 0xffff00;
-          const alpha = 0.7;
 
-          warningElements.forEach(({ x, y }) => {
-            warningGraphics.fillStyle(color, alpha);
-            warningGraphics.fillRect(
-              x * gs,
-              y * gs + this.gameAreaY,
-              gs,
-              gs
-            );
-          });
+          // 다음에 독가스가 될 영역 (현재 반경과 다음 반경 사이의 링)
+          for (let x = 0; x < this.cols; x++) {
+            for (let y = 0; y < this.rows; y++) {
+              const dist = Math.sqrt(
+                Math.pow(x + 0.5 - centerX, 2) + Math.pow(y + 0.5 - centerY, 2)
+              );
+              // 다음 반경과 현재 반경 사이의 타일만
+              if (dist > nextRadius && dist <= this.gasZoneRadius) {
+                warningGraphics.fillStyle(color, 0.7);
+                warningGraphics.fillRect(
+                  x * gs,
+                  y * gs + this.gameAreaY,
+                  gs,
+                  gs
+                );
+              }
+            }
+          }
 
-          // 경계선 강조
-          warningGraphics.lineStyle(2, 0xffffff, 0.9);
-          warningGraphics.strokeRect(
-            (nextLevel - 1) * gs,
-            (nextLevel - 1) * gs + this.gameAreaY,
-            (this.cols - (nextLevel - 1) * 2) * gs,
-            (this.rows - (nextLevel - 1) * 2) * gs
-          );
+          // 원형 경계선 강조
+          const pixelCenterX = centerX * gs;
+          const pixelCenterY = centerY * gs + this.gameAreaY;
+          warningGraphics.lineStyle(3, 0xffffff, 0.9);
+          warningGraphics.strokeCircle(pixelCenterX, pixelCenterY, nextRadius * gs);
         }
 
         blinkCount++;
@@ -9186,42 +9183,47 @@ export default class SnakeGame extends Phaser.Scene {
       loop: true
     });
 
-    // 경고 사운드 효과 (시각적 피드백만)
-    // 화면 가장자리 빨간 글로우
-    const edgeGlow = this.add.rectangle(
-      this.cameras.main.width / 2,
-      this.cameras.main.height / 2,
-      this.cameras.main.width,
-      this.cameras.main.height,
-      0xff0000, 0
-    ).setDepth(54).setStrokeStyle(8, 0xff0000, 0.8);
+    // 원형 글로우 효과
+    const pixelCenterX = centerX * gs;
+    const pixelCenterY = centerY * gs + this.gameAreaY;
+    const glowCircle = this.add.graphics();
+    glowCircle.setDepth(54);
+    glowCircle.lineStyle(6, 0xff0000, 0.8);
+    glowCircle.strokeCircle(pixelCenterX, pixelCenterY, this.gasZoneRadius * gs);
 
     this.tweens.add({
-      targets: edgeGlow,
+      targets: glowCircle,
       alpha: { from: 0.8, to: 0 },
       duration: maxBlinks * blinkInterval,
       ease: 'Power2.easeIn',
-      onComplete: () => edgeGlow.destroy()
+      onComplete: () => glowCircle.destroy()
     });
   }
 
   isInGasZone(x, y) {
-    if (!this.gasZoneEnabled || this.gasZoneLevel === 0) return false;
+    if (!this.gasZoneEnabled) return false;
 
-    const level = this.gasZoneLevel;
-    return x < level || x >= this.cols - level ||
-           y < level || y >= this.rows - level;
+    // 타일 중심에서 원 중심까지의 거리 계산
+    const dist = Math.sqrt(
+      Math.pow(x + 0.5 - this.gasZoneCenterX, 2) +
+      Math.pow(y + 0.5 - this.gasZoneCenterY, 2)
+    );
+
+    // 반경 밖이면 독가스 영역
+    return dist > this.gasZoneRadius;
   }
 
   renderGasZone() {
     if (!this.gasZoneGraphics) return;
     this.gasZoneGraphics.clear();
 
-    if (!this.gasZoneEnabled || this.gasZoneLevel === 0) return;
+    if (!this.gasZoneEnabled) return;
 
-    const level = this.gasZoneLevel;
+    const radius = this.gasZoneRadius;
     const time = this.gasZonePulseTime;
     const gs = this.gridSize;
+    const centerX = this.gasZoneCenterX;
+    const centerY = this.gasZoneCenterY;
 
     // 펄스 효과를 위한 알파값 변동
     const pulseAlpha = 0.6 + Math.sin(time * 0.005) * 0.15;
@@ -9233,82 +9235,65 @@ export default class SnakeGame extends Phaser.Scene {
     const b = Math.floor(180 + Math.sin(colorPhase + 4) * 60);
     const baseColor = (r << 16) | (g << 8) | b;
 
-    // 최적화: 4개의 큰 사각형으로 독가스 영역 그리기
-    const levelPx = level * gs;
-    const gameWidth = this.cols * gs;
-    const gameHeight = this.rows * gs;
+    // 원형 독가스 영역 그리기 (반경 밖의 타일들)
+    for (let x = 0; x < this.cols; x++) {
+      for (let y = 0; y < this.rows; y++) {
+        const dist = Math.sqrt(
+          Math.pow(x + 0.5 - centerX, 2) + Math.pow(y + 0.5 - centerY, 2)
+        );
 
-    // 상단 영역
-    this.gasZoneGraphics.fillStyle(baseColor, pulseAlpha);
-    this.gasZoneGraphics.fillRect(0, this.gameAreaY, gameWidth, levelPx);
+        if (dist > radius) {
+          // 거리에 따른 알파값 (경계에서 멀수록 진함)
+          const distFromEdge = dist - radius;
+          const distAlpha = Math.min(1, distFromEdge / 3) * pulseAlpha;
 
-    // 하단 영역
-    this.gasZoneGraphics.fillRect(0, this.gameAreaY + gameHeight - levelPx, gameWidth, levelPx);
+          this.gasZoneGraphics.fillStyle(baseColor, distAlpha);
+          this.gasZoneGraphics.fillRect(
+            x * gs,
+            y * gs + this.gameAreaY,
+            gs,
+            gs
+          );
+        }
+      }
+    }
 
-    // 좌측 영역 (상하 제외)
-    this.gasZoneGraphics.fillRect(0, this.gameAreaY + levelPx, levelPx, gameHeight - levelPx * 2);
-
-    // 우측 영역 (상하 제외)
-    this.gasZoneGraphics.fillRect(gameWidth - levelPx, this.gameAreaY + levelPx, levelPx, gameHeight - levelPx * 2);
-
-    // 경계선 강조 (사각형 형태)
+    // 원형 경계선 강조
+    const pixelCenterX = centerX * gs;
+    const pixelCenterY = centerY * gs + this.gameAreaY;
     const edgeAlpha = 0.8 + Math.sin(time * 0.01) * 0.2;
+
     this.gasZoneGraphics.lineStyle(3, 0x00ffff, edgeAlpha);
-    this.gasZoneGraphics.strokeRect(
-      levelPx,
-      this.gameAreaY + levelPx,
-      gameWidth - levelPx * 2,
-      gameHeight - levelPx * 2
-    );
+    this.gasZoneGraphics.strokeCircle(pixelCenterX, pixelCenterY, radius * gs);
 
     // 내부 글로우 효과 (두 번째 경계선)
     const innerGlow = 0.4 + Math.sin(time * 0.008) * 0.2;
     this.gasZoneGraphics.lineStyle(1, 0xff00ff, innerGlow);
-    this.gasZoneGraphics.strokeRect(
-      levelPx - gs / 2,
-      this.gameAreaY + levelPx - gs / 2,
-      gameWidth - levelPx * 2 + gs,
-      gameHeight - levelPx * 2 + gs
-    );
+    this.gasZoneGraphics.strokeCircle(pixelCenterX, pixelCenterY, (radius + 0.5) * gs);
 
-    // 전기 스파크 효과 (경계선에서)
-    this.renderGasZoneSparks(level, time);
+    // 전기 스파크 효과 (원형 경계선에서)
+    this.renderGasZoneSparks(radius, time);
   }
 
-  renderGasZoneSparks(level, time) {
-    if (level === 0) return;
+  renderGasZoneSparks(radius, time) {
+    if (radius <= 0) return;
 
-    const sparkCount = 8;
+    const gs = this.gridSize;
+    const centerX = this.gasZoneCenterX;
+    const centerY = this.gasZoneCenterY;
+    const pixelCenterX = centerX * gs;
+    const pixelCenterY = centerY * gs + this.gameAreaY;
+
+    const sparkCount = 12;
     for (let i = 0; i < sparkCount; i++) {
       const sparkPhase = (time * 0.008 + i * (Math.PI * 2 / sparkCount)) % (Math.PI * 2);
       const sparkIntensity = Math.pow(Math.sin(sparkPhase), 4);
 
       if (sparkIntensity > 0.3) {
-        // 경계선 위의 랜덤 위치
-        let sparkX, sparkY;
-        const side = Math.floor((time * 0.001 + i) % 4);
-
-        switch (side) {
-          case 0: // 상단
-            sparkX = level + Math.random() * (this.cols - level * 2);
-            sparkY = level;
-            break;
-          case 1: // 우측
-            sparkX = this.cols - level;
-            sparkY = level + Math.random() * (this.rows - level * 2);
-            break;
-          case 2: // 하단
-            sparkX = level + Math.random() * (this.cols - level * 2);
-            sparkY = this.rows - level;
-            break;
-          case 3: // 좌측
-            sparkX = level;
-            sparkY = level + Math.random() * (this.rows - level * 2);
-            break;
-        }
-
-        const px = sparkX * this.gridSize;
-        const py = sparkY * this.gridSize + this.gameAreaY;
+        // 원형 경계선 위의 위치 (각도 기반)
+        const angle = (time * 0.002 + i * (Math.PI * 2 / sparkCount)) % (Math.PI * 2);
+        const px = pixelCenterX + Math.cos(angle) * radius * gs;
+        const py = pixelCenterY + Math.sin(angle) * radius * gs;
 
         // 스파크 글로우
         this.gasZoneGraphics.fillStyle(0x00ffff, sparkIntensity * 0.8);
@@ -9329,6 +9314,7 @@ export default class SnakeGame extends Phaser.Scene {
 
   showGasZoneExpandEffect() {
     const { width, height } = this.cameras.main;
+    const gs = this.gridSize;
 
     // 화면 전체 EMP 플래시
     const flash = this.add.rectangle(
@@ -9344,39 +9330,34 @@ export default class SnakeGame extends Phaser.Scene {
       onComplete: () => flash.destroy()
     });
 
-    // 경계선에서 안쪽으로 확장되는 링 효과
-    const centerX = width / 2;
-    const centerY = this.gameAreaY + (this.rows * this.gridSize) / 2;
+    // 원형 수축 링 효과
+    const centerX = this.gasZoneCenterX * gs;
+    const centerY = this.gasZoneCenterY * gs + this.gameAreaY;
 
     const ring = this.add.graphics();
     ring.setDepth(5501);
 
-    let ringSize = Math.max(width, height);
-    const targetSize = (this.cols - this.gasZoneLevel * 2) * this.gridSize;
+    const startRadius = (this.gasZoneRadius + 1.5) * gs;
+    const targetRadius = this.gasZoneRadius * gs;
 
     this.tweens.add({
-      targets: { size: ringSize },
-      size: targetSize,
+      targets: { radius: startRadius },
+      radius: targetRadius,
       duration: 400,
       ease: 'Power2.easeIn',
       onUpdate: (tween) => {
-        const size = tween.targets[0].size;
+        const r = tween.targets[0].radius;
         ring.clear();
         ring.lineStyle(4, 0xff00ff, 0.8 * (1 - tween.progress));
-        ring.strokeRect(
-          centerX - size / 2,
-          centerY - size / 2,
-          size,
-          size
-        );
+        ring.strokeCircle(centerX, centerY, r);
       },
       onComplete: () => ring.destroy()
     });
 
-    // 전기 파티클 폭발
-    for (let i = 0; i < 12; i++) {
-      const angle = (i / 12) * Math.PI * 2;
-      const dist = 50 + Math.random() * 100;
+    // 전기 파티클 폭발 (원형으로 안쪽으로)
+    for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2;
+      const dist = this.gasZoneRadius * gs + 20;
 
       const particle = this.add.circle(
         centerX + Math.cos(angle) * dist,
@@ -9387,8 +9368,8 @@ export default class SnakeGame extends Phaser.Scene {
 
       this.tweens.add({
         targets: particle,
-        x: centerX + Math.cos(angle) * (dist - 80),
-        y: centerY + Math.sin(angle) * (dist - 80),
+        x: centerX + Math.cos(angle) * (dist - 60),
+        y: centerY + Math.sin(angle) * (dist - 60),
         alpha: 0,
         scale: 0,
         duration: 400,
