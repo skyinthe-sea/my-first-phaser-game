@@ -355,14 +355,6 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     this.startFogIntroIfNeeded();
-
-    // 테스트용: Stage 1에서 독가스 시스템 활성화 (게임 시작 1초 후)
-    // TODO: 테스트 후 적절한 스테이지로 변경 필요
-    if (this.currentStage === 1) {
-      this.time.delayedCall(1000, () => {
-        this.startGasZone();
-      });
-    }
   }
 
   drawGrid() {
@@ -3570,9 +3562,8 @@ export default class SnakeGame extends Phaser.Scene {
     // 스테이지 6에서 처음 진입 시 안개 인트로 실행
     this.startFogIntroIfNeeded();
 
-    // 테스트용: Stage 1에서 독가스 시스템 활성화
-    // TODO: 테스트 후 적절한 스테이지로 변경 필요
-    if (this.currentStage === 1) {
+    // Stage 8: 원형 독가스 자기장 시스템 활성화
+    if (this.currentStage === 8) {
       this.time.delayedCall(1000, () => {
         this.startGasZone();
       });

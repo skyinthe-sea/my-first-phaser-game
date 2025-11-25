@@ -1,6 +1,6 @@
 # Snake Game - Phaser 3
 
-> Last updated: 2025-11-24
+> Last updated: 2025-11-25
 
 ## 프로젝트 개요
 Phaser 3 기반 Snake 게임. 스테이지 시스템, 콤보, 아이템, 데드존, 상점, 대출 시스템 등 다양한 기능이 포함된 클래식 게임.
@@ -51,6 +51,8 @@ my-phaser-game/
 | 보스전 | Stage 3, 6, 9... | 매 3스테이지마다 |
 | 데드존 | Stage 4+ | 9번째 먹이 시 생성 |
 | 대출 기능 | Stage 6 클리어 후 | NEW 뱃지와 함께 등장 |
+| 안개(Fog of War) | Stage 7 | 시야 제한 |
+| 원형 독가스 자기장 | Stage 8 | 배틀로얄 스타일 맵 축소 |
 
 ---
 
@@ -289,6 +291,58 @@ my-phaser-game/
 - 보스 디자인: 보라색 몸체 + 4개 뿔 (마젠타색)
 - 펄스 애니메이션으로 위협적인 느낌
 
+### 12. 원형 독가스 자기장 시스템 (Stage 8)
+
+#### 개요
+- 배틀로얄 스타일의 맵 축소 메커니즘
+- 맵 중앙을 기준으로 원형으로 안전 영역이 좁혀짐
+- 2초마다 반경 1.5 타일씩 감소
+- 최소 반경 4 타일까지 축소
+
+#### 시작 조건
+- Stage 8 시작 1초 후 자동 활성화
+- 초기 반경: 맵 모서리까지 커버 (전체 맵)
+- 원 중심: 맵 정중앙 (cols/2, rows/2)
+
+#### 확장(수축) 프로세스
+1. **경고 단계** (약 0.5초)
+   - 다음에 독가스가 될 영역이 빨간색/노란색으로 6번 깜빡임 (80ms 간격)
+   - 원형 경계선에 흰색 강조
+   - 화면 가장자리 빨간 글로우 효과
+   - 경고 중에는 게임 진행
+
+2. **확장(수축) 실행**
+   - EMP 플래시 효과 (시안색)
+   - 원형 수축 링 애니메이션
+   - 16개 전기 파티클이 경계선에서 안쪽으로 수축
+   - 반경 1.5 타일 감소
+
+3. **먹이 재배치**
+   - 먹이가 독가스 영역에 포함되면 자동으로 안전 영역에 재생성
+   - foodCount 증가 없음 (카운트 페널티 없음)
+
+#### 비주얼 효과
+- **독가스 색상**: EMP 스타일 그라데이션 (시안/마젠타/보라)
+- **펄스 애니메이션**: 알파값 변동 (0.6 ~ 0.75)
+- **경계선**:
+  - 주 경계선: 시안색 (3px, 알파 0.8 ~ 1.0)
+  - 내부 글로우: 마젠타색 (1px, 알파 0.4 ~ 0.6)
+- **전기 스파크**: 12개의 스파크가 원형 경계선을 따라 회전
+- **60fps 독립 타이머**: 부드러운 애니메이션
+
+#### 충돌 규칙
+- 뱀이 독가스 영역에 진입하면 즉시 게임 오버
+- 먹이는 독가스 영역에 생성되지 않음
+- 데드존과 별개로 동작 (중첩 가능)
+
+#### 경고 메시지
+- 반경이 최소+3 이하로 줄어들면 "DANGER! GAS CLOSING IN!" 표시
+
+#### 성능 최적화
+- 타일별 거리 계산으로 원형 렌더링
+- 반경 밖의 타일만 독가스로 표시
+- 거리에 따른 알파 그라데이션 (경계에서 멀수록 진함)
+
 ---
 
 ## 주요 변수
@@ -384,6 +438,21 @@ this.bossStageInterval = 3             // 보스 스테이지 간격
 this.testBossStage = 3                 // 보스 스테이지 (3, 6, 9...)
 ```
 
+### 원형 독가스 자기장 시스템
+```javascript
+this.gasZoneEnabled = false            // 자기장 활성화 여부
+this.gasZoneRadius = 0                 // 현재 안전 영역 반경 (타일 단위)
+this.gasZoneMinRadius = 4              // 최소 반경 (게임 가능 영역)
+this.gasZoneTimer = null               // 확장 타이머
+this.gasZoneExpandInterval = 2000      // 2초마다 확장
+this.gasZoneGraphics = null            // 독가스 그래픽 객체
+this.gasZoneParticles = []             // EMP 파티클들
+this.gasZonePulseTime = 0              // 펄스 애니메이션용 타이머
+this.gasZoneCenterX = 0                // 원 중심 X (타일)
+this.gasZoneCenterY = 0                // 원 중심 Y (타일)
+this.gasZoneAnimTimer = null           // 60fps 애니메이션 타이머
+```
+
 ---
 
 ## 주요 함수
@@ -459,6 +528,18 @@ this.testBossStage = 3                 // 보스 스테이지 (3, 6, 9...)
 - `handleBossFinalHit()` - 마지막 히트 (슬로우모션)
 - `showBossVictory()` - 보스 클리어 처리
 
+### 원형 독가스 자기장
+- `startGasZone()` - 자기장 시스템 시작
+- `stopGasZone()` - 자기장 시스템 정지 (스테이지 리셋 시)
+- `expandGasZone()` - 자기장 확장 (반경 감소)
+- `isInGasZone(x, y)` - 해당 좌표가 독가스 영역인지 체크
+- `renderGasZone()` - 독가스 영역 렌더링
+- `renderGasZoneSparks()` - 전기 스파크 효과
+- `updateGasZoneAnimation()` - 60fps 애니메이션 업데이트
+- `showGasZonePreWarning()` - 확장 전 경고 표시
+- `showGasZoneExpandEffect()` - 확장 시 EMP 효과
+- `showGasZoneWarning()` - 위험 경고 메시지
+
 ---
 
 ## 스테이지별 특징
@@ -471,6 +552,8 @@ this.testBossStage = 3                 // 보스 스테이지 (3, 6, 9...)
 | 4 | 100ms | 1개 | 2회 | O | X | 9번째 먹이 시 데드존 |
 | 5 | 90ms | +2개 | 2회 | O | X | 스테이지 시작 시 데드존 추가 |
 | 6 | 더 빠름 | +2개 | 2회 | O | O | **보스 스테이지**, 대출 기능 해금 (NEW 뱃지) |
+| 7 | - | - | - | O | O | **안개(Fog of War)** - 시야 제한 |
+| 8 | - | - | - | O | O | **원형 독가스 자기장** - 2초마다 반경 축소 |
 | 9,12,15... | - | - | - | O | O | **보스 스테이지** |
 
 ---
@@ -508,5 +591,9 @@ const earnedScore = Math.floor(10 * comboMultiplier);
 - `currentStage === 4` - Stage 4에서 첫 데드존 (9번째 먹이)
 - `currentStage === 5` - Stage 5에서 추가 데드존 2개
 - `currentStage >= 6` - Stage 6 클리어 후 대출 기능
+- `currentStage >= 7` - Stage 7부터 안개(Fog of War)
+- `currentStage === 8` - Stage 8에서 원형 독가스 자기장 활성화
 - `bossHitCount >= 4` - 보스 먹이 4개로 클리어
 - `testBossStage = 3` - Stage 3부터 보스전 (매 3스테이지)
+- `gasZoneExpandInterval = 2000` - 자기장 2초마다 확장
+- `gasZoneMinRadius = 4` - 자기장 최소 반경 4 타일
