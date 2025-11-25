@@ -6,9 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "clean": "rimraf dist node_modules/.vite .vite",
+    "clean:all": "rimraf dist node_modules/.vite .vite node_modules && npm install",
+    "fresh": "npm run clean && npm run dev"
   },
   "devDependencies": {
+    "rimraf": "^6.1.2",
     "vite": "^7.2.2"
   },
   "dependencies": {

@@ -94,6 +94,11 @@ export default class SnakeGame extends Phaser.Scene {
     // 데드존 시스템 (stage 3부터) - generateFood()보다 먼저 초기화!
     this.deadZones = []; // 밟으면 죽는 칸들 [{x, y, rect}]
     this.deadZoneGraphics = this.add.graphics(); // 데드존 그리기용
+    // Moving dead zone (saws)
+    this.saws = []; // [{ x, y, container, blade, warningRing, spinTween, pulseTween, breathTween, moveDelay, canKill, nextPosition, lastDirection, nextStepSize, moveTimer }]
+    this.sawTextureKey = 'deadly_saw';
+    this.sawBaseDelay = 600;
+    this.maxSaws = 5;
 
     // 확산형 독가스 시스템 (배틀로얄 자기장) - 원형
     this.gasZoneEnabled = false;
@@ -501,8 +506,9 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 독가스 영역과 겹치지 않는지 체크
       const notOnGasZone = !this.isInGasZone(foodPos.x, foodPos.y);
+      const notOnSaw = !this.isSawOccupyingTile(foodPos.x, foodPos.y);
 
-      validPosition = notOnSnake && notOnDeadZone && notOnGasZone;
+      validPosition = notOnSnake && notOnDeadZone && notOnGasZone && notOnSaw;
     }
 
     // 먹이가 벽에 붙어있으면 말풍선 표시
@@ -983,6 +989,11 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
+    if (this.isSawTileDanger(newHead.x, newHead.y)) {
+      this.endGame();
+      return;
+    }
+
     // 독가스 영역 충돌 체크
     if (this.isInGasZone(newHead.x, newHead.y)) {
       this.endGame();
@@ -1055,6 +1066,11 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       this.foodCount++;
+
+      // Stage 9: 톱니 생성 (매 먹이마다 1개씩, 최대 5개)
+      if (this.currentStage === 9 && !this.bossMode) {
+        this.spawnSaw();
+      }
 
       // 9번째 먹이 먹으면 데드존 생성 시퀀스 시작 (stage 4에만)
       if (this.foodCount === 9 && this.currentStage === 4) {
@@ -2459,6 +2475,497 @@ export default class SnakeGame extends Phaser.Scene {
 
   // ==================== 데드존 시스템 ====================
 
+  // ==================== Moving Dead Zone (Saw) ====================
+  ensureSawTexture() {
+    if (this.textures.exists(this.sawTextureKey)) return;
+
+    const size = 96;
+    const center = size / 2;
+    const spikes = 16;
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+    g.fillStyle(0xdedede, 1);
+    g.lineStyle(3, 0x550000, 0.6);
+    g.beginPath();
+    for (let i = 0; i < spikes; i++) {
+      const angle = (Math.PI * 2 * i) / spikes;
+      const radius = i % 2 === 0 ? size * 0.48 : size * 0.32;
+      const px = center + Math.cos(angle) * radius;
+      const py = center + Math.sin(angle) * radius;
+      if (i === 0) {
+        g.moveTo(px, py);
+      } else {
+        g.lineTo(px, py);
+      }
+    }
+    g.closePath();
+    g.fillPath();
+    g.strokePath();
+
+    g.fillStyle(0x3c3c3c, 1);
+    g.fillCircle(center, center, size * 0.18);
+    g.fillStyle(0xff0000, 0.85);
+    g.fillCircle(center, center, size * 0.08);
+    g.lineStyle(2, 0xffffff, 0.2);
+    g.strokeCircle(center, center, size * 0.42);
+
+    g.generateTexture(this.sawTextureKey, size, size);
+    g.destroy();
+  }
+
+  isSawOccupyingTile(x, y) {
+    return this.saws.some(saw => {
+      if (!saw) return false;
+      if (saw.x === x && saw.y === y) return true;
+      if (saw.nextPosition && saw.nextPosition.x === x && saw.nextPosition.y === y) return true;
+      return false;
+    });
+  }
+
+  isSawTileDanger(x, y) {
+    return this.saws.some(saw => saw && saw.canKill && (
+      (saw.x === x && saw.y === y) ||
+      (saw.nextPosition && saw.nextPosition.x === x && saw.nextPosition.y === y)
+    ));
+  }
+
+  getSawSpawnPosition() {
+    const attempts = 100;
+    for (let i = 0; i < attempts; i++) {
+      const pos = {
+        x: Phaser.Math.Between(0, this.cols - 1),
+        y: Phaser.Math.Between(0, this.rows - 1)
+      };
+
+      if (this.isSawOccupyingTile(pos.x, pos.y)) continue;
+
+      const notOnSnake = !this.snake.some(segment =>
+        segment.x === pos.x && segment.y === pos.y
+      );
+      const notOnFood = !(pos.x === this.food.x && pos.y === this.food.y);
+      const notOnGas = !this.isInGasZone(pos.x, pos.y);
+      const notOnDeadZone = !this.deadZones.some(dz => dz.x === pos.x && dz.y === pos.y);
+
+      const snakeHead = this.snake[0];
+      let nextX = snakeHead.x;
+      let nextY = snakeHead.y;
+      switch (this.direction) {
+        case 'LEFT': nextX -= 1; break;
+        case 'RIGHT': nextX += 1; break;
+        case 'UP': nextY -= 1; break;
+        case 'DOWN': nextY += 1; break;
+      }
+      const notInFrontOfSnake = !(pos.x === nextX && pos.y === nextY);
+
+      if (notOnSnake && notOnFood && notOnGas && notOnDeadZone && notInFrontOfSnake) {
+        return pos;
+      }
+    }
+
+    return null;
+  }
+
+  spawnSaw() {
+    if (this.gameOver) return;
+    if (this.saws.length >= this.maxSaws) return;
+
+    this.ensureSawTexture();
+
+    const pos = this.getSawSpawnPosition();
+    if (!pos) return;
+
+    const centerX = pos.x * this.gridSize + this.gridSize / 2;
+    const centerY = pos.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const container = this.add.container(centerX, centerY);
+    container.setDepth(120);
+    container.setScale(0.2);
+    container.setAlpha(0);
+
+    const shadow = this.add.ellipse(0, this.gridSize * 0.18, this.gridSize + 10, this.gridSize / 2, 0x000000, 0.45);
+    const aura = this.add.circle(0, 0, this.gridSize * 0.8, 0x5c0000, 0.32);
+    aura.setBlendMode(Phaser.BlendModes.ADD);
+    const warningRing = this.add.circle(0, 0, this.gridSize * 0.9, 0xff0000, 0);
+    warningRing.setStrokeStyle(2, 0xff0000, 1);
+    warningRing.setScale(1.8);
+
+    const blade = this.add.image(0, 0, this.sawTextureKey);
+    blade.setScale(this.gridSize / 78);
+    blade.setTint(0xffffff);
+
+    const core = this.add.circle(0, 0, this.gridSize * 0.22, 0xffffff, 0.9);
+    core.setStrokeStyle(1, 0xff0000, 0.8);
+
+    container.add([shadow, aura, warningRing, blade, core]);
+
+    const saw = {
+      x: pos.x,
+      y: pos.y,
+      container,
+      blade,
+      warningRing,
+      moveDelay: this.sawBaseDelay,
+      canKill: false,
+      nextPosition: null,
+      lastDirection: null,
+      nextStepSize: 1,
+      spinTween: null,
+      pulseTween: null,
+      breathTween: null,
+      moveTimer: null
+    };
+
+    this.saws.push(saw);
+    this.animateSawSpawn(saw);
+  }
+
+  animateSawSpawn(saw) {
+    if (!saw) return;
+
+    const { container, blade, warningRing } = saw;
+
+    const spawnFlash = this.add.rectangle(container.x, container.y, this.gridSize * 3.2, this.gridSize * 3.2, 0xff0000, 0.55)
+      .setDepth(140)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({
+      targets: spawnFlash,
+      alpha: 0,
+      scaleX: 2.2,
+      scaleY: 2.2,
+      duration: 220,
+      ease: 'Quad.easeOut',
+      onComplete: () => spawnFlash.destroy()
+    });
+
+    saw.spinTween = this.tweens.add({
+      targets: blade,
+      angle: 360,
+      duration: 260,
+      repeat: -1,
+      ease: 'Linear'
+    });
+
+    saw.pulseTween = this.tweens.add({
+      targets: container,
+      scaleX: { from: 0.2, to: 1.2 },
+      scaleY: { from: 0.2, to: 1.2 },
+      alpha: { from: 0, to: 1 },
+      duration: 420,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        warningRing.setScale(1);
+        this.tweens.add({
+          targets: warningRing,
+          scale: { from: 1.4, to: 1 },
+          alpha: { from: 1, to: 0 },
+          duration: 320,
+          ease: 'Quad.easeOut'
+        });
+        saw.canKill = true;
+        this.startSawMovement(saw);
+      }
+    });
+
+    saw.breathTween = this.tweens.add({
+      targets: container,
+      scaleX: 1.02,
+      scaleY: 0.98,
+      duration: 260,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+      delay: 300
+    });
+
+    this.tweens.add({
+      targets: container,
+      angle: { from: Phaser.Math.Between(-65, 65), to: Phaser.Math.Between(-5, 5) },
+      duration: 520,
+      ease: 'Sine.easeOut'
+    });
+
+    this.tweens.add({
+      targets: warningRing,
+      alpha: { from: 0, to: 0.7 },
+      duration: 180,
+      yoyo: true,
+      ease: 'Quad.easeIn'
+    });
+
+    const impactRing = this.add.circle(container.x, container.y, this.gridSize * 1.4, 0xff0000, 0.12).setDepth(135);
+    impactRing.setStrokeStyle(4, 0xffffff, 0.8);
+    this.tweens.add({
+      targets: impactRing,
+      scale: 2.3,
+      alpha: 0,
+      duration: 360,
+      ease: 'Cubic.easeOut',
+      onComplete: () => impactRing.destroy()
+    });
+
+    this.time.delayedCall(120, () => {
+      if (!this.cameras || !this.cameras.main) return;
+      this.cameras.main.shake(110, 0.003);
+    });
+  }
+
+  flashSawEnraged(saw) {
+    if (!saw) return;
+
+    const { container, warningRing } = saw;
+
+    this.tweens.add({
+      targets: container,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      duration: 100,
+      yoyo: true,
+      ease: 'Quad.easeOut'
+    });
+
+    if (warningRing) {
+      this.tweens.add({
+        targets: warningRing,
+        scale: { from: 1, to: 1.6 },
+        alpha: { from: 0.8, to: 0 },
+        duration: 200,
+        ease: 'Quad.easeOut'
+      });
+    }
+
+    if (saw.spinTween) {
+      saw.spinTween.timeScale = 1.5;
+      this.time.delayedCall(200, () => {
+        if (saw && saw.spinTween) {
+          saw.spinTween.timeScale = 1;
+        }
+      });
+    }
+  }
+
+  startSawMovement(saw) {
+    if (!saw) return;
+
+    if (saw.moveTimer) {
+      saw.moveTimer.remove();
+    }
+
+    saw.moveTimer = this.time.addEvent({
+      delay: saw.moveDelay,
+      loop: true,
+      callback: () => this.moveSaw(saw)
+    });
+  }
+
+  chooseSawTarget(saw, stepSize = 1) {
+    if (!saw) return null;
+
+    const dirs = Phaser.Utils.Array.Shuffle([
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 }
+    ]);
+
+    for (const dir of dirs) {
+      let tx = saw.x;
+      let ty = saw.y;
+      let valid = true;
+
+      for (let i = 0; i < stepSize; i++) {
+        tx += dir.dx;
+        ty += dir.dy;
+
+        if (tx < 0 || tx >= this.cols || ty < 0 || ty >= this.rows) {
+          valid = false;
+          break;
+        }
+
+        if (this.isInGasZone(tx, ty)) {
+          valid = false;
+          break;
+        }
+      }
+
+      if (!valid) continue;
+
+      if (this.deadZones.some(dz => dz.x === tx && dz.y === ty)) {
+        continue;
+      }
+
+      if (this.isSawOccupyingTile(tx, ty)) {
+        continue;
+      }
+
+      return { x: tx, y: ty, dx: dir.dx, dy: dir.dy };
+    }
+
+    if (stepSize > 1) {
+      return this.chooseSawTarget(saw, 1);
+    }
+
+    return null;
+  }
+
+  createSawTrail(fromX, fromY, toX, toY) {
+    const angle = Math.atan2(toY - fromY, toX - fromX);
+    const midX = Phaser.Math.Linear(fromX, toX, 0.5);
+    const midY = Phaser.Math.Linear(fromY, toY, 0.5);
+    const length = Phaser.Math.Distance.Between(fromX, fromY, toX, toY) + this.gridSize * 0.9;
+
+    const slash = this.add.rectangle(midX, midY, length, 8, 0xff0000, 0.9)
+      .setDepth(115)
+      .setAngle(Phaser.Math.RadToDeg(angle));
+    slash.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+      targets: slash,
+      alpha: 0,
+      scaleY: 2.4,
+      duration: 200,
+      ease: 'Quad.easeOut',
+      onComplete: () => slash.destroy()
+    });
+
+    const spark = this.add.circle(toX, toY, 6, 0xffffff, 0.95).setDepth(115);
+    this.tweens.add({
+      targets: spark,
+      alpha: 0,
+      scale: 0.3,
+      duration: 150,
+      ease: 'Cubic.easeOut',
+      onComplete: () => spark.destroy()
+    });
+
+    const echo = this.add.rectangle(midX, midY, length * 0.8, 4, 0xff8800, 0.35)
+      .setDepth(110)
+      .setAngle(Phaser.Math.RadToDeg(angle));
+    echo.setBlendMode(Phaser.BlendModes.SCREEN);
+    this.tweens.add({
+      targets: echo,
+      alpha: 0,
+      scaleY: 1.8,
+      duration: 260,
+      ease: 'Quad.easeOut',
+      onComplete: () => echo.destroy()
+    });
+  }
+
+  moveSaw(saw, forceLunge = false) {
+    if (!saw || this.gameOver) return;
+    if (this.moveTimer && this.moveTimer.paused) return;
+
+    const stepSize = Math.max(1, forceLunge ? Math.max(2, saw.nextStepSize || 1) : (saw.nextStepSize || 1));
+    saw.nextStepSize = 1;
+
+    const target = this.chooseSawTarget(saw, stepSize);
+    if (!target) return;
+
+    saw.nextPosition = { x: target.x, y: target.y };
+    saw.lastDirection = { dx: target.dx, dy: target.dy };
+
+    const fromX = saw.container.x;
+    const fromY = saw.container.y;
+    const toX = target.x * this.gridSize + this.gridSize / 2;
+    const toY = target.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    this.createSawTrail(fromX, fromY, toX, toY);
+
+    this.tweens.add({
+      targets: saw.container,
+      x: toX,
+      y: toY,
+      duration: Math.max(150, saw.moveDelay * 0.55),
+      ease: 'Sine.easeInOut',
+      onStart: () => {
+        this.tweens.add({
+          targets: saw.container,
+          scaleX: 1.12,
+          scaleY: 0.9,
+          duration: 110,
+          yoyo: true,
+          repeat: 1
+        });
+        if (saw.spinTween) {
+          saw.spinTween.timeScale = 1.3;
+        }
+      },
+      onComplete: () => {
+        if (saw.spinTween) {
+          saw.spinTween.timeScale = 1;
+        }
+        saw.x = target.x;
+        saw.y = target.y;
+        saw.nextPosition = null;
+        this.handleSawCrossedFood(saw, target);
+        this.checkSawCollisionWithSnake(saw);
+      }
+    });
+
+    this.time.delayedCall(40, () => {
+      if (!this.cameras || !this.cameras.main) return;
+      this.cameras.main.shake(60, 0.0015);
+    });
+  }
+
+  handleSawCrossedFood(saw, target) {
+    if (!saw || !this.food) return;
+
+    if (target.x === this.food.x && target.y === this.food.y) {
+      saw.moveDelay = Math.max(60, saw.moveDelay - 5);
+      if (saw.moveTimer) {
+        saw.moveTimer.delay = saw.moveDelay;
+      }
+      saw.nextStepSize = 2;
+      this.flashSawEnraged(saw);
+
+      this.time.delayedCall(80, () => this.moveSaw(saw, true));
+    }
+  }
+
+  checkSawCollisionWithSnake(saw) {
+    if (!saw || !saw.canKill) return;
+
+    const hitSnake = this.snake.some(segment => segment.x === saw.x && segment.y === saw.y);
+    if (hitSnake) {
+      this.endGame();
+    }
+  }
+
+  destroySaw(saw) {
+    if (!saw) return;
+
+    if (saw.moveTimer) {
+      saw.moveTimer.remove();
+      saw.moveTimer = null;
+    }
+
+    if (saw.spinTween) {
+      saw.spinTween.remove();
+    }
+    if (saw.pulseTween) {
+      saw.pulseTween.remove();
+    }
+    if (saw.breathTween) {
+      saw.breathTween.remove();
+    }
+
+    if (saw.container) {
+      saw.container.destroy(true);
+    }
+
+    const idx = this.saws.indexOf(saw);
+    if (idx >= 0) {
+      this.saws.splice(idx, 1);
+    }
+  }
+
+  destroyAllSaws() {
+    const clones = [...this.saws];
+    clones.forEach(saw => this.destroySaw(saw));
+    this.saws = [];
+  }
+
   startDeadZoneSequence() {
     // 게임 일시정지
     this.moveTimer.paused = true;
@@ -2914,6 +3421,8 @@ export default class SnakeGame extends Phaser.Scene {
     }
     this.resetFogOfWar();
 
+    this.destroyAllSaws();
+
     const { width, height } = this.cameras.main;
     const flickerOverlayDepth = 6000;
     const introDialogueDepth = 6200;
@@ -3105,6 +3614,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.moveTimer.remove();
 
     this.resetFogOfWar();
+
+    this.destroyAllSaws();
 
     // 아이템 타이머 정리
     if (this.itemSpawnTimer) {
@@ -3508,10 +4019,12 @@ export default class SnakeGame extends Phaser.Scene {
     this.cleanupSpeedBoostOrbitals();
     this.resetFogOfWar();
 
+    this.destroyAllSaws();
+
     // 독가스 정리
     this.stopGasZone();
 
-    // 뱀 초기화
+    // �� �ʱ�ȭ
     this.snake = [
       { x: 10, y: 15 },
       { x: 9, y: 15 },
@@ -9398,3 +9911,8 @@ export default class SnakeGame extends Phaser.Scene {
     // update에서는 아무것도 하지 않아도 됨
   }
 }
+
+
+
+
+
