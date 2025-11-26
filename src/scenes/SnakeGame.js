@@ -1300,7 +1300,8 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 스테이지 클리어 체크 - 보스전 중에는 비활성화
-      if (!this.bossMode && this.foodCount >= 20) {
+      // TODO: 테스트용 임시 설정 (원래 20)
+      if (!this.bossMode && this.foodCount >= 5) {
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -3342,6 +3343,93 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
+  // 모든 데드존을 파괴 애니메이션과 함께 제거 (탄막보스 시작 시)
+  destroyAllDeadZonesWithAnimation() {
+    if (!this.deadZones || this.deadZones.length === 0) return;
+
+    const { width, height } = this.cameras.main;
+
+    // 각 데드존에 파괴 애니메이션 적용
+    this.deadZones.forEach((dz, index) => {
+      if (!dz.rect) return;
+
+      const dzX = dz.x * this.gridSize + this.gridSize / 2;
+      const dzY = this.gameAreaY + dz.y * this.gridSize + this.gridSize / 2;
+
+      // 약간의 딜레이를 두고 순차적으로 파괴
+      this.time.delayedCall(index * 80, () => {
+        // 1. 빨간 플래시
+        this.tweens.add({
+          targets: dz.rect,
+          fillColor: { from: 0x000000, to: 0xff0000 },
+          duration: 100,
+          yoyo: true,
+          repeat: 2
+        });
+
+        // 2. 파괴 파티클 (빨간색 + 검은색 조각들)
+        this.time.delayedCall(300, () => {
+          // 파편 파티클
+          for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2;
+            const speed = 60 + Math.random() * 40;
+            const particle = this.add.rectangle(
+              dzX, dzY,
+              6 + Math.random() * 4,
+              6 + Math.random() * 4,
+              i % 2 === 0 ? 0xff0000 : 0x000000
+            ).setDepth(2000);
+
+            this.tweens.add({
+              targets: particle,
+              x: dzX + Math.cos(angle) * speed,
+              y: dzY + Math.sin(angle) * speed,
+              alpha: 0,
+              rotation: Math.random() * Math.PI * 2,
+              scale: 0,
+              duration: 400,
+              ease: 'Power2',
+              onComplete: () => particle.destroy()
+            });
+          }
+
+          // 충격파 링
+          const shockwave = this.add.circle(dzX, dzY, 5, 0xff0000, 0.8)
+            .setDepth(1999).setStrokeStyle(2, 0xffff00);
+          this.tweens.add({
+            targets: shockwave,
+            radius: 30,
+            alpha: 0,
+            duration: 300,
+            ease: 'Power2',
+            onComplete: () => shockwave.destroy()
+          });
+
+          // 데드존 rect 제거
+          if (dz.rect) {
+            this.tweens.add({
+              targets: dz.rect,
+              alpha: 0,
+              scaleX: 0,
+              scaleY: 0,
+              duration: 200,
+              onComplete: () => {
+                dz.rect.destroy();
+                dz.rect = null;
+              }
+            });
+          }
+        });
+      });
+    });
+
+    // 모든 애니메이션 완료 후 배열 비우기
+    const totalDelay = this.deadZones.length * 80 + 600;
+    this.time.delayedCall(totalDelay, () => {
+      this.deadZones = [];
+    });
+  }
+
   draw() {
     // 이전 프레임 지우기
     if (this.graphics) {
@@ -4071,6 +4159,19 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 스테이지 재시작 (부활 시)
   restartCurrentStage() {
+    // Stage 8: 자기장 리셋 (부활 시 처음부터 다시 시작)
+    if (this.currentStage === 8) {
+      this.stopGasZone();
+      this.time.delayedCall(1000, () => {
+        this.startGasZone();
+      });
+    }
+
+    // 탄막보스 스테이지: 기존 보스 정리
+    if (this.isBulletBossStage()) {
+      this.cleanupBulletBoss();
+    }
+
     // 게임 상태 리셋 (스테이지는 유지)
     this.gameOver = false;
     this.isReviving = false;
@@ -4095,8 +4196,10 @@ export default class SnakeGame extends Phaser.Scene {
     this.currentFoodTeleportCount = 0;
     this.nextTeleportStep = 0;
 
-    // 먹이 새로 생성
-    this.generateFood();
+    // 탄막보스가 아닐 때만 먹이 생성 (보스전에서는 먹이 숨김)
+    if (!this.isBulletBossStage()) {
+      this.generateFood();
+    }
 
     // UI 업데이트
     this.scoreText.setText('0');
@@ -4115,6 +4218,13 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 뱀 반짝임 효과 (부활 표시)
     this.showReviveSpawnEffect();
+
+    // 탄막보스 스테이지: 보스 재시작
+    if (this.isBulletBossStage()) {
+      this.time.delayedCall(800, () => {
+        this.startBulletBoss();
+      });
+    }
   }
 
   // 부활 후 뱀 반짝임 효과
@@ -4546,13 +4656,23 @@ export default class SnakeGame extends Phaser.Scene {
     // 게임 재개
     this.moveTimer.paused = false;
 
-    // 스테이지 6에서 처음 진입 시 안개 인트로 실행
+    // 뱀/먹이 먼저 그리기 (안개 활성화 전에 렌더링)
+    this.draw();
+
+    // 스테이지 7에서 처음 진입 시 안개 인트로 실행
     this.startFogIntroIfNeeded();
 
     // Stage 8: 원형 독가스 자기장 시스템 활성화
     if (this.currentStage === 8) {
       this.time.delayedCall(1000, () => {
         this.startGasZone();
+      });
+    }
+
+    // 탄막 보스 스테이지 체크 (Stage 6)
+    if (this.isBulletBossStage()) {
+      this.time.delayedCall(500, () => {
+        this.startBulletBoss();
       });
     }
   }
@@ -6403,6 +6523,7 @@ export default class SnakeGame extends Phaser.Scene {
     if (item.id === 'combo_shield') {
       // Combo Shield - 콤보 실드 추가
       this.comboShieldCount++;
+      this.savedComboShieldCount++; // 보스 클리어 후 복원 시에도 반영되도록
       this.hasHadShield = true; // 실드를 가졌던 적이 있음
       this.updateItemStatusUI();
 
@@ -11949,6 +12070,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.bulletBossWaveCount = 0;
     this.bullets = [];
 
+    // 데드존 파괴 애니메이션 후 제거
+    this.destroyAllDeadZonesWithAnimation();
+
     // 콤보 저장 및 비활성화
     this.savedCombo = this.combo;
     this.savedComboShieldCount = this.comboShieldCount;
@@ -12771,8 +12895,8 @@ export default class SnakeGame extends Phaser.Scene {
     const pixelX = x * this.gridSize + this.gridSize / 2;
     const pixelY = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
 
-    this.hitMeText = this.add.text(pixelX, pixelY - 40, 'HIT ME!', {
-      fontSize: '18px',
+    this.hitMeText = this.add.text(pixelX, pixelY - 40, 'HIT', {
+      fontSize: '20px',
       fontStyle: 'bold',
       fill: '#00ff00',
       stroke: '#000000',
@@ -12826,13 +12950,72 @@ export default class SnakeGame extends Phaser.Scene {
       const hitText = `HIT ${this.bulletBossHitCount}/4!`;
       this.showHitText(hitText);
 
-      // 보스 텔레포트 후 다음 웨이브
+      // 보스 텔레포트 후 잠시 텀을 두고 다음 웨이브
       this.time.delayedCall(1000, () => {
         this.teleportBulletBoss();
-        this.bulletBossPhase = 'shooting';
-        this.startBulletWave();
+
+        // 새 위치에서 느낌표 경고 후 공격 시작
+        this.time.delayedCall(400, () => {
+          this.showBossWarningBeforeAttack(() => {
+            this.bulletBossPhase = 'shooting';
+            this.startBulletWave();
+          });
+        });
       });
     }
+  }
+
+  // 보스가 새 위치에서 공격 전 느낌표 경고 표시
+  showBossWarningBeforeAttack(onComplete) {
+    if (!this.bulletBossPosition) {
+      onComplete();
+      return;
+    }
+
+    const { x, y } = this.bulletBossPosition;
+    const pixelX = x * this.gridSize + this.gridSize / 2;
+    const pixelY = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 느낌표 표시
+    const warningText = this.add.text(pixelX, pixelY - 35, '!', {
+      fontSize: '28px',
+      fontStyle: 'bold',
+      fill: '#ff0000',
+      stroke: '#ffff00',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(160).setAlpha(0);
+
+    // 빠르게 나타났다 사라지는 애니메이션
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      scale: { from: 0.5, to: 1.3 },
+      duration: 150,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        // 잠시 유지 후 사라짐
+        this.tweens.add({
+          targets: warningText,
+          alpha: { from: 1, to: 0.5 },
+          scale: { from: 1.3, to: 1.1 },
+          duration: 100,
+          yoyo: true,
+          repeat: 1,
+          onComplete: () => {
+            this.tweens.add({
+              targets: warningText,
+              alpha: 0,
+              scale: 0.3,
+              duration: 100,
+              onComplete: () => {
+                warningText.destroy();
+                onComplete();
+              }
+            });
+          }
+        });
+      }
+    });
   }
 
   // 탄막 보스 파이널 히트 - 울트라 슬로우모션 극적 연출 (짧게)
