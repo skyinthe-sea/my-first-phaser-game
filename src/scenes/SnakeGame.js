@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -195,7 +196,7 @@ export default class SnakeGame extends Phaser.Scene {
       fill: '#888',
       fontStyle: 'bold'
     }).setOrigin(0.5, 0).setDepth(2001);
-    this.speedText = this.add.text(sectionWidth * 3.5, 28, '130ms', {
+    this.speedText = this.add.text(sectionWidth * 3.5, 28, '90ms', {
       fontSize: '24px',
       fill: '#00aaff',
       fontStyle: 'bold'
@@ -324,7 +325,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogBossElement = null; // 보스 그래픽 컨테이너 (연기 + 눈)
     this.fogBossHitCount = 0; // 보스 HIT 횟수 (4번 클리어)
     this.fogBossVisible = false; // 보스 가시 상태
-    this.testFogBossStage = 1; // Stage 1에서 테스트 (나중에 9로 변경)
+    this.testFogBossStage = 9; // Stage 9 (World 2 보스 - 녹턴)
     this.fogBossBonus = 1500; // 클리어 보너스 점수
     this.fogBossElements = []; // 보스 관련 UI 요소들 (정리용)
     this.fogBossInputBlocked = false; // 인트로 중 입력 차단
@@ -401,8 +402,22 @@ export default class SnakeGame extends Phaser.Scene {
     this.originalFogVisibleTiles = 4.0; // 원래 시야 반경 저장
     this.eclipseVisibility = 1.0; // 이클립스 중 시야 (타일)
 
+    // ========== 개발자 테스트 모드 (KK) ==========
+    this.devModeEnabled = false; // 개발자 모드 활성화
+    this.devModeElements = []; // 개발자 모드 UI 요소들
+    this.devStageButtons = []; // 스테이지 선택 버튼들
+    this.lastKPressTime = 0; // 마지막 K 키 입력 시간
+    this.kPressThreshold = 300; // 더블 프레스 인식 시간 (ms)
+    this.selectedDevStage = 1; // 선택된 스테이지
+    this.devScrollOffset = 0; // 스크롤 오프셋
+
+    // ========== 신규 월드 테스트 스테이지 시스템 ==========
+    this.testStagesEnabled = this.loadTestStageConfig(); // localStorage에서 로드
+    this.isTestMode = false; // 테스트 모드 진행 중
+
     // 키 입력 (입력 큐 시스템)
     this.input.keyboard.on('keydown-LEFT', () => {
+      if (this.devModeEnabled) return; // 개발자 모드에서는 무시
       if (this.bossInputBlocked || this.fogBossInputBlocked) return;
       if (this.loanUIOpen) return;
       if (this.shopOpen) {
@@ -413,6 +428,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('LEFT');
     });
     this.input.keyboard.on('keydown-RIGHT', () => {
+      if (this.devModeEnabled) return; // 개발자 모드에서는 무시
       if (this.bossInputBlocked || this.fogBossInputBlocked) return;
       if (this.loanUIOpen) return;
       if (this.shopOpen) {
@@ -423,6 +439,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('RIGHT');
     });
     this.input.keyboard.on('keydown-UP', () => {
+      if (this.devModeEnabled) return; // 개발자 모드에서는 무시
       if (this.bossInputBlocked || this.fogBossInputBlocked) return;
       if (this.loanUIOpen) {
         this.handleLoanInput('UP');
@@ -436,6 +453,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.addDirectionToQueue('UP');
     });
     this.input.keyboard.on('keydown-DOWN', () => {
+      if (this.devModeEnabled) return; // 개발자 모드에서는 무시
       if (this.bossInputBlocked || this.fogBossInputBlocked) return;
       if (this.loanUIOpen) {
         this.handleLoanInput('DOWN');
@@ -451,6 +469,7 @@ export default class SnakeGame extends Phaser.Scene {
 
     // ENTER 키 (상점에서 다음 스테이지)
     this.input.keyboard.on('keydown-ENTER', () => {
+      if (this.devModeEnabled) return; // 개발자 모드에서는 무시
       if (this.loanUIOpen) {
         this.handleLoanInput('ENTER');
         return;
@@ -478,6 +497,19 @@ export default class SnakeGame extends Phaser.Scene {
       }
     });
 
+    // K 키 (개발자 모드 - 더블 프레스)
+    this.input.keyboard.on('keydown-K', () => {
+      // 개발자 모드 UI가 열려있을 때는 무시
+      if (this.devModeEnabled) return;
+
+      const now = Date.now();
+      if (now - this.lastKPressTime < this.kPressThreshold) {
+        // 더블 프레스 감지 - 개발자 모드 열기
+        this.openDevMode();
+      }
+      this.lastKPressTime = now;
+    });
+
     // 게임 오버 플래그
     this.gameOver = false;
 
@@ -487,9 +519,9 @@ export default class SnakeGame extends Phaser.Scene {
     // 초기 뱀과 먹이 그리기
     this.draw();
 
-    // 타이머 이벤트로 뱀 이동 (130ms 기본속도)
+    // 타이머 이벤트로 뱀 이동 (90ms 기본속도)
     this.moveTimer = this.time.addEvent({
-      delay: 130,
+      delay: 90,
       callback: this.moveSnake,
       callbackScope: this,
       loop: true
@@ -505,7 +537,7 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // 안개 보스 스테이지 체크 (Stage 1 테스트용)
+    // 안개 보스 스테이지 체크 (Stage 9 - World 2 녹턴 보스)
     if (this.isFogBossStage()) {
       // 짧은 지연 후 안개 보스 시작
       this.time.delayedCall(500, () => {
@@ -1270,8 +1302,8 @@ export default class SnakeGame extends Phaser.Scene {
 
       this.foodCount++;
 
-      // Stage 9: 톱니 생성 (매 먹이마다 1개씩, 최대 5개)
-      if (this.currentStage === 9 && !this.bossMode) {
+      // World 3 (Stage 10-12): 톱니 생성 (매 먹이마다 1개씩, 최대 5개)
+      if (shouldHaveSaws(this.currentStage) && !this.bossMode) {
         this.spawnSaw();
       }
 
@@ -1440,8 +1472,8 @@ export default class SnakeGame extends Phaser.Scene {
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
 
-      // 속도 증가
-      if (this.moveTimer.delay > 40) {
+      // 속도 증가 (최대 속도 50ms)
+      if (this.moveTimer.delay > 50) {
         this.moveTimer.delay -= 5;
 
         // 속도 UI 업데이트 + 애니메이션
@@ -3641,7 +3673,8 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   shouldUseFog() {
-    return this.fogTestForceEnable || this.currentStage >= this.fogStageStart;
+    // World 2 (Stage 7-9)에서만 안개 활성화
+    return this.fogTestForceEnable || shouldHaveFog(this.currentStage);
   }
 
   isFogOfWarActive() {
@@ -4293,8 +4326,8 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 스테이지 재시작 (부활 시)
   restartCurrentStage() {
-    // Stage 8: 자기장 리셋 (부활 시 처음부터 다시 시작)
-    if (this.currentStage === 8) {
+    // World 4 (Stage 13-15): 자기장 리셋 (부활 시 처음부터 다시 시작)
+    if (shouldHaveGasZone(this.currentStage)) {
       this.stopGasZone();
       this.time.delayedCall(1000, () => {
         this.startGasZone();
@@ -4342,8 +4375,8 @@ export default class SnakeGame extends Phaser.Scene {
     // 그래픽 다시 그리기
     this.draw();
 
-    // 스테이지 시작 속도로 리셋 (스테이지 1: 130ms, 스테이지 2: 120ms, ...)
-    const startSpeed = Math.max(40, 130 - (this.currentStage - 1) * 10);
+    // 모든 스테이지 시작 속도 90ms 고정
+    const startSpeed = 90;
     if (this.moveTimer) {
       this.moveTimer.delay = startSpeed;
       this.moveTimer.paused = false;
@@ -4642,17 +4675,32 @@ export default class SnakeGame extends Phaser.Scene {
   showNextStage() {
     const { width, height } = this.cameras.main;
 
-    // 다음 스테이지로 증가
-    this.currentStage++;
+    // 테스트 스테이지 전환 로직
+    if (this.currentStage <= 0) {
+      const nextTestStage = this.currentStage + 1;
+      if (nextTestStage <= 0 && this.testStagesEnabled[nextTestStage.toString()]) {
+        // 다음 테스트 스테이지가 활성화되어 있으면 진행
+        this.currentStage = nextTestStage;
+      } else {
+        // 다음 테스트 스테이지가 없으면 Stage 1로 이동
+        this.currentStage = 1;
+        this.isTestMode = false;
+      }
+    } else {
+      // 일반 스테이지 증가
+      this.currentStage++;
+    }
 
-    // 보스 스테이지 체크 (테스트: 3, 실제: 3, 9, 12... - 탄막 보스 스테이지 제외)
+    // 보스 스테이지 체크 (독개구리 보스 - 탄막/안개 보스 스테이지 제외)
     const isBulletBoss = this.isBulletBossStage();
-    const isBossStage = !isBulletBoss && (
+    const isFogBoss = this.isFogBossStage();
+    // 독개구리 보스: Stage 3, 12, 15... (탄막 보스 Stage 6, 안개 보스 Stage 9 제외)
+    const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
 
-    if (isBossStage) {
+    if (isPoisonFrogBoss) {
       this.isBossStage = true;
       this.bossMode = true;
       // 콤보 상태 저장 (보스전 후 복원)
@@ -4672,8 +4720,11 @@ export default class SnakeGame extends Phaser.Scene {
       // 일반 스테이지 인트로로 진행 (아래 코드로 계속)
     }
 
+    // 모든 보스 타입 체크
+    const isAnyBossStage = isPoisonFrogBoss || isBulletBoss || isFogBoss;
+
     // 보스 스테이지 후 콤보 복원 (보스가 아닌 스테이지로 전환 시)
-    if (!isBossStage && this.isBossStage) {
+    if (!isAnyBossStage && this.isBossStage) {
       this.isBossStage = false;
       this.bossMode = false;
       this.combo = this.savedCombo;
@@ -4685,7 +4736,7 @@ export default class SnakeGame extends Phaser.Scene {
     }
 
     // 보스 스테이지가 아닐 때만 리셋 (보스는 위에서 이미 리셋함)
-    if (!isBossStage) {
+    if (!isAnyBossStage) {
       this.resetStage();
     }
 
@@ -4695,11 +4746,17 @@ export default class SnakeGame extends Phaser.Scene {
     }
 
     // STAGE X 텍스트 (상단에 투명하게 표시)
-    const stageText = this.add.text(width / 2, height / 2 - 100, `STAGE ${this.currentStage}`, {
+    const stageLabel = this.currentStage <= 0
+      ? `TEST ${this.currentStage}`
+      : `STAGE ${this.currentStage}`;
+    const stageColor = this.currentStage <= 0 ? '#ff6600' : '#00ff00';
+    const strokeColor = this.currentStage <= 0 ? '#884400' : '#008800';
+
+    const stageText = this.add.text(width / 2, height / 2 - 100, stageLabel, {
       fontSize: '96px',
-      fill: '#00ff00',
+      fill: stageColor,
       fontStyle: 'bold',
-      stroke: '#008800',
+      stroke: strokeColor,
       strokeThickness: 8
     }).setOrigin(0.5).setDepth(5000).setAlpha(0);
 
@@ -4783,10 +4840,8 @@ export default class SnakeGame extends Phaser.Scene {
     // 먹이 생성
     this.food = this.generateFood();
 
-    // 스테이지별 시작 속도 설정
-    // 스테이지 1: 130ms, 스테이지 2: 120ms, 스테이지 3: 110ms...
-    // 최소 속도는 40ms
-    const startSpeed = Math.max(40, 130 - (this.currentStage - 1) * 10);
+    // 모든 스테이지 시작 속도 90ms 고정
+    const startSpeed = 90;
     this.moveTimer.delay = startSpeed;
 
     // 속도 UI 업데이트
@@ -4801,8 +4856,8 @@ export default class SnakeGame extends Phaser.Scene {
     // 스테이지 7에서 처음 진입 시 안개 인트로 실행
     this.startFogIntroIfNeeded();
 
-    // Stage 8: 원형 독가스 자기장 시스템 활성화
-    if (this.currentStage === 8) {
+    // World 4 (Stage 13-15): 원형 독가스 자기장 시스템 활성화
+    if (shouldHaveGasZone(this.currentStage)) {
       this.time.delayedCall(1000, () => {
         this.startGasZone();
       });
@@ -4815,7 +4870,7 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // 안개 보스 스테이지 체크 (Stage 1 테스트용)
+    // 안개 보스 스테이지 체크 (Stage 9 - World 2 녹턴 보스)
     if (this.isFogBossStage()) {
       this.time.delayedCall(500, () => {
         this.startFogBoss();
@@ -19088,6 +19143,568 @@ export default class SnakeGame extends Phaser.Scene {
       }
     });
     this.fogBossElements = [];
+  }
+
+  // ========== 개발자 테스트 모드 (KK) ==========
+
+  // localStorage에서 테스트 스테이지 설정 로드
+  loadTestStageConfig() {
+    try {
+      const saved = localStorage.getItem('snakeGame_testStages');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.warn('Failed to load test stage config:', e);
+    }
+    return { '-2': false, '-1': false, '0': false };
+  }
+
+  // localStorage에 테스트 스테이지 설정 저장
+  saveTestStageConfig() {
+    try {
+      localStorage.setItem('snakeGame_testStages', JSON.stringify(this.testStagesEnabled));
+    } catch (e) {
+      console.warn('Failed to save test stage config:', e);
+    }
+  }
+
+  // 테스트 스테이지 토글
+  toggleTestStage(stage) {
+    const key = stage.toString();
+    if (this.testStagesEnabled.hasOwnProperty(key)) {
+      this.testStagesEnabled[key] = !this.testStagesEnabled[key];
+      this.saveTestStageConfig();
+      this.updateDevModeUI();
+    }
+  }
+
+  // 개발자 모드 열기
+  openDevMode() {
+    if (this.devModeEnabled) return;
+    if (this.shopOpen || this.loanUIOpen) return;
+
+    this.devModeEnabled = true;
+
+    // 게임 일시정지
+    if (this.moveTimer) {
+      this.moveTimer.paused = true;
+    }
+
+    const { width, height } = this.cameras.main;
+    this.devModeElements = [];
+    this.devStageButtons = [];
+
+    // 어두운 오버레이
+    const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.9)
+      .setOrigin(0, 0)
+      .setDepth(9000)
+      .setInteractive();
+    this.devModeElements.push(overlay);
+
+    // 타이틀
+    const title = this.add.text(width / 2, 30, 'DEV MODE', {
+      fontSize: '32px',
+      fill: '#ff00ff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(9001);
+    this.devModeElements.push(title);
+
+    // 서브타이틀
+    const subtitle = this.add.text(width / 2, 60, 'Stage Select', {
+      fontSize: '16px',
+      fill: '#aaaaaa'
+    }).setOrigin(0.5).setDepth(9001);
+    this.devModeElements.push(subtitle);
+
+    // 스테이지 목록 영역
+    const listY = 100;
+    const listHeight = height - 180;
+    const itemHeight = 26;
+    const visibleItems = Math.floor(listHeight / itemHeight);
+
+    // 테스트 스테이지 섹션
+    const testLabel = this.add.text(60, listY, '[TEST STAGES]', {
+      fontSize: '14px',
+      fill: '#ff6600',
+      fontStyle: 'bold'
+    }).setDepth(9001);
+    this.devModeElements.push(testLabel);
+
+    // 모든 스테이지 생성 (테스트 + 일반)
+    const allStages = [-2, -1, 0, ...Array.from({ length: 30 }, (_, i) => i + 1)];
+
+    let currentY = listY + 25;
+    allStages.forEach((stage, index) => {
+      // 일반 스테이지 시작 시 구분선
+      if (stage === 1) {
+        const normalLabel = this.add.text(60, currentY, '[NORMAL STAGES]', {
+          fontSize: '14px',
+          fill: '#00ff00',
+          fontStyle: 'bold'
+        }).setDepth(9001);
+        this.devModeElements.push(normalLabel);
+        currentY += 25;
+      }
+
+      const world = getWorldByStage(stage);
+      const bossInfo = getBossInfoForStage(stage);
+
+      let label = '';
+      let color = '#ffffff';
+
+      if (stage <= 0) {
+        // 테스트 스테이지
+        const enabled = this.testStagesEnabled[stage.toString()];
+        const checkbox = enabled ? '[v]' : '[ ]';
+        label = `${checkbox} Test Stage ${stage}`;
+        if (stage === 0) label += ' [BOSS]';
+        color = enabled ? '#00ff00' : '#666666';
+      } else {
+        // 일반 스테이지
+        label = `Stage ${stage}`;
+        if (world && world.name) {
+          label += ` (${world.name})`;
+        }
+        if (bossInfo) {
+          label += ' [BOSS]';
+          color = '#ff6666';
+        }
+      }
+
+      // 현재 스테이지 표시
+      if (stage === this.currentStage) {
+        label = '> ' + label + ' <';
+        color = '#00ffff';
+      }
+
+      const btn = this.add.text(80, currentY, label, {
+        fontSize: '16px',
+        fill: color,
+        padding: { x: 8, y: 2 }
+      }).setDepth(9001).setInteractive();
+
+      btn.stageValue = stage;
+      btn.originalColor = color;
+
+      btn.on('pointerover', () => {
+        if (this.selectedDevStage !== stage) {
+          btn.setFill('#ffff00');
+        }
+      });
+      btn.on('pointerout', () => {
+        if (this.selectedDevStage !== stage) {
+          btn.setFill(btn.originalColor);
+        }
+      });
+      btn.on('pointerdown', () => {
+        this.selectedDevStage = stage;
+        this.updateDevModeSelection();
+      });
+
+      this.devStageButtons.push(btn);
+      this.devModeElements.push(btn);
+      currentY += itemHeight;
+    });
+
+    // 안내 텍스트
+    const helpText = this.add.text(width / 2, height - 60, [
+      'Arrow Keys: Select    ENTER: Start Stage',
+      'T: Toggle Test Stage    ESC: Cancel'
+    ].join('\n'), {
+      fontSize: '14px',
+      fill: '#888888',
+      align: 'center'
+    }).setOrigin(0.5).setDepth(9001);
+    this.devModeElements.push(helpText);
+
+    // 선택 초기화
+    this.selectedDevStage = this.currentStage;
+    this.updateDevModeSelection();
+
+    // 키보드 핸들러 설정
+    this.devModeKeyHandler = this.input.keyboard.on('keydown', (event) => {
+      this.handleDevModeInput(event.key);
+    });
+  }
+
+  // 개발자 모드 UI 업데이트
+  updateDevModeUI() {
+    this.devStageButtons.forEach(btn => {
+      const stage = btn.stageValue;
+      const world = getWorldByStage(stage);
+      const bossInfo = getBossInfoForStage(stage);
+
+      let label = '';
+      let color = '#ffffff';
+
+      if (stage <= 0) {
+        const enabled = this.testStagesEnabled[stage.toString()];
+        const checkbox = enabled ? '[v]' : '[ ]';
+        label = `${checkbox} Test Stage ${stage}`;
+        if (stage === 0) label += ' [BOSS]';
+        color = enabled ? '#00ff00' : '#666666';
+      } else {
+        label = `Stage ${stage}`;
+        if (world && world.name) {
+          label += ` (${world.name})`;
+        }
+        if (bossInfo) {
+          label += ' [BOSS]';
+          color = '#ff6666';
+        }
+      }
+
+      if (stage === this.currentStage) {
+        label = '> ' + label + ' <';
+        color = '#00ffff';
+      }
+
+      btn.setText(label);
+      btn.originalColor = color;
+
+      if (this.selectedDevStage === stage) {
+        btn.setFill('#ffff00');
+      } else {
+        btn.setFill(color);
+      }
+    });
+  }
+
+  // 선택 UI 업데이트
+  updateDevModeSelection() {
+    this.devStageButtons.forEach(btn => {
+      if (btn.stageValue === this.selectedDevStage) {
+        btn.setFill('#ffff00');
+        btn.setFontStyle('bold');
+      } else {
+        btn.setFill(btn.originalColor);
+        btn.setFontStyle('normal');
+      }
+    });
+  }
+
+  // 개발자 모드 키보드 입력 처리
+  handleDevModeInput(key) {
+    if (!this.devModeEnabled) return;
+
+    const currentIndex = this.devStageButtons.findIndex(
+      btn => btn.stageValue === this.selectedDevStage
+    );
+
+    switch (key) {
+      case 'ArrowUp':
+        if (currentIndex > 0) {
+          this.selectedDevStage = this.devStageButtons[currentIndex - 1].stageValue;
+          this.updateDevModeSelection();
+        }
+        break;
+      case 'ArrowDown':
+        if (currentIndex < this.devStageButtons.length - 1) {
+          this.selectedDevStage = this.devStageButtons[currentIndex + 1].stageValue;
+          this.updateDevModeSelection();
+        }
+        break;
+      case 'Enter':
+        this.startFromDevMode(this.selectedDevStage);
+        break;
+      case 'Escape':
+        this.closeDevMode();
+        break;
+      case 't':
+      case 'T':
+        // 테스트 스테이지 토글 (테스트 스테이지 선택 중일 때만)
+        if (this.selectedDevStage <= 0) {
+          this.toggleTestStage(this.selectedDevStage);
+        }
+        break;
+    }
+  }
+
+  // 선택한 스테이지에서 시작
+  startFromDevMode(targetStage) {
+    this.closeDevMode();
+
+    // 테스트 모드 설정
+    this.isTestMode = targetStage <= 0;
+    this.currentStage = targetStage;
+
+    // 게임 오버 상태 해제
+    this.gameOver = false;
+
+    // 게임 상태 완전 리셋
+    this.resetForDevMode();
+
+    // 보스 스테이지 체크
+    const isBulletBoss = this.isBulletBossStage();
+    const isFogBoss = this.isFogBossStage();
+    const isPoisonBoss = !isBulletBoss && !isFogBoss && (
+      this.currentStage === this.testBossStage ||
+      (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
+    );
+
+    // 보스 스테이지 설정
+    if (isPoisonBoss || isBulletBoss || isFogBoss) {
+      this.isBossStage = true;
+      this.bossMode = true;
+      this.savedCombo = this.combo;
+      this.savedComboShieldCount = this.comboShieldCount;
+      this.combo = 0;
+      this.comboText.setText('');
+    }
+
+    // 카운트다운 표시
+    this.showDevModeCountdown(() => {
+      // 카운트다운 완료 후 게임 시작
+      if (this.moveTimer) {
+        this.moveTimer.paused = false;
+      }
+
+      // 스테이지별 특수 기능 활성화
+      this.activateStageFeatures();
+    });
+  }
+
+  // 스테이지별 특수 기능 활성화
+  activateStageFeatures() {
+    // 안개 인트로 (World 2)
+    if (shouldHaveFog(this.currentStage)) {
+      this.startFogIntroIfNeeded();
+    }
+
+    // 독가스 자기장 (World 4)
+    if (shouldHaveGasZone(this.currentStage)) {
+      this.time.delayedCall(1000, () => {
+        this.startGasZone();
+      });
+    }
+
+    // 탄막 보스 (Stage 6)
+    if (this.isBulletBossStage()) {
+      this.bossPhase = 'intro';
+      this.food = { x: -100, y: -100 };
+      this.time.delayedCall(500, () => {
+        this.startBulletBoss();
+      });
+    }
+
+    // 안개 보스 (Stage 9)
+    if (this.isFogBossStage()) {
+      this.bossPhase = 'intro';
+      this.food = { x: -100, y: -100 };
+      this.time.delayedCall(500, () => {
+        this.startFogBoss();
+      });
+    }
+
+    // 독개구리 보스 (Stage 3, 12, 15 등 - 탄막/안개 보스 제외)
+    const isPoisonBoss = !this.isBulletBossStage() && !this.isFogBossStage() && (
+      this.currentStage === this.testBossStage ||
+      (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
+    );
+    if (isPoisonBoss) {
+      this.bossPhase = 'intro';
+      this.food = { x: -100, y: -100 };
+      this.bossIntroMoveCount = 0;
+    }
+  }
+
+  // 개발자 모드용 게임 완전 리셋
+  resetForDevMode() {
+    // 기존 상태 완전 정리
+    this.cleanupSpeedBoostOrbitals();
+    this.resetFogOfWar();
+    this.destroyAllSaws();
+    this.stopGasZone();
+
+    // 안개 보스 정리
+    if (this.fogBossMode) {
+      this.cleanupFogBoss();
+    }
+
+    // 탄막 보스 정리
+    if (this.bulletBossMode) {
+      this.cleanupBulletBoss();
+    }
+
+    // 기존 보스 요소 정리
+    if (this.bossElement) {
+      this.bossElement.destroy();
+      this.bossElement = null;
+    }
+
+    // 뱀 초기화
+    this.snake = [
+      { x: 10, y: 15 },
+      { x: 9, y: 15 },
+      { x: 8, y: 15 }
+    ];
+    this.direction = 'RIGHT';
+    this.inputQueue = [];
+
+    // 점수/먹이 리셋
+    this.score = 0;
+    this.scoreText.setText('0');
+    this.foodCount = 0;
+    this.foodCountText.setText('0');
+
+    // 콤보 리셋
+    this.combo = 0;
+    this.comboText.setText('');
+    this.directionChangesCount = 0;
+
+    // 보스 상태 완전 리셋
+    this.bossMode = false;
+    this.isBossStage = false;
+    this.bossPhase = 'none';
+    this.bossHitCount = 0;
+    this.snakePoisoned = false;
+    this.poisonGrowthActive = false;
+    this.poisonGrowthData = null;
+
+    // 탄막 보스 상태 리셋
+    this.bulletBossMode = false;
+    this.bulletBossPhase = 'none';
+    this.bulletBossHitCount = 0;
+    this.bulletBossPosition = null;
+    this.bullets = [];
+
+    // 안개 보스 상태 리셋
+    this.fogBossMode = false;
+    this.fogBossPhase = 'none';
+    this.fogBossHitCount = 0;
+    this.fogBossPosition = null;
+    this.fogIntroShown = false;
+
+    // 기타 상태 리셋
+    this.hasEatenFirstFood = false;
+    this.comboLost = false;
+    this.shieldsUsedThisCycle = false;
+
+    // 모든 스테이지 시작 속도 90ms 고정
+    const startSpeed = 90;
+    if (this.moveTimer) {
+      this.moveTimer.delay = startSpeed;
+      this.moveTimer.paused = true; // 카운트다운 후 재개
+    }
+    this.speedText.setText(startSpeed + 'ms');
+
+    // 먹이 생성
+    this.food = this.generateFood();
+
+    // 그래픽 업데이트
+    this.draw();
+
+    // 아이템 상태 UI 업데이트
+    this.updateItemStatusUI();
+  }
+
+  // 개발자 모드 카운트다운
+  showDevModeCountdown(callback) {
+    const { width, height } = this.cameras.main;
+    let count = 3;
+
+    // 스테이지 표시
+    const stageLabel = this.currentStage <= 0
+      ? `TEST ${this.currentStage}`
+      : `STAGE ${this.currentStage}`;
+
+    const world = getWorldByStage(this.currentStage);
+    const worldName = world && world.name ? ` - ${world.name}` : '';
+
+    const stageText = this.add.text(width / 2, height / 2 - 80, stageLabel + worldName, {
+      fontSize: '28px',
+      fill: '#00ff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(5000);
+
+    const countText = this.add.text(width / 2, height / 2, count.toString(), {
+      fontSize: '96px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5000);
+
+    const countdownTimer = this.time.addEvent({
+      delay: 600,
+      callback: () => {
+        count--;
+        if (count > 0) {
+          countText.setText(count.toString());
+          // 펄스 효과
+          this.tweens.add({
+            targets: countText,
+            scaleX: 1.2,
+            scaleY: 1.2,
+            duration: 100,
+            yoyo: true
+          });
+        } else if (count === 0) {
+          countText.setText('GO!');
+          countText.setFill('#00ff00');
+        } else {
+          stageText.destroy();
+          countText.destroy();
+          callback();
+        }
+      },
+      repeat: 3
+    });
+  }
+
+  // 개발자 모드 닫기
+  closeDevMode() {
+    if (!this.devModeEnabled) return;
+
+    this.devModeEnabled = false;
+
+    // UI 정리
+    this.devModeElements.forEach(el => {
+      if (el && el.destroy) {
+        el.destroy();
+      }
+    });
+    this.devModeElements = [];
+    this.devStageButtons = [];
+
+    // 키보드 핸들러 제거
+    if (this.devModeKeyHandler) {
+      this.input.keyboard.off('keydown', this.devModeKeyHandler);
+      this.devModeKeyHandler = null;
+    }
+
+    // 게임 재개
+    if (this.moveTimer && !this.gameOver) {
+      this.moveTimer.paused = false;
+    }
+  }
+
+  // 게임 시작 스테이지 결정 (테스트 스테이지 포함)
+  determineStartStage() {
+    // 테스트 스테이지 -2가 활성화되어 있으면 -2에서 시작
+    if (this.testStagesEnabled['-2']) {
+      this.isTestMode = true;
+      return -2;
+    }
+    return 1;
+  }
+
+  // 월드 정보 가져오기 (UI 표시용)
+  getWorldDisplayInfo(stage) {
+    if (stage <= 0) {
+      return { name: 'Test', nameKo: '테스트', color: '#ff6600' };
+    }
+    const world = getWorldByStage(stage);
+    return {
+      name: world.name || 'Unknown',
+      nameKo: world.nameKo || world.name || 'Unknown',
+      color: '#00ff00'
+    };
   }
 
   update() {
