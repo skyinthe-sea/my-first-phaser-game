@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
-import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog } from '../data/worlds.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, getEffectiveStage, TEST_STAGES } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -19256,12 +19256,14 @@ export default class SnakeGame extends Phaser.Scene {
       let color = '#ffffff';
 
       if (stage <= 0) {
-        // 테스트 스테이지
+        // 테스트 스테이지 (기계왕국 개발)
         const enabled = this.testStagesEnabled[stage.toString()];
         const checkbox = enabled ? '[v]' : '[ ]';
-        label = `${checkbox} Test Stage ${stage}`;
+        const testStageInfo = TEST_STAGES[stage.toString()];
+        const mappedStage = testStageInfo ? testStageInfo.mappedStage : 10;
+        label = `${checkbox} Test ${stage} -> S${mappedStage}`;
         if (stage === 0) label += ' [BOSS]';
-        color = enabled ? '#00ff00' : '#666666';
+        color = enabled ? '#00ff00' : '#888888';
       } else {
         // 일반 스테이지
         label = `Stage ${stage}`;
@@ -19341,11 +19343,14 @@ export default class SnakeGame extends Phaser.Scene {
       let color = '#ffffff';
 
       if (stage <= 0) {
+        // 테스트 스테이지 (기계왕국 개발)
         const enabled = this.testStagesEnabled[stage.toString()];
         const checkbox = enabled ? '[v]' : '[ ]';
-        label = `${checkbox} Test Stage ${stage}`;
+        const testStageInfo = TEST_STAGES[stage.toString()];
+        const mappedStage = testStageInfo ? testStageInfo.mappedStage : 10;
+        label = `${checkbox} Test ${stage} -> S${mappedStage}`;
         if (stage === 0) label += ' [BOSS]';
-        color = enabled ? '#00ff00' : '#666666';
+        color = enabled ? '#00ff00' : '#888888';
       } else {
         label = `Stage ${stage}`;
         if (world && world.name) {

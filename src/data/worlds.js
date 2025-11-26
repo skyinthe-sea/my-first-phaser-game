@@ -57,12 +57,26 @@ export const WORLD_CONFIG = {
   }
 };
 
-// Test stages for new world development
+// Test stages for new world development (현재: 기계왕국 개발 중)
+// -2 = Stage 10, -1 = Stage 11, 0 = Stage 12 (보스)
 export const TEST_STAGES = {
-  '-2': { name: 'Test Stage -2', isTest: true, worldName: 'New World' },
-  '-1': { name: 'Test Stage -1', isTest: true, worldName: 'New World' },
-  '0': { name: 'Test Stage 0', isTest: true, isBoss: true, worldName: 'New World' }
+  '-2': { name: 'Test Stage -2', isTest: true, worldName: 'Machine Kingdom', mappedStage: 10 },
+  '-1': { name: 'Test Stage -1', isTest: true, worldName: 'Machine Kingdom', mappedStage: 11 },
+  '0': { name: 'Test Stage 0', isTest: true, isBoss: true, worldName: 'Machine Kingdom', mappedStage: 12 }
 };
+
+/**
+ * Get the equivalent real stage for a test stage
+ * @param {number} stage - Stage number (can be negative for test stages)
+ * @returns {number} The mapped real stage number
+ */
+export function getEffectiveStage(stage) {
+  if (stage <= 0) {
+    const testStage = TEST_STAGES[stage.toString()];
+    return testStage ? testStage.mappedStage : 10; // 기본값: Stage 10
+  }
+  return stage;
+}
 
 /**
  * Get world configuration by stage number
@@ -70,16 +84,19 @@ export const TEST_STAGES = {
  * @returns {object} World configuration object
  */
 export function getWorldByStage(stage) {
-  // Test stages
+  // Test stages - 기계왕국 개발 중
   if (stage <= 0) {
     return {
       worldId: 'test',
-      name: 'Test',
-      nameKo: '테스트',
+      name: 'Machine Kingdom (Dev)',
+      nameKo: '기계왕국 (개발)',
       range: [-2, 0],
       bossStage: 0,
-      bossType: null,
-      isTest: true
+      bossType: 'machine_boss', // TBD
+      isTest: true,
+      features: {
+        saws: true
+      }
     };
   }
 
@@ -139,7 +156,8 @@ export function getBossInfoForStage(stage) {
  */
 export function getStageFeatures(stage) {
   if (stage <= 0) {
-    return { isTest: true };
+    // 테스트 스테이지 - 기계왕국 기능 활성화
+    return { isTest: true, saws: true };
   }
 
   const world = getWorldByStage(stage);
@@ -152,7 +170,8 @@ export function getStageFeatures(stage) {
  * @returns {boolean}
  */
 export function shouldHaveSaws(stage) {
-  return stage >= 10 && stage <= 12;
+  const effective = getEffectiveStage(stage);
+  return effective >= 10 && effective <= 12;
 }
 
 /**
