@@ -10,7 +10,19 @@
       "Bash(npm install:*)",
       "Bash(npm run clean:*)",
       "Bash(tasklist:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm run build:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill /F /PID 94796 /PID 98672)",
+      "Bash(taskkill //F //PID 94796)",
+      "Bash(taskkill //F //PID 98672)",
+      "Bash(dir nul)",
+      "Bash(git -C \"c:/dev/my-first-phaser-game\" ls-files)",
+      "Bash(del \"\\?\\c:\\dev\\my-first-phaser-game\\nul\")",
+      "Bash(cmd /c \"del \\?\\c:\\dev\\my-first-phaser-game\\nul\")",
+      "Bash(git -C \"c:/dev/my-first-phaser-game\" status)",
+      "Bash(cmd /c \"pushd c:\\dev\\my-first-phaser-game && del /f /q nul && popd\")"
     ],
     "deny": [],
     "ask": []
