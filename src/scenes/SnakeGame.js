@@ -4672,58 +4672,61 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
+  getNextStageAfterClear() {
+    // 테스트 스테이지는 -2 -> -1 -> 0 순서로 강제 진행
+    if (this.isTestMode || this.currentStage <= 0) {
+      const nextTestStage = this.currentStage + 1;
+      if (nextTestStage <= 0 && TEST_STAGES[nextTestStage.toString()]) {
+        return { stage: nextTestStage, isTestMode: true };
+      }
+      return { stage: 1, isTestMode: false };
+    }
+
+    return { stage: this.currentStage + 1, isTestMode: false };
+  }
+
+  enterBossStage() {
+    this.isBossStage = true;
+    this.bossMode = true;
+    this.savedCombo = this.combo;
+    this.savedComboShieldCount = this.comboShieldCount;
+    this.combo = 0;
+    this.comboText.setText('');
+  }
+
   showNextStage() {
     const { width, height } = this.cameras.main;
 
-    // 테스트 스테이지 전환 로직
-    if (this.currentStage <= 0) {
-      const nextTestStage = this.currentStage + 1;
-      if (nextTestStage <= 0 && this.testStagesEnabled[nextTestStage.toString()]) {
-        // 다음 테스트 스테이지가 활성화되어 있으면 진행
-        this.currentStage = nextTestStage;
-      } else {
-        // 다음 테스트 스테이지가 없으면 Stage 1로 이동
-        this.currentStage = 1;
-        this.isTestMode = false;
-      }
-    } else {
-      // 일반 스테이지 증가
-      this.currentStage++;
-    }
+    const { stage: nextStage, isTestMode } = this.getNextStageAfterClear();
+    this.currentStage = nextStage;
+    this.isTestMode = isTestMode;
 
-    // 보스 스테이지 체크 (독개구리 보스 - 탄막/안개 보스 스테이지 제외)
+    // Boss stage checks (bullet/fog handled separately)
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
-    // 독개구리 보스: Stage 3, 12, 15... (탄막 보스 Stage 6, 안개 보스 Stage 9 제외)
     const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
 
-    if (isPoisonFrogBoss) {
-      this.isBossStage = true;
-      this.bossMode = true;
-      // 콤보 상태 저장 (보스전 후 복원)
-      this.savedCombo = this.combo;
-      this.savedComboShieldCount = this.comboShieldCount;
-      // 보스전 중에는 콤보 비활성화
-      this.combo = 0;
-      this.comboText.setText('');
-
-      this.resetStage();
-      // resetStage 이후에 bossPhase 설정 (resetStage가 'none'으로 리셋하기 때문)
-      this.bossPhase = 'intro';
-      // 보스 스테이지에서는 먹이 숨기기
-      this.food = { x: -100, y: -100 };
-      // 3칸 이동 후 대사 시작을 위한 카운터
-      this.bossIntroMoveCount = 0;
-      // 일반 스테이지 인트로로 진행 (아래 코드로 계속)
-    }
-
-    // 모든 보스 타입 체크
     const isAnyBossStage = isPoisonFrogBoss || isBulletBoss || isFogBoss;
 
-    // 보스 스테이지 후 콤보 복원 (보스가 아닌 스테이지로 전환 시)
+    if (isAnyBossStage) {
+      this.enterBossStage();
+    }
+
+    if (isPoisonFrogBoss) {
+      this.resetStage();
+      this.bossPhase = 'intro';
+      this.food = { x: -100, y: -100 };
+      this.bossIntroMoveCount = 0;
+    } else if (isAnyBossStage) {
+      this.resetStage();
+      this.moveTimer.paused = true;
+      this.food = { x: -100, y: -100 };
+      this.hideFoodGraphics();
+    }
+
     if (!isAnyBossStage && this.isBossStage) {
       this.isBossStage = false;
       this.bossMode = false;
@@ -4735,17 +4738,14 @@ export default class SnakeGame extends Phaser.Scene {
       this.updateItemStatusUI();
     }
 
-    // 보스 스테이지가 아닐 때만 리셋 (보스는 위에서 이미 리셋함)
     if (!isAnyBossStage) {
       this.resetStage();
     }
 
-    // 스피드 부스트 궤도 초기화 (60fps 독립 애니메이션)
     if (this.hasSpeedBoost) {
       this.initSpeedBoostOrbitals();
     }
 
-    // STAGE X 텍스트 (상단에 투명하게 표시)
     const stageLabel = this.currentStage <= 0
       ? `TEST ${this.currentStage}`
       : `STAGE ${this.currentStage}`;
@@ -4760,25 +4760,22 @@ export default class SnakeGame extends Phaser.Scene {
       strokeThickness: 8
     }).setOrigin(0.5).setDepth(5000).setAlpha(0);
 
-    // STAGE X 애니메이션 (빠르게 페이드인 → 빠르게 페이드아웃)
     this.tweens.add({
       targets: stageText,
-      alpha: { from: 0, to: 0.7 }, // 투명하지만 보이게
+      alpha: { from: 0, to: 0.7 },
       scaleX: { from: 1.2, to: 1 },
       scaleY: { from: 1.2, to: 1 },
-      duration: 300, // 500ms → 300ms로 빠르게
+      duration: 300,
       ease: 'Power2',
       onComplete: () => {
-        // 짧은 대기 후 빠르게 페이드아웃
-        this.time.delayedCall(400, () => { // 1000ms → 400ms로 빠르게
+        this.time.delayedCall(400, () => {
           this.tweens.add({
             targets: stageText,
             alpha: 0,
-            duration: 300, // 500ms → 300ms로 빠르게
+            duration: 300,
             onComplete: () => {
               stageText.destroy();
 
-              // Stage 5 시작 시 데드존 2개 추가 애니메이션
               if (this.currentStage === 5) {
                 this.addDeadZonesForStage4();
               }
@@ -12272,22 +12269,20 @@ export default class SnakeGame extends Phaser.Scene {
   // ========== 탄막 보스 메인 로직 ==========
 
   startBulletBoss() {
+    if (!this.isBossStage) {
+      this.enterBossStage();
+    }
+
     this.bulletBossMode = true;
     this.bulletBossPhase = 'intro';
     this.bulletBossHitCount = 0;
     this.bulletBossWaveCount = 0;
     this.bullets = [];
 
-    // 데드존 파괴 애니메이션 후 제거
+    // 기존 데드존 연출 폭파
     this.destroyAllDeadZonesWithAnimation();
 
-    // 콤보 저장 및 비활성화
-    this.savedCombo = this.combo;
-    this.savedComboShieldCount = this.comboShieldCount;
-    this.combo = 0;
-    this.comboText.setText('');
-
-    // 먹이 완전히 숨기기 (그래픽도 숨김)
+    // 음식 숨김 처리
     this.food = { x: -100, y: -100 };
     this.hideFoodGraphics();
 
@@ -12297,11 +12292,10 @@ export default class SnakeGame extends Phaser.Scene {
     this.isInvincible = false;
     this.lastDodgeDirection = 'up';
 
-    // 인트로 바로 시작 (튜토리얼은 미사일 발사 전에 표시)
+    // 인트로 연출 시작
     this.showBulletBossIntro();
   }
 
-  // 먹이 그래픽 숨기기
   hideFoodGraphics() {
     // foodGraphics가 있으면 숨기기
     if (this.foodGraphics) {
@@ -13850,6 +13844,15 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 안개 보스 시작
   startFogBoss() {
+    const previousCombo = this.isBossStage ? this.savedCombo : this.combo;
+    const previousShield = this.isBossStage ? this.savedComboShieldCount : this.comboShieldCount;
+
+    if (!this.isBossStage) {
+      this.enterBossStage();
+      this.savedCombo = previousCombo;
+      this.savedComboShieldCount = previousShield;
+    }
+
     this.fogBossMode = true;
     this.fogBossPhase = 'intro';
     this.fogBossHitCount = 0;
@@ -13858,41 +13861,33 @@ export default class SnakeGame extends Phaser.Scene {
     this.flares = [];
     this.hallucinationFoods = [];
 
-    // 🆕 안개 보스전 전용 빠른 속도 (90ms)
     if (this.moveTimer) {
       this.moveTimer.delay = 90;
       this.speedText.setText('90ms');
     }
 
-    // 콤보/실드 저장
-    this.savedFogBossCombo = this.combo;
-    this.savedFogBossShieldCount = this.comboShieldCount;
+    this.savedFogBossCombo = previousCombo;
+    this.savedFogBossShieldCount = previousShield;
     this.combo = 0;
     this.comboShieldCount = 0;
     this.updateItemStatusUI();
 
-    // 안개 강제 활성화 (스테이지 시작부터 안개 보이게)
     this.fogTestForceEnable = true;
     this.originalFogVisibleTiles = this.fogVisibleTiles;
-    this.fogVisibleTiles = 2.5; // 시야 축소
+    this.fogVisibleTiles = 2.5;
     this.fogEnabled = true;
     this.ensureFogAssets();
 
-    // 안개 즉시 렌더링
     this.draw();
     this.updateFogOfWar();
 
-    // 먹이 숨기기
     this.food = { x: -100, y: -100 };
 
-    // 게임 일시정지
     this.moveTimer.paused = true;
 
-    // 인트로 시작
     this.showFogBossIntro();
   }
 
-  // 안개 보스 인트로 시퀀스
   showFogBossIntro() {
     const { width, height } = this.cameras.main;
     this.fogBossInputBlocked = true;
@@ -19432,17 +19427,17 @@ export default class SnakeGame extends Phaser.Scene {
   startFromDevMode(targetStage) {
     this.closeDevMode();
 
-    // 테스트 모드 설정
+    // 테스트 모드 여부
     this.isTestMode = targetStage <= 0;
     this.currentStage = targetStage;
 
-    // 게임 오버 상태 해제
+    // 게임 오버 상태 초기화
     this.gameOver = false;
 
-    // 게임 상태 완전 리셋
+    // 스테이지 리셋 (개발 모드용)
     this.resetForDevMode();
 
-    // 보스 스테이지 체크
+    // 보스 스테이지 여부
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
     const isPoisonBoss = !isBulletBoss && !isFogBoss && (
@@ -19450,29 +19445,21 @@ export default class SnakeGame extends Phaser.Scene {
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
 
-    // 보스 스테이지 설정
+    // 보스 스테이지 진입
     if (isPoisonBoss || isBulletBoss || isFogBoss) {
-      this.isBossStage = true;
-      this.bossMode = true;
-      this.savedCombo = this.combo;
-      this.savedComboShieldCount = this.comboShieldCount;
-      this.combo = 0;
-      this.comboText.setText('');
+      this.enterBossStage();
     }
 
     // 카운트다운 표시
     this.showDevModeCountdown(() => {
-      // 카운트다운 완료 후 게임 시작
       if (this.moveTimer) {
         this.moveTimer.paused = false;
       }
 
-      // 스테이지별 특수 기능 활성화
       this.activateStageFeatures();
     });
   }
 
-  // 스테이지별 특수 기능 활성화
   activateStageFeatures() {
     // 안개 인트로 (World 2)
     if (shouldHaveFog(this.currentStage)) {
@@ -19490,6 +19477,8 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.isBulletBossStage()) {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.hideFoodGraphics();
       this.time.delayedCall(500, () => {
         this.startBulletBoss();
       });
@@ -19499,6 +19488,8 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.isFogBossStage()) {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.hideFoodGraphics();
       this.time.delayedCall(500, () => {
         this.startFogBoss();
       });
@@ -19717,8 +19708,4 @@ export default class SnakeGame extends Phaser.Scene {
     // update에서는 아무것도 하지 않아도 됨
   }
 }
-
-
-
-
 
