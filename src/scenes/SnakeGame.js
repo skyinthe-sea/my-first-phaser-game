@@ -116,7 +116,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.gearTitanElement = null;
     this.gearTitanContainer = null;
     this.gearTitanHitCount = 0;
-    this.gearTitanHP = 4;
+    this.gearTitanHitsToKill = 6;
+    this.gearTitanHP = this.gearTitanHitsToKill;
     this.gearTitanGears = [];
     this.gearTitanCore = null;
     this.gearTitanLasers = [];
@@ -5241,7 +5242,6 @@ export default class SnakeGame extends Phaser.Scene {
 
     const head = this.snake[0];
     const dir = this.direction;
-    const startPos = { x: head.x, y: head.y }; // 원래 위치 저장
 
     // 방향에 따른 이동 벡터
     const dirVectors = {
@@ -5261,54 +5261,59 @@ export default class SnakeGame extends Phaser.Scene {
       'RIGHT': 'LEFT'
     };
 
-    // 대시 거리 계산 (벽/보스까지 또는 최대 거리)
-    let dashDist = this.dashDistance;
-    let hitBoss = false;
-    let hitBossAt = -1;
-
+    // 대시 경로 계산 (벽까지 최대 5칸)
+    const pathPositions = [];
+    let maxTravel = 0;
     for (let i = 1; i <= this.dashDistance; i++) {
       const testX = head.x + vec.dx * i;
       const testY = head.y + vec.dy * i;
 
-      // 벽 충돌 체크
       if (testX < 0 || testX >= this.cols || testY < 0 || testY >= this.rows) {
-        dashDist = i - 1;
         break;
       }
 
-      // 보스 충돌 체크 (대시 경로에 보스가 있는지)
-      if (this.gearTitanMode && this.gearTitanPosition) {
-        const distToBoss = Math.abs(testX - this.gearTitanPosition.x) + Math.abs(testY - this.gearTitanPosition.y);
-        if (distToBoss <= 2) {
-          hitBoss = true;
-          hitBossAt = i;
-          dashDist = i; // 보스 위치까지만 이동
-          break;
-        }
-      }
+      pathPositions.push({ x: testX, y: testY });
+      maxTravel = i;
     }
 
-    if (dashDist <= 0) {
+    if (maxTravel <= 0) {
       this.isDashing = false;
       this.isInvincible = false;
       return;
+    }
+
+    // 기어 타이탄 코어를 직접 겨냥 (정렬되어 있으면 코어까지 돌진)
+    let dashDist = maxTravel;
+    let hitBoss = false;
+    if (this.gearTitanMode && this.gearTitanPosition) {
+      const alignedWithCore = (vec.dx !== 0 && head.y === this.gearTitanPosition.y) ||
+        (vec.dy !== 0 && head.x === this.gearTitanPosition.x);
+      if (alignedWithCore) {
+        const distToCore = Math.abs(head.x - this.gearTitanPosition.x) + Math.abs(head.y - this.gearTitanPosition.y);
+        if (distToCore > 0 && distToCore <= maxTravel) {
+          dashDist = distToCore;
+          hitBoss = true;
+        }
+      }
+
+      // 정렬되어 있지 않아도 코어 주변에 닿으면 충돌 판정
+      const impactPreview = pathPositions[Math.min(dashDist, pathPositions.length) - 1];
+      const distAtEnd = Math.abs(impactPreview.x - this.gearTitanPosition.x) + Math.abs(impactPreview.y - this.gearTitanPosition.y);
+      if (distAtEnd <= 1) {
+        hitBoss = true;
+      }
     }
 
     // 대시 시작 효과
     this.showDashEffect(head.x, head.y, dashDist, dir);
 
     // 뱀 순간 이동 (대시)
-    const newHead = {
-      x: head.x + vec.dx * dashDist,
-      y: head.y + vec.dy * dashDist
-    };
+    const newHead = pathPositions[dashDist - 1];
 
     // 대시 중간 경로 잔상 생성
-    for (let i = 0; i <= dashDist; i++) {
-      const ghostX = head.x + vec.dx * i;
-      const ghostY = head.y + vec.dy * i;
-      this.createDashGhost(ghostX, ghostY, i * 30);
-    }
+    pathPositions.slice(0, dashDist).forEach((pos, idx) => {
+      this.createDashGhost(pos.x, pos.y, idx * 30);
+    });
 
     // 뱀 머리 이동
     this.snake.unshift(newHead);
@@ -5321,7 +5326,7 @@ export default class SnakeGame extends Phaser.Scene {
         this.handleGearTitanHit();
       } else {
         // not vulnerable 상태: 튕겨나오기 + 방향 반전
-        this.bounceBackFromBoss(startPos, oppositeDir[dir]);
+        this.bounceBackFromBoss(newHead, oppositeDir[dir]);
         return; // 여기서 리턴 (아래의 무적 해제는 bounceBackFromBoss에서 처리)
       }
     }
@@ -5335,13 +5340,10 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   // 보스에 튕겨나오는 함수
-  bounceBackFromBoss(startPos, newDirection) {
-    const { width, height } = this.cameras.main;
-    const head = this.snake[0];
-
+  bounceBackFromBoss(impactPos, newDirection) {
     // 현재 위치에서 충돌 이펙트
-    const hitX = head.x * this.gridSize + this.gridSize / 2;
-    const hitY = head.y * this.gridSize + this.gridSize / 2 + 60;
+    const hitX = impactPos.x * this.gridSize + this.gridSize / 2;
+    const hitY = impactPos.y * this.gridSize + this.gridSize / 2 + 60;
 
     // 충돌 효과 - 빨간 플래시
     this.cameras.main.flash(150, 255, 100, 100);
@@ -5385,42 +5387,64 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // 뱀을 원래 위치로 되돌리기 (애니메이션)
-    this.time.delayedCall(100, () => {
-      // 뱀 위치 복원
-      this.snake[0] = { x: startPos.x, y: startPos.y };
+    const dirVectors = {
+      'UP': { dx: 0, dy: -1 },
+      'DOWN': { dx: 0, dy: 1 },
+      'LEFT': { dx: -1, dy: 0 },
+      'RIGHT': { dx: 1, dy: 0 }
+    };
+    const bounceVec = dirVectors[newDirection];
+    const maxBounce = 3;
+    let bounceDist = 0;
 
-      // 방향 반전
+    for (let i = 1; i <= maxBounce; i++) {
+      const nx = impactPos.x + bounceVec.dx * i;
+      const ny = impactPos.y + bounceVec.dy * i;
+      const withinBounds = nx >= 0 && nx < this.cols && ny >= 0 && ny < this.rows;
+      const hitsBody = this.snake.some((segment, idx) => idx > 0 && segment.x === nx && segment.y === ny);
+      if (!withinBounds || hitsBody) break;
+      bounceDist = i;
+    }
+
+    let bounceTarget = { ...impactPos };
+    if (bounceDist > 0) {
+      bounceTarget = {
+        x: Phaser.Math.Clamp(impactPos.x + bounceVec.dx * bounceDist, 0, this.cols - 1),
+        y: Phaser.Math.Clamp(impactPos.y + bounceVec.dy * bounceDist, 0, this.rows - 1)
+      };
+    }
+
+    // 튕겨나가는 잔상
+    for (let i = 0; i < bounceDist; i++) {
+      const ghost = this.add.graphics().setDepth(95);
+      ghost.fillStyle(0x00ff00, 0.5 - i * 0.1);
+      ghost.fillCircle(0, 0, this.gridSize / 2 - 2);
+      ghost.x = Phaser.Math.Linear(hitX, bounceTarget.x * this.gridSize + this.gridSize / 2, i / Math.max(1, bounceDist));
+      ghost.y = Phaser.Math.Linear(hitY, bounceTarget.y * this.gridSize + this.gridSize / 2 + 60, i / Math.max(1, bounceDist));
+
+      this.tweens.add({
+        targets: ghost,
+        alpha: 0,
+        scaleX: 0.5,
+        scaleY: 0.5,
+        duration: 200,
+        delay: i * 30,
+        onComplete: () => ghost.destroy()
+      });
+    }
+
+    this.time.delayedCall(100, () => {
+      // 방향 반전 + 위치 이동
       this.direction = newDirection;
       this.inputQueue = []; // 입력 큐 초기화
-
-      // 복귀 이펙트
-      const backX = startPos.x * this.gridSize + this.gridSize / 2;
-      const backY = startPos.y * this.gridSize + this.gridSize / 2 + 60;
-
-      // 복귀 잔상
-      for (let i = 0; i < 4; i++) {
-        const ghost = this.add.graphics().setDepth(95);
-        ghost.fillStyle(0x00ff00, 0.5 - i * 0.1);
-        ghost.fillCircle(0, 0, this.gridSize / 2 - 2);
-        ghost.x = Phaser.Math.Linear(hitX, backX, i / 3);
-        ghost.y = Phaser.Math.Linear(hitY, backY, i / 3);
-
-        this.tweens.add({
-          targets: ghost,
-          alpha: 0,
-          scaleX: 0.5,
-          scaleY: 0.5,
-          duration: 200,
-          delay: i * 30,
-          onComplete: () => ghost.destroy()
-        });
-      }
+      this.snake[0] = bounceTarget;
 
       // 착지 이펙트
+      const landX = bounceTarget.x * this.gridSize + this.gridSize / 2;
+      const landY = bounceTarget.y * this.gridSize + this.gridSize / 2 + 60;
       const landEffect = this.add.graphics().setDepth(98);
       landEffect.lineStyle(3, 0x00ffff, 1);
-      landEffect.strokeCircle(backX, backY, 5);
+      landEffect.strokeCircle(landX, landY, 5);
 
       this.tweens.add({
         targets: landEffect,
@@ -5542,6 +5566,7 @@ export default class SnakeGame extends Phaser.Scene {
     if (!this.gearTitanMode || this.gameOver) return;
 
     const { width, height } = this.cameras.main;
+    const bossPos = this.gearTitanPosition || { x: Math.floor(this.cols / 2), y: Math.floor(this.rows / 2) };
 
     // 경고 표시
     const warningText = this.add.text(width / 2, 100, 'SAW BARRAGE!', {
@@ -5558,21 +5583,45 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     // 4방향에서 톱니 발사
-    const directions = [
+    const cornerSpawns = [
       { x: 0, y: 0 },
       { x: this.cols - 1, y: 0 },
       { x: 0, y: this.rows - 1 },
       { x: this.cols - 1, y: this.rows - 1 }
     ];
 
-    directions.forEach((pos, idx) => {
-      this.time.delayedCall(idx * 300, () => {
+    cornerSpawns.forEach((pos, idx) => {
+      this.time.delayedCall(idx * 200, () => {
         this.fireGearTitanSaw(pos.x, pos.y);
       });
     });
 
+    // 추가 에지 스폰 (중앙에서 빠르게)
+    const edgeSpawns = [
+      { x: Math.floor(this.cols / 2), y: 0 },
+      { x: Math.floor(this.cols / 2), y: this.rows - 1 },
+      { x: 0, y: Math.floor(this.rows / 2) },
+      { x: this.cols - 1, y: Math.floor(this.rows / 2) }
+    ];
+
+    edgeSpawns.forEach((pos, idx) => {
+      this.time.delayedCall(600 + idx * 160, () => {
+        this.fireGearTitanSaw(pos.x, pos.y);
+      });
+    });
+
+    // 플레이어를 겨냥한 추가 샷
+    this.time.delayedCall(1200, () => {
+      const snakeHead = this.snake[0];
+      const fromLeft = snakeHead.x > bossPos.x;
+      const fromTop = snakeHead.y > bossPos.y;
+      const startX = fromLeft ? 0 : this.cols - 1;
+      const startY = fromTop ? 0 : this.rows - 1;
+      this.fireGearTitanSaw(startX, startY);
+    });
+
     // 공격 완료 후 취약 상태
-    this.time.delayedCall(3000, () => {
+    this.time.delayedCall(4200, () => {
       this.makeGearTitanVulnerable();
     });
   }
@@ -5626,8 +5675,8 @@ export default class SnakeGame extends Phaser.Scene {
       targets: sawContainer,
       x: targetX,
       y: targetY,
-      duration: 1500,
-      ease: 'Linear',
+      duration: 1100,
+      ease: 'Quad.easeIn',
       onUpdate: () => {
         // 충돌 체크 (무적이 아닐 때만)
         if (!this.isInvincible && !this.isDashing) {
@@ -5665,16 +5714,32 @@ export default class SnakeGame extends Phaser.Scene {
       onComplete: () => warningText.destroy()
     });
 
-    // 랜덤으로 가로 또는 세로 레이저
-    const isHorizontal = Math.random() < 0.5;
-    const laserPos = isHorizontal
+    // 랜덤으로 가로 또는 세로 레이저 2연타 (교차)
+    const firstHorizontal = Math.random() < 0.5;
+    const firstPos = firstHorizontal
       ? Phaser.Math.Between(3, this.rows - 4)
       : Phaser.Math.Between(3, this.cols - 4);
 
-    // 경고선 표시
-    this.showLaserWarning(isHorizontal, laserPos, () => {
-      // 레이저 발사
-      this.fireLaser(isHorizontal, laserPos);
+    const snakeHead = this.snake[0];
+    const secondHorizontal = !firstHorizontal;
+    const secondPos = secondHorizontal
+      ? Phaser.Math.Clamp(snakeHead.y + Phaser.Math.Between(-1, 1), 2, this.rows - 3)
+      : Phaser.Math.Clamp(snakeHead.x + Phaser.Math.Between(-1, 1), 2, this.cols - 3);
+
+    // 첫 번째 레이저
+    this.showLaserWarning(firstHorizontal, firstPos, () => {
+      this.fireLaser(firstHorizontal, firstPos, () => {
+        // 두 번째 (교차) 레이저
+        this.time.delayedCall(300, () => {
+          this.showLaserWarning(secondHorizontal, secondPos, () => {
+            this.fireLaser(secondHorizontal, secondPos, () => {
+              this.time.delayedCall(500, () => {
+                this.makeGearTitanVulnerable();
+              });
+            });
+          });
+        });
+      });
     });
   }
 
@@ -5706,7 +5771,7 @@ export default class SnakeGame extends Phaser.Scene {
       alpha: { from: 0.3, to: 0.8 },
       duration: 200,
       yoyo: true,
-      repeat: 3,
+      repeat: 2,
       onComplete: () => {
         warningLine.destroy();
         if (callback) callback();
@@ -5714,7 +5779,7 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
-  fireLaser(isHorizontal, pos) {
+  fireLaser(isHorizontal, pos, onComplete) {
     const { width, height } = this.cameras.main;
 
     const laser = this.add.graphics();
@@ -5755,9 +5820,13 @@ export default class SnakeGame extends Phaser.Scene {
       onComplete: () => {
         laser.destroy();
         // 다음 공격 준비
-        this.time.delayedCall(1000, () => {
-          this.makeGearTitanVulnerable();
-        });
+        if (onComplete) {
+          onComplete();
+        } else {
+          this.time.delayedCall(800, () => {
+            this.makeGearTitanVulnerable();
+          });
+        }
       }
     });
   }
@@ -5828,7 +5897,7 @@ export default class SnakeGame extends Phaser.Scene {
             targets: this.gearTitanContainer,
             x: endPixelX,
             y: endPixelY,
-            duration: 500,
+            duration: 380,
             ease: 'Power2',
             onUpdate: () => {
               // 충돌 체크
@@ -5845,6 +5914,11 @@ export default class SnakeGame extends Phaser.Scene {
             onComplete: () => {
               // 보스 위치 업데이트
               this.gearTitanPosition = { x: targetX, y: targetY };
+
+              // 돌진 직후 추가 압박 (보스 위치에서 사출)
+              this.time.delayedCall(150, () => {
+                this.fireGearTitanSaw(this.gearTitanPosition.x, this.gearTitanPosition.y);
+              });
 
               // 벽에 부딪혀서 스턴 (취약 상태)
               this.cameras.main.shake(300, 0.03);
@@ -5894,8 +5968,8 @@ export default class SnakeGame extends Phaser.Scene {
       this.gearTitanCore.fillCircle(0, -this.gridSize * 2 * 0.05, this.gridSize * 2 * 0.1);
     }
 
-    // 3초 후 취약 상태 종료
-    this.time.delayedCall(3000, () => {
+    // 짧은 취약 창 (더 어려운 난이도)
+    this.time.delayedCall(1800, () => {
       if (hitMeText.active) hitMeText.destroy();
 
       if (this.gearTitanMode && !this.gameOver) {
@@ -5922,9 +5996,11 @@ export default class SnakeGame extends Phaser.Scene {
 
   advanceGearTitanPhase() {
     const hitCount = this.gearTitanHitCount;
+    const hitsNeeded = this.gearTitanHitsToKill || 4;
+    const enrageThreshold = Math.max(2, hitsNeeded - 2);
 
-    // 광폭화 체크 (HP 25% 이하 = 3 HIT 이상)
-    if (hitCount >= 3 && this.gearTitanPhase !== 'enrage') {
+    // 광폭화 체크 (HP 25% 이하)
+    if (hitCount >= enrageThreshold && this.gearTitanPhase !== 'enrage') {
       this.gearTitanEnrageMode();
       return;
     }
@@ -5935,7 +6011,7 @@ export default class SnakeGame extends Phaser.Scene {
     const nextIdx = (currentIdx + 1) % patterns.length;
     this.gearTitanPhase = patterns[nextIdx];
 
-    this.time.delayedCall(1000, () => {
+    this.time.delayedCall(700, () => {
       switch (this.gearTitanPhase) {
         case 'phase1':
           this.gearTitanPhase1Attack();
@@ -6008,6 +6084,7 @@ export default class SnakeGame extends Phaser.Scene {
           // 광폭화 공격 (모든 패턴 동시)
           this.gearTitanPhase1Attack();
           this.time.delayedCall(500, () => this.gearTitanPhase2Attack());
+          this.time.delayedCall(900, () => this.gearTitanPhase3Attack());
         });
       }
     });
@@ -6022,6 +6099,7 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.gearTitanHitCount++;
     this.gearTitanVulnerable = false;
+    const hitsNeeded = this.gearTitanHitsToKill || 4;
 
     // 히트 후 일시적 무적 (보스 충돌 무시)
     this.isInvincible = true;
@@ -6094,7 +6172,7 @@ export default class SnakeGame extends Phaser.Scene {
       ease: 'Back.easeOut',
       onComplete: () => {
         // HIT 카운트 표시
-        const countText = this.add.text(width / 2, height / 2 + 50, `${this.gearTitanHitCount}/4`, {
+        const countText = this.add.text(width / 2, height / 2 + 50, `${this.gearTitanHitCount}/${hitsNeeded}`, {
           fontSize: '36px',
           fill: '#ffcc00',
           fontStyle: 'bold'
@@ -6174,7 +6252,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.isInvincible = false;
 
       // 4 HIT 시 승리
-      if (this.gearTitanHitCount >= 4) {
+      if (this.gearTitanHitCount >= hitsNeeded) {
         this.showGearTitanVictory();
       } else {
         // 게임 재개
@@ -7858,7 +7936,7 @@ export default class SnakeGame extends Phaser.Scene {
       // 기어 타이탄: 톱니 날아가기 애니메이션 후 resetStage
       this.moveTimer.paused = true;
       this.food = { x: -100, y: -100 };
-      this.hideFoodGraphics();
+      this.hideFoodGraphics({ skipRedraw: true });
       // resetStage는 톱니 날아간 후 호출됨
     } else if (isAnyBossStage) {
       this.resetStage();
@@ -15472,10 +15550,18 @@ export default class SnakeGame extends Phaser.Scene {
     this.showBulletBossIntro();
   }
 
-  hideFoodGraphics() {
+  hideFoodGraphics(options = {}) {
+    const skipRedraw = options.skipRedraw || this.isStageClearingAnimation;
     // foodGraphics가 있으면 숨기기
     if (this.foodGraphics) {
       this.foodGraphics.setVisible(false);
+    }
+    // 카운트다운/클리어 상태에서는 그래픽을 다시 보이게 만들지 않음
+    if (skipRedraw) {
+      if (this.graphics && !this.graphics.visible) {
+        this.graphics.clear();
+      }
+      return;
     }
     // 다시 그리기 (먹이가 화면 밖이므로 안 보임)
     this.draw();
