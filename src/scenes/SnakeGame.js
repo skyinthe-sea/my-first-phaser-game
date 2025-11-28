@@ -101,6 +101,45 @@ export default class SnakeGame extends Phaser.Scene {
     this.sawBaseDelay = 600;
     this.maxSaws = 5;
 
+    // Enhanced saws (Stage -1 강화 톱니)
+    this.enhancedSaws = [];
+    this.maxEnhancedSaws = 3;
+    this.enhancedSawDelay = 400; // 기본 600ms보다 빠름
+    this.enhancedSawScale = 1.3; // 1.3배 더 큼
+    this.enhancedSawTextureKey = 'enhanced_saw';
+    this.preserveSawsForNextStage = false; // 톱니 보존 플래그
+
+    // Gear Titan Boss (Stage 0)
+    this.gearTitanMode = false;
+    this.gearTitanPhase = 'none'; // 'none' | 'intro' | 'phase1' | 'phase2' | 'phase3' | 'vulnerable' | 'enrage' | 'victory'
+    this.gearTitanPosition = null;
+    this.gearTitanElement = null;
+    this.gearTitanContainer = null;
+    this.gearTitanHitCount = 0;
+    this.gearTitanHP = 4;
+    this.gearTitanGears = [];
+    this.gearTitanCore = null;
+    this.gearTitanLasers = [];
+    this.gearTitanAttackTimer = null;
+    this.gearTitanAnimTimer = null;
+    this.gearTitanVulnerable = false;
+
+    // Charge Dash System (기어 타이탄 보스용)
+    this.isCharging = false;
+    this.chargeStartTime = 0;
+    this.chargeDuration = 1000; // 1초 차지
+    this.chargeReady = false;
+    this.dashCooldown = 3000; // 3초 쿨다운
+    this.lastDashTime = 0;
+    this.isDashing = false;
+    this.dashDistance = 5; // 5칸 돌진
+    this.chargeUI = null;
+    this.chargeGaugeUI = null;
+    this.canChargeDash = false; // 기어 타이탄 보스에서만 활성화
+    this.chargeEffectParticles = []; // 차지 에너지 파티클들
+    this.chargeEffectTimer = null; // 차지 에너지 업데이트 타이머
+    this.chargeAuraGraphics = null; // 차지 오라 그래픽
+
     // 확산형 독가스 시스템 (배틀로얄 자기장) - 원형
     this.gasZoneEnabled = false;
     this.gasZoneRadius = 0; // 현재 안전 영역 반경 (타일 단위)
@@ -512,6 +551,9 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 게임 오버 플래그
     this.gameOver = false;
+
+    // 스테이지 클리어 애니메이션 중 플래그
+    this.isStageClearingAnimation = false;
 
     // 배경 그리드 그리기
     this.drawGrid();
@@ -964,8 +1006,8 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
-    // stage 3 이상이면 후레쉬 효과 없음
-    if (this.currentStage >= 3) {
+    // Stage 1, 2에서만 십자가 후레쉬 효과 (테스트 스테이지 포함 안함)
+    if (this.currentStage !== 1 && this.currentStage !== 2) {
       return;
     }
 
@@ -1188,6 +1230,22 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.snake.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
       this.endGame();
       return;
+    }
+
+    // 기어 타이탄 보스 몸 충돌 체크 (대시/무적 상태가 아닐 때)
+    if (this.gearTitanMode && this.gearTitanPosition && !this.isDashing && !this.isInvincible) {
+      const distToBoss = Math.abs(newHead.x - this.gearTitanPosition.x) + Math.abs(newHead.y - this.gearTitanPosition.y);
+      if (distToBoss <= 2) {
+        // vulnerable 상태면 HIT 처리
+        if (this.gearTitanVulnerable) {
+          this.handleGearTitanHit();
+          return;
+        } else {
+          // vulnerable 아니면 게임 오버
+          this.endGame();
+          return;
+        }
+      }
     }
 
     // 뱀 이동
@@ -2749,19 +2807,39 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   isSawOccupyingTile(x, y) {
-    return this.saws.some(saw => {
+    // 일반 톱니 체크
+    const normalSawOccupied = this.saws.some(saw => {
       if (!saw) return false;
       if (saw.x === x && saw.y === y) return true;
       if (saw.nextPosition && saw.nextPosition.x === x && saw.nextPosition.y === y) return true;
       return false;
     });
+
+    // 강화 톱니 체크
+    const enhancedSawOccupied = this.enhancedSaws.some(saw => {
+      if (!saw) return false;
+      if (saw.x === x && saw.y === y) return true;
+      if (saw.nextPosition && saw.nextPosition.x === x && saw.nextPosition.y === y) return true;
+      return false;
+    });
+
+    return normalSawOccupied || enhancedSawOccupied;
   }
 
   isSawTileDanger(x, y) {
-    return this.saws.some(saw => saw && saw.canKill && (
+    // 일반 톱니 위험 체크
+    const normalSawDanger = this.saws.some(saw => saw && saw.canKill && (
       (saw.x === x && saw.y === y) ||
       (saw.nextPosition && saw.nextPosition.x === x && saw.nextPosition.y === y)
     ));
+
+    // 강화 톱니 위험 체크
+    const enhancedSawDanger = this.enhancedSaws.some(saw => saw && saw.canKill && (
+      (saw.x === x && saw.y === y) ||
+      (saw.nextPosition && saw.nextPosition.x === x && saw.nextPosition.y === y)
+    ));
+
+    return normalSawDanger || enhancedSawDanger;
   }
 
   getSawSpawnPosition() {
@@ -2992,6 +3070,193 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
+  // 모든 톱니 일시정지
+  pauseAllSaws() {
+    // 기본 톱니
+    for (const saw of this.saws) {
+      if (saw && saw.moveTimer) {
+        saw.moveTimer.paused = true;
+      }
+    }
+    // 강화 톱니
+    for (const saw of this.enhancedSaws) {
+      if (saw && saw.moveTimer) {
+        saw.moveTimer.paused = true;
+      }
+    }
+  }
+
+  // 모든 톱니 재개
+  resumeAllSaws() {
+    // 기본 톱니
+    for (const saw of this.saws) {
+      if (saw && saw.moveTimer) {
+        saw.moveTimer.paused = false;
+      }
+    }
+    // 강화 톱니
+    for (const saw of this.enhancedSaws) {
+      if (saw && saw.moveTimer) {
+        saw.moveTimer.paused = false;
+      }
+    }
+  }
+
+  // 모든 강화 톱니 이동 시작
+  startAllEnhancedSawMovement() {
+    for (const saw of this.enhancedSaws) {
+      if (saw && saw.canKill && !saw.moveTimer) {
+        this.startEnhancedSawMovement(saw);
+      }
+    }
+  }
+
+  // 모든 톱니를 맵 밖으로 날려보내는 애니메이션
+  animateSawsFlyOut(callback) {
+    const { width, height } = this.cameras.main;
+
+    // 뱀 숨기기 (스테이지 클리어 상태의 뱀이 보이지 않도록)
+    this.hideSnakeGraphics();
+
+    // 모든 톱니 컨테이너 수집
+    const allSawContainers = [];
+    this.saws.forEach(saw => {
+      if (saw && saw.container && saw.container.active) {
+        // 이동 타이머 정지
+        if (saw.moveTimer) {
+          saw.moveTimer.remove();
+          saw.moveTimer = null;
+        }
+        allSawContainers.push({ container: saw.container, isEnhanced: false });
+      }
+    });
+    this.enhancedSaws.forEach(saw => {
+      if (saw && saw.container && saw.container.active) {
+        // 이동 타이머 정지
+        if (saw.moveTimer) {
+          saw.moveTimer.remove();
+          saw.moveTimer = null;
+        }
+        allSawContainers.push({ container: saw.container, isEnhanced: true });
+      }
+    });
+
+    // 톱니가 없으면 바로 콜백
+    if (allSawContainers.length === 0) {
+      if (callback) callback();
+      return;
+    }
+
+    // 화면 어둡게
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0);
+    overlay.setDepth(199);
+    this.tweens.add({
+      targets: overlay,
+      fillAlpha: 0.5,
+      duration: 300
+    });
+
+    // 경고 텍스트
+    const warningText = this.add.text(width / 2, height / 2 - 80, 'SAWS RETREATING...', {
+      fontSize: '28px',
+      fill: '#ff6600',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5000).setAlpha(0);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      duration: 300
+    });
+
+    // 카메라 약간 흔들림
+    this.cameras.main.shake(500, 0.015);
+
+    // 각 톱니를 랜덤 방향으로 날려보냄
+    let completed = 0;
+    const total = allSawContainers.length;
+
+    allSawContainers.forEach((sawData, index) => {
+      const container = sawData.container;
+
+      // 랜덤 방향 선택 (상하좌우)
+      const directions = [
+        { x: -150, y: container.y }, // 왼쪽
+        { x: width + 150, y: container.y }, // 오른쪽
+        { x: container.x, y: -150 }, // 위
+        { x: container.x, y: height + 150 } // 아래
+      ];
+      const targetPos = Phaser.Math.RND.pick(directions);
+
+      // 회전하며 날아감
+      this.tweens.add({
+        targets: container,
+        rotation: container.rotation + Math.PI * 6,
+        duration: 800,
+        ease: 'Quad.easeIn'
+      });
+
+      // 위치 이동 (날아감)
+      this.tweens.add({
+        targets: container,
+        x: targetPos.x,
+        y: targetPos.y,
+        scaleX: sawData.isEnhanced ? 0.5 : 0.3,
+        scaleY: sawData.isEnhanced ? 0.5 : 0.3,
+        alpha: 0.3,
+        duration: 800,
+        delay: index * 80,
+        ease: 'Quad.easeIn',
+        onComplete: () => {
+          // 날아가는 궤적에 스파크 효과
+          const sparkCount = sawData.isEnhanced ? 5 : 3;
+          for (let i = 0; i < sparkCount; i++) {
+            const spark = this.add.graphics().setDepth(200);
+            spark.fillStyle(sawData.isEnhanced ? 0xff4400 : 0xcccccc, 0.8);
+            spark.fillCircle(0, 0, Phaser.Math.Between(2, 5));
+            spark.x = targetPos.x + Phaser.Math.Between(-20, 20);
+            spark.y = targetPos.y + Phaser.Math.Between(-20, 20);
+            this.tweens.add({
+              targets: spark,
+              alpha: 0,
+              scaleX: 2,
+              scaleY: 2,
+              duration: 300,
+              delay: i * 50,
+              onComplete: () => spark.destroy()
+            });
+          }
+
+          container.destroy();
+          completed++;
+
+          // 모든 톱니가 날아가면 완료
+          if (completed >= total) {
+            // 배열 비우기
+            this.saws = [];
+            this.enhancedSaws = [];
+
+            // UI 정리
+            this.time.delayedCall(300, () => {
+              this.tweens.add({
+                targets: [overlay, warningText],
+                alpha: 0,
+                duration: 300,
+                onComplete: () => {
+                  overlay.destroy();
+                  warningText.destroy();
+                  if (callback) callback();
+                }
+              });
+            });
+          }
+        }
+      });
+    });
+  }
+
   chooseSawTarget(saw, stepSize = 1) {
     if (!saw) return null;
 
@@ -3160,6 +3425,8 @@ export default class SnakeGame extends Phaser.Scene {
 
   checkSawCollisionWithSnake(saw) {
     if (!saw || !saw.canKill) return;
+    // 스테이지 클리어 중에는 충돌 무시
+    if (this.isStageClearingAnimation) return;
 
     const hitSnake = this.snake.some(segment => segment.x === saw.x && segment.y === saw.y);
     if (hitSnake) {
@@ -3199,6 +3466,2853 @@ export default class SnakeGame extends Phaser.Scene {
     const clones = [...this.saws];
     clones.forEach(saw => this.destroySaw(saw));
     this.saws = [];
+  }
+
+  // =====================
+  // 톱니 보존 시스템
+  // =====================
+
+  shouldPreserveSaws() {
+    // Stage -2 -> -1 전환 시 톱니 보존
+    return this.preserveSawsForNextStage;
+  }
+
+  // =====================
+  // 강화 톱니 시스템 (Stage -1)
+  // =====================
+
+  destroyEnhancedSaw(saw) {
+    if (!saw) return;
+
+    // 타이머 정리
+    if (saw.moveTimer) saw.moveTimer.remove();
+    if (saw.spinTween) saw.spinTween.remove();
+    if (saw.pulseTween) saw.pulseTween.remove();
+    if (saw.breathTween) saw.breathTween.remove();
+    if (saw.glowTween) saw.glowTween.remove();
+    if (saw.trailTimer) saw.trailTimer.remove();
+
+    // 컨테이너 파괴
+    if (saw.container) saw.container.destroy(true);
+
+    // 배열에서 제거
+    const idx = this.enhancedSaws.indexOf(saw);
+    if (idx >= 0) this.enhancedSaws.splice(idx, 1);
+  }
+
+  destroyAllEnhancedSaws() {
+    const clones = [...this.enhancedSaws];
+    clones.forEach(saw => this.destroyEnhancedSaw(saw));
+    this.enhancedSaws = [];
+  }
+
+  getEnhancedSawSpawnPosition() {
+    // 안전한 위치 찾기
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const x = Phaser.Math.Between(3, this.cols - 4);
+      const y = Phaser.Math.Between(3, this.rows - 4);
+
+      // 뱀과 겹치지 않는지
+      const notOnSnake = !this.snake.some(seg => seg.x === x && seg.y === y);
+      // 먹이와 겹치지 않는지
+      const notOnFood = !(this.food && this.food.x === x && this.food.y === y);
+      // 데드존과 겹치지 않는지
+      const notOnDeadZone = !this.deadZones.some(dz => dz.x === x && dz.y === y);
+      // 기존 톱니와 겹치지 않는지
+      const notOnSaw = !this.saws.some(s => Math.abs(s.x - x) < 3 && Math.abs(s.y - y) < 3);
+      // 강화 톱니와 겹치지 않는지
+      const notOnEnhancedSaw = !this.enhancedSaws.some(s => Math.abs(s.x - x) < 3 && Math.abs(s.y - y) < 3);
+
+      if (notOnSnake && notOnFood && notOnDeadZone && notOnSaw && notOnEnhancedSaw) {
+        return { x, y };
+      }
+    }
+    return { x: 20, y: 13 }; // 기본 위치
+  }
+
+  spawnEnhancedSaw(delayMovement = false) {
+    if (this.gameOver || this.enhancedSaws.length >= this.maxEnhancedSaws) return;
+
+    const pos = this.getEnhancedSawSpawnPosition();
+    const pixelX = pos.x * this.gridSize + this.gridSize / 2;
+    const pixelY = pos.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 컨테이너 생성
+    const container = this.add.container(pixelX, pixelY);
+    container.setDepth(200);
+    container.setScale(0);
+
+    // 빨간 글로우 오라 (강화 톱니 특징)
+    const glowAura = this.add.graphics();
+    const glowSize = this.gridSize * this.enhancedSawScale * 1.5;
+    glowAura.fillStyle(0xff0000, 0.3);
+    glowAura.fillCircle(0, 0, glowSize);
+    container.add(glowAura);
+
+    // 위험 오라
+    const dangerAura = this.add.graphics();
+    dangerAura.fillStyle(0xff4400, 0.2);
+    dangerAura.fillCircle(0, 0, this.gridSize * this.enhancedSawScale);
+    container.add(dangerAura);
+
+    // 경고 링
+    const warningRing = this.add.graphics();
+    warningRing.lineStyle(3, 0xff0000, 0.8);
+    warningRing.strokeCircle(0, 0, this.gridSize * this.enhancedSawScale * 0.9);
+    container.add(warningRing);
+
+    // 톱니 블레이드 (강화 버전 - 더 크고 날카로움)
+    const blade = this.add.graphics();
+    const bladeRadius = this.gridSize * 0.45 * this.enhancedSawScale;
+    const teethCount = 16; // 더 많은 톱니
+
+    // 블레이드 그리기 (빨간색 포인트 추가)
+    blade.fillStyle(0xcc3333, 1); // 빨간 빛 도는 금속
+    blade.beginPath();
+    for (let i = 0; i < teethCount; i++) {
+      const angle = (i / teethCount) * Math.PI * 2;
+      const nextAngle = ((i + 0.5) / teethCount) * Math.PI * 2;
+      const outerR = bladeRadius * 1.2;
+      const innerR = bladeRadius * 0.7;
+
+      if (i === 0) {
+        blade.moveTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+      } else {
+        blade.lineTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+      }
+      blade.lineTo(Math.cos(nextAngle) * innerR, Math.sin(nextAngle) * innerR);
+    }
+    blade.closePath();
+    blade.fill();
+
+    // 내부 코어 (검은색)
+    blade.fillStyle(0x220000, 1);
+    blade.fillCircle(0, 0, bladeRadius * 0.35);
+
+    // 빛나는 중심
+    blade.fillStyle(0xff6600, 1);
+    blade.fillCircle(0, 0, bladeRadius * 0.15);
+
+    container.add(blade);
+
+    // 강화 톱니 객체 생성
+    const enhancedSaw = {
+      x: pos.x,
+      y: pos.y,
+      container,
+      blade,
+      warningRing,
+      glowAura,
+      dangerAura,
+      moveDelay: this.enhancedSawDelay,
+      canKill: false,
+      nextPosition: null,
+      lastDirection: null,
+      nextStepSize: 2, // 강화 톱니는 2칸 점프 가능
+      spinTween: null,
+      pulseTween: null,
+      breathTween: null,
+      glowTween: null,
+      trailTimer: null,
+      moveTimer: null,
+      isEnhanced: true
+    };
+
+    this.enhancedSaws.push(enhancedSaw);
+    this.animateEnhancedSawSpawn(enhancedSaw, delayMovement);
+  }
+
+  animateEnhancedSawSpawn(saw, delayMovement = false) {
+    const { width, height } = this.cameras.main;
+
+    // 스폰 플래시 효과 (빨간색)
+    const flash = this.add.graphics();
+    flash.setDepth(199);
+    const flashX = saw.x * this.gridSize + this.gridSize / 2;
+    const flashY = saw.y * this.gridSize + this.gridSize / 2 + 60;
+
+    flash.fillStyle(0xff0000, 0.8);
+    flash.fillCircle(flashX, flashY, this.gridSize * 2);
+
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 400,
+      onComplete: () => flash.destroy()
+    });
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(200, 0.01);
+
+    // 컨테이너 등장 애니메이션
+    this.tweens.add({
+      targets: saw.container,
+      scaleX: this.enhancedSawScale,
+      scaleY: this.enhancedSawScale,
+      duration: 500,
+      ease: 'Back.easeOut'
+    });
+
+    // 경고 링 펄스
+    this.tweens.add({
+      targets: saw.warningRing,
+      scaleX: { from: 1.5, to: 1 },
+      scaleY: { from: 1.5, to: 1 },
+      alpha: { from: 1, to: 0.6 },
+      duration: 500,
+      ease: 'Power2'
+    });
+
+    // 회전 시작 (더 빠르게)
+    saw.spinTween = this.tweens.add({
+      targets: saw.blade,
+      rotation: Math.PI * 2,
+      duration: 200, // 기본 톱니보다 빠름
+      repeat: -1,
+      ease: 'Linear'
+    });
+
+    // 글로우 펄스 애니메이션
+    saw.glowTween = this.tweens.add({
+      targets: saw.glowAura,
+      alpha: { from: 0.3, to: 0.6 },
+      scaleX: { from: 1, to: 1.2 },
+      scaleY: { from: 1, to: 1.2 },
+      duration: 400,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    // 1초 후 활성화
+    this.time.delayedCall(1000, () => {
+      if (saw && saw.container && saw.container.active) {
+        saw.canKill = true;
+
+        // delayMovement가 false일 때만 바로 이동 시작
+        if (!delayMovement) {
+          this.startEnhancedSawMovement(saw);
+        }
+
+        // 활성화 플래시
+        const activateFlash = this.add.graphics();
+        activateFlash.setDepth(201);
+        activateFlash.fillStyle(0xff4400, 0.6);
+        activateFlash.fillCircle(
+          saw.x * this.gridSize + this.gridSize / 2,
+          saw.y * this.gridSize + this.gridSize / 2 + 60,
+          this.gridSize * 1.5
+        );
+        this.tweens.add({
+          targets: activateFlash,
+          alpha: 0,
+          scaleX: 2,
+          scaleY: 2,
+          duration: 300,
+          onComplete: () => activateFlash.destroy()
+        });
+      }
+    });
+  }
+
+  startEnhancedSawMovement(saw) {
+    if (!saw || !saw.container || !saw.container.active) return;
+
+    saw.moveTimer = this.time.addEvent({
+      delay: saw.moveDelay,
+      loop: true,
+      callback: () => this.moveEnhancedSaw(saw)
+    });
+  }
+
+  moveEnhancedSaw(saw) {
+    if (!saw || !saw.canKill || this.gameOver || !saw.container || !saw.container.active) return;
+
+    // 다음 위치 결정 (2칸 점프 50% 확률)
+    const stepSize = Math.random() < 0.5 ? 2 : 1;
+    const target = this.chooseEnhancedSawTarget(saw, stepSize);
+
+    if (!target) return;
+
+    const oldX = saw.x;
+    const oldY = saw.y;
+
+    // 불꽃 트레일 생성
+    this.createEnhancedSawTrail(oldX, oldY, target.x, target.y);
+
+    // 위치 업데이트
+    saw.x = target.x;
+    saw.y = target.y;
+    saw.lastDirection = target.direction;
+
+    // 이동 애니메이션 (더 빠름)
+    const newPixelX = saw.x * this.gridSize + this.gridSize / 2;
+    const newPixelY = saw.y * this.gridSize + this.gridSize / 2 + 60;
+
+    this.tweens.add({
+      targets: saw.container,
+      x: newPixelX,
+      y: newPixelY,
+      duration: saw.moveDelay * 0.4,
+      ease: 'Power2',
+      onComplete: () => {
+        // 충돌 체크 (스테이지 클리어 중에는 무시)
+        if (!this.isStageClearingAnimation && saw.canKill && this.checkEnhancedSawCollision(saw)) {
+          this.endGame();
+        }
+      }
+    });
+  }
+
+  chooseEnhancedSawTarget(saw, stepSize) {
+    const directions = [
+      { dx: 0, dy: -1, name: 'up' },
+      { dx: 0, dy: 1, name: 'down' },
+      { dx: -1, dy: 0, name: 'left' },
+      { dx: 1, dy: 0, name: 'right' }
+    ];
+
+    // 뱀 머리 방향으로 이동 확률 증가 (60%)
+    const head = this.snake[0];
+    let preferredDir = null;
+    if (Math.random() < 0.6) {
+      const dx = head.x - saw.x;
+      const dy = head.y - saw.y;
+      if (Math.abs(dx) > Math.abs(dy)) {
+        preferredDir = dx > 0 ? 'right' : 'left';
+      } else {
+        preferredDir = dy > 0 ? 'down' : 'up';
+      }
+    }
+
+    // 유효한 방향 필터링
+    const validDirs = directions.filter(dir => {
+      const newX = saw.x + dir.dx * stepSize;
+      const newY = saw.y + dir.dy * stepSize;
+
+      // 맵 범위 체크
+      if (newX < 0 || newX >= this.cols || newY < 0 || newY >= this.rows) return false;
+      // 데드존 체크
+      if (this.deadZones.some(dz => dz.x === newX && dz.y === newY)) return false;
+      // 다른 톱니 체크
+      if (this.saws.some(s => s.x === newX && s.y === newY)) return false;
+      if (this.enhancedSaws.some(s => s !== saw && s.x === newX && s.y === newY)) return false;
+
+      return true;
+    });
+
+    if (validDirs.length === 0) return null;
+
+    // 선호 방향 우선
+    if (preferredDir) {
+      const preferred = validDirs.find(d => d.name === preferredDir);
+      if (preferred) {
+        return {
+          x: saw.x + preferred.dx * stepSize,
+          y: saw.y + preferred.dy * stepSize,
+          direction: preferred.name
+        };
+      }
+    }
+
+    // 랜덤 선택
+    const chosen = Phaser.Math.RND.pick(validDirs);
+    return {
+      x: saw.x + chosen.dx * stepSize,
+      y: saw.y + chosen.dy * stepSize,
+      direction: chosen.name
+    };
+  }
+
+  createEnhancedSawTrail(fromX, fromY, toX, toY) {
+    // 불꽃 트레일 효과
+    const startPixelX = fromX * this.gridSize + this.gridSize / 2;
+    const startPixelY = fromY * this.gridSize + this.gridSize / 2 + 60;
+    const endPixelX = toX * this.gridSize + this.gridSize / 2;
+    const endPixelY = toY * this.gridSize + this.gridSize / 2 + 60;
+
+    // 트레일 라인
+    const trail = this.add.graphics();
+    trail.setDepth(150);
+    trail.lineStyle(4, 0xff4400, 0.8);
+    trail.beginPath();
+    trail.moveTo(startPixelX, startPixelY);
+    trail.lineTo(endPixelX, endPixelY);
+    trail.stroke();
+
+    // 스파크 파티클
+    for (let i = 0; i < 5; i++) {
+      const t = i / 4;
+      const sparkX = startPixelX + (endPixelX - startPixelX) * t;
+      const sparkY = startPixelY + (endPixelY - startPixelY) * t;
+
+      const spark = this.add.graphics();
+      spark.setDepth(151);
+      spark.fillStyle(Phaser.Math.RND.pick([0xff6600, 0xff0000, 0xffaa00]), 1);
+      spark.fillCircle(sparkX, sparkY, 3);
+
+      this.tweens.add({
+        targets: spark,
+        alpha: 0,
+        y: sparkY + Phaser.Math.Between(-10, 10),
+        x: sparkX + Phaser.Math.Between(-10, 10),
+        scaleX: 0,
+        scaleY: 0,
+        duration: 300,
+        onComplete: () => spark.destroy()
+      });
+    }
+
+    // 트레일 페이드아웃
+    this.tweens.add({
+      targets: trail,
+      alpha: 0,
+      duration: 200,
+      onComplete: () => trail.destroy()
+    });
+  }
+
+  checkEnhancedSawCollision(saw) {
+    const head = this.snake[0];
+    return head.x === saw.x && head.y === saw.y;
+  }
+
+  startEnhancedSawHellStage() {
+    const { width, height } = this.cameras.main;
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 기존 톱니들도 일시정지
+    this.pauseAllSaws();
+
+    // 경고 텍스트
+    const warningText = this.add.text(width / 2, height / 2 - 50, 'ENHANCED SAWS INCOMING!', {
+      fontSize: '36px',
+      fill: '#ff4400',
+      fontStyle: 'bold',
+      stroke: '#660000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5000).setAlpha(0);
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(500, 0.02);
+
+    // 경고 텍스트 애니메이션
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      scaleX: { from: 0.5, to: 1.2 },
+      scaleY: { from: 0.5, to: 1.2 },
+      duration: 400,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: warningText,
+          scaleX: 1,
+          scaleY: 1,
+          duration: 200,
+          onComplete: () => {
+            // 강화 톱니 3개 순차 생성 (이동은 카운트다운 후 시작)
+            let sawIndex = 0;
+            const spawnInterval = this.time.addEvent({
+              delay: 600,
+              repeat: 2,
+              callback: () => {
+                this.spawnEnhancedSaw(true); // delayMovement = true
+                sawIndex++;
+
+                // 마지막 톱니 생성 후
+                if (sawIndex >= 3) {
+                  this.time.delayedCall(1000, () => {
+                    // 경고 텍스트 페이드아웃
+                    this.tweens.add({
+                      targets: warningText,
+                      alpha: 0,
+                      duration: 300,
+                      onComplete: () => {
+                        warningText.destroy();
+                        // Stage -1 전용 카운트다운 (톱니 시작 포함)
+                        this.startEnhancedSawCountdown();
+                      }
+                    });
+                  });
+                }
+              }
+            });
+          }
+        });
+      }
+    });
+  }
+
+  // Stage -1 전용 카운트다운 (톱니 이동 시작 포함)
+  startEnhancedSawCountdown() {
+    const { width, height } = this.cameras.main;
+
+    // 카운트다운 텍스트
+    const countdownText = this.add.text(width / 2, height / 2, '3', {
+      fontSize: '64px',
+      fill: '#ff4400',
+      fontStyle: 'bold',
+      stroke: '#660000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(5000);
+
+    let countdown = 3;
+    const countdownTimer = this.time.addEvent({
+      delay: 600,
+      callback: () => {
+        countdown--;
+        if (countdown > 0) {
+          countdownText.setText(countdown.toString());
+          // 카운트다운 펄스 효과
+          this.tweens.add({
+            targets: countdownText,
+            scaleX: { from: 1.3, to: 1 },
+            scaleY: { from: 1.3, to: 1 },
+            duration: 200,
+            ease: 'Power2'
+          });
+        } else {
+          countdownText.setText('GO!');
+          countdownText.setFill('#00ff00');
+          countdownTimer.remove();
+
+          // GO! 펄스 효과
+          this.tweens.add({
+            targets: countdownText,
+            scaleX: { from: 1.5, to: 1 },
+            scaleY: { from: 1.5, to: 1 },
+            duration: 300,
+            ease: 'Back.easeOut'
+          });
+
+          // GO! 표시 후 게임 재개 + 톱니 시작
+          this.time.delayedCall(400, () => {
+            countdownText.destroy();
+
+            // 모든 톱니 재개 (기존 톱니)
+            this.resumeAllSaws();
+
+            // 강화 톱니 이동 시작
+            this.startAllEnhancedSawMovement();
+
+            // 게임 재개
+            this.moveTimer.paused = false;
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  // =====================
+  // 기어 타이탄 보스 시스템 (Stage 0) - 기본 함수들
+  // =====================
+
+  isGearTitanStage() {
+    return this.currentStage === 0 && this.isTestMode;
+  }
+
+  cleanupGearTitan() {
+    // 기어 타이탄 요소 정리
+    if (this.gearTitanContainer) {
+      this.gearTitanContainer.destroy(true);
+      this.gearTitanContainer = null;
+    }
+
+    if (this.gearTitanAttackTimer) {
+      this.gearTitanAttackTimer.remove();
+      this.gearTitanAttackTimer = null;
+    }
+
+    if (this.gearTitanAnimTimer) {
+      this.gearTitanAnimTimer.remove();
+      this.gearTitanAnimTimer = null;
+    }
+
+    // 기어들 정리
+    this.gearTitanGears.forEach(gear => {
+      if (gear && gear.destroy) gear.destroy();
+    });
+    this.gearTitanGears = [];
+
+    // 레이저들 정리
+    this.gearTitanLasers.forEach(laser => {
+      if (laser && laser.destroy) laser.destroy();
+    });
+    this.gearTitanLasers = [];
+
+    // 코어 정리
+    if (this.gearTitanCore) {
+      if (this.gearTitanCore.destroy) this.gearTitanCore.destroy();
+      this.gearTitanCore = null;
+    }
+
+    // 차지 UI 정리
+    this.cleanupChargeUI();
+
+    // 상태 리셋
+    this.gearTitanMode = false;
+    this.gearTitanPhase = 'none';
+    this.gearTitanPosition = null;
+    this.gearTitanHitCount = 0;
+    this.gearTitanVulnerable = false;
+    this.canChargeDash = false;
+    this.isCharging = false;
+    this.chargeReady = false;
+    this.isDashing = false;
+  }
+
+  cleanupChargeUI() {
+    if (this.chargeUI) {
+      this.chargeUI.destroy();
+      this.chargeUI = null;
+    }
+    if (this.chargeGaugeUI) {
+      this.chargeGaugeUI.destroy();
+      this.chargeGaugeUI = null;
+    }
+    // 차지 에너지 이펙트도 정리
+    this.cleanupChargeEnergyEffect();
+  }
+
+  // =====================
+  // 기어 타이탄 보스 시스템 - 메인 함수들
+  // =====================
+
+  startGearTitan() {
+    this.gearTitanMode = true;
+    this.gearTitanPhase = 'intro';
+    this.gearTitanHitCount = 0;
+    this.gearTitanVulnerable = false;
+
+    // 차지 대시 초기화
+    this.canChargeDash = false; // 인트로 동안 비활성화
+    this.lastDashTime = 0;
+    this.isCharging = false;
+    this.chargeReady = false;
+    this.isDashing = false;
+
+    // 보스 위치 설정 (맵 중앙)
+    this.gearTitanPosition = {
+      x: Math.floor(this.cols / 2),
+      y: Math.floor(this.rows / 2)
+    };
+
+    // 톱니들은 이미 날아갔으므로 바로 보스 등장 인트로 시작
+    this.showGearTitanAppearIntro();
+  }
+
+  // 기어 타이탄 등장 인트로 (톱니 날아간 후)
+  showGearTitanAppearIntro() {
+    const { width, height } = this.cameras.main;
+    const centerX = this.gearTitanPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.gearTitanPosition.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 게임 일시정지 (이미 되어있을 수 있음)
+    this.moveTimer.paused = true;
+
+    // 뱀 대사 (말풍선) - 위트있게
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 말풍선 컨테이너
+    const bubbleContainer = this.add.container(headX, headY - 55).setDepth(5001);
+
+    // 말풍선 배경
+    const bubble = this.add.graphics();
+    bubble.fillStyle(0xffffff, 0.95);
+    bubble.lineStyle(3, 0x333333, 1);
+    bubble.fillRoundedRect(-120, -25, 240, 50, 12);
+    bubble.strokeRoundedRect(-120, -25, 240, 50, 12);
+
+    // 말풍선 꼬리
+    bubble.fillStyle(0xffffff, 0.95);
+    bubble.fillTriangle(0, 25, -10, 15, 10, 15);
+    bubble.lineStyle(3, 0x333333, 1);
+    bubble.lineBetween(-10, 17, 0, 28);
+    bubble.lineBetween(10, 17, 0, 28);
+    bubbleContainer.add(bubble);
+
+    // 대사 텍스트
+    const snakeDialogue = "Good riddance! Now where's the big boss?";
+    const dialogueText = this.add.text(0, 0, '', {
+      fontSize: '12px',
+      fill: '#222222',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    bubbleContainer.add(dialogueText);
+
+    // 말풍선 등장 애니메이션
+    bubbleContainer.setScale(0);
+    this.tweens.add({
+      targets: bubbleContainer,
+      scale: 1,
+      duration: 300,
+      ease: 'Back.easeOut'
+    });
+
+    // 타이핑 효과
+    let charIndex = 0;
+    this.time.delayedCall(300, () => {
+      const typeTimer = this.time.addEvent({
+        delay: 35,
+        callback: () => {
+          dialogueText.setText(snakeDialogue.substring(0, charIndex + 1));
+          charIndex++;
+          if (charIndex >= snakeDialogue.length) {
+            typeTimer.destroy();
+
+            // 대사 완료 후 보스 등장
+            this.time.delayedCall(1000, () => {
+              // 말풍선 사라짐
+              this.tweens.add({
+                targets: bubbleContainer,
+                scale: 0,
+                alpha: 0,
+                duration: 200,
+                onComplete: () => bubbleContainer.destroy()
+              });
+
+              // 보스 등장 시퀀스
+              this.showGearTitanBossAppear(centerX, centerY);
+            });
+          }
+        },
+        loop: true
+      });
+    });
+  }
+
+  // 기어 타이탄 보스 등장 시퀀스
+  showGearTitanBossAppear(centerX, centerY) {
+    const { width, height } = this.cameras.main;
+
+    // 화면 어둡게
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0);
+    overlay.setDepth(4999);
+    this.tweens.add({
+      targets: overlay,
+      fillAlpha: 0.7,
+      duration: 400
+    });
+
+    // WARNING 텍스트
+    const warningText = this.add.text(width / 2, height / 2 - 100, 'WARNING!', {
+      fontSize: '72px',
+      fill: '#ff0000',
+      fontStyle: 'bold',
+      stroke: '#660000',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(5000).setAlpha(0);
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(1200, 0.04);
+
+    // WARNING 애니메이션
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      duration: 150,
+      yoyo: true,
+      repeat: 4,
+      onComplete: () => {
+        warningText.destroy();
+
+        // 중앙에서 에너지 수렴 효과
+        for (let i = 0; i < 12; i++) {
+          const angle = (i / 12) * Math.PI * 2;
+          const dist = 150;
+          const particle = this.add.graphics().setDepth(5001);
+          particle.fillStyle(0xff6600, 0.8);
+          particle.fillCircle(0, 0, 8);
+          particle.x = centerX + Math.cos(angle) * dist;
+          particle.y = centerY + Math.sin(angle) * dist;
+
+          this.tweens.add({
+            targets: particle,
+            x: centerX,
+            y: centerY,
+            alpha: 0,
+            scaleX: 0.2,
+            scaleY: 0.2,
+            duration: 500,
+            ease: 'Quad.easeIn',
+            onComplete: () => particle.destroy()
+          });
+        }
+
+        // 대폭발 효과
+        this.time.delayedCall(500, () => {
+          this.cameras.main.flash(300, 255, 150, 0);
+
+          // 폭발 파티클
+          for (let i = 0; i < 24; i++) {
+            const angle = (i / 24) * Math.PI * 2;
+            const dist = Phaser.Math.Between(40, 100);
+            const particle = this.add.graphics().setDepth(5002);
+            particle.fillStyle(Phaser.Math.RND.pick([0xff4400, 0xffaa00, 0xff0000]), 1);
+            particle.fillCircle(0, 0, Phaser.Math.Between(3, 8));
+            particle.x = centerX;
+            particle.y = centerY;
+
+            this.tweens.add({
+              targets: particle,
+              x: centerX + Math.cos(angle) * dist,
+              y: centerY + Math.sin(angle) * dist,
+              alpha: 0,
+              duration: 600,
+              ease: 'Power2',
+              onComplete: () => particle.destroy()
+            });
+          }
+
+          // 보스 등장
+          this.drawGearTitan();
+
+          // 오버레이 서서히 사라짐
+          this.tweens.add({
+            targets: overlay,
+            fillAlpha: 0,
+            duration: 800,
+            delay: 400,
+            onComplete: () => overlay.destroy()
+          });
+
+          // 보스 무서운 대사
+          this.time.delayedCall(800, () => {
+            this.showGearTitanDialogue("I AM GEAR TITAN... FORGED FROM STEEL!", () => {
+              this.showGearTitanDialogue("YOUR SAWS WERE MERE TOYS... NOW FACE ME!", () => {
+                // 뱀 반응 (말풍선)
+                this.showGearTitanSnakeBubble("Steel? I eat metal for breakfast!", () => {
+                  // 차지 대시 튜토리얼 후 전투 시작
+                  this.showChargeDashTutorial(() => {
+                    this.canChargeDash = true;
+                    this.gearTitanPhase = 'phase1';
+                    this.moveTimer.paused = false;
+                    this.showChargeUI();
+                    this.advanceGearTitanPhase();
+                  });
+                });
+              });
+            });
+          });
+        });
+      }
+    });
+  }
+
+  // 기어 타이탄 톱니 합체 인트로 (이전 버전 - 사용 안함)
+  showGearTitanMergeIntro() {
+    const { width, height } = this.cameras.main;
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 뱀 대사 (말풍선) - 위트있게
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 말풍선 컨테이너
+    const bubbleContainer = this.add.container(headX, headY - 55).setDepth(5001);
+
+    // 말풍선 배경
+    const bubble = this.add.graphics();
+    bubble.fillStyle(0xffffff, 0.95);
+    bubble.lineStyle(3, 0x333333, 1);
+    bubble.fillRoundedRect(-110, -25, 220, 50, 12);
+    bubble.strokeRoundedRect(-110, -25, 220, 50, 12);
+
+    // 말풍선 꼬리
+    bubble.fillStyle(0xffffff, 0.95);
+    bubble.fillTriangle(0, 25, -10, 15, 10, 15);
+    bubble.lineStyle(3, 0x333333, 1);
+    bubble.lineBetween(-10, 17, 0, 28);
+    bubble.lineBetween(10, 17, 0, 28);
+    bubbleContainer.add(bubble);
+
+    // 대사 텍스트
+    const snakeDialogue = "Whoa, saws! You guys need some therapy?";
+    const dialogueText = this.add.text(0, 0, '', {
+      fontSize: '13px',
+      fill: '#222222',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    bubbleContainer.add(dialogueText);
+
+    // 말풍선 등장 애니메이션
+    bubbleContainer.setScale(0);
+    this.tweens.add({
+      targets: bubbleContainer,
+      scale: 1,
+      duration: 300,
+      ease: 'Back.easeOut'
+    });
+
+    // 타이핑 효과
+    let charIndex = 0;
+    this.time.delayedCall(300, () => {
+      const typeTimer = this.time.addEvent({
+        delay: 35,
+        callback: () => {
+          dialogueText.setText(snakeDialogue.substring(0, charIndex + 1));
+          charIndex++;
+          if (charIndex >= snakeDialogue.length) {
+            typeTimer.destroy();
+
+            // 대사 완료 후 톱니들 반응
+            this.time.delayedCall(1000, () => {
+              // 말풍선 사라짐
+              this.tweens.add({
+                targets: bubbleContainer,
+                scale: 0,
+                alpha: 0,
+                duration: 200,
+                onComplete: () => bubbleContainer.destroy()
+              });
+
+              // 톱니들이 떨리기 시작
+              this.shakeSawsBeforeMerge();
+            });
+          }
+        },
+        loop: true
+      });
+    });
+  }
+
+  // 톱니들 떨림 후 합체
+  shakeSawsBeforeMerge() {
+    const { width, height } = this.cameras.main;
+    const centerX = this.gearTitanPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.gearTitanPosition.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 모든 톱니 컨테이너 수집
+    const allSawContainers = [];
+    this.saws.forEach(saw => {
+      if (saw && saw.container && saw.container.active) {
+        allSawContainers.push(saw.container);
+      }
+    });
+    this.enhancedSaws.forEach(saw => {
+      if (saw && saw.container && saw.container.active) {
+        allSawContainers.push(saw.container);
+      }
+    });
+
+    // 톱니들 떨림 애니메이션
+    allSawContainers.forEach(container => {
+      this.tweens.add({
+        targets: container,
+        x: container.x + Phaser.Math.Between(-3, 3),
+        y: container.y + Phaser.Math.Between(-3, 3),
+        duration: 50,
+        yoyo: true,
+        repeat: 15,
+        ease: 'Sine.easeInOut'
+      });
+    });
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(800, 0.015);
+
+    // 떨림 후 합체 시작
+    this.time.delayedCall(900, () => {
+      this.animateSawMerge(allSawContainers, centerX, centerY);
+    });
+  }
+
+  // 톱니 합체 애니메이션
+  animateSawMerge(sawContainers, centerX, centerY) {
+    const { width, height } = this.cameras.main;
+
+    // 각 톱니가 중앙으로 빨려들어감
+    let completed = 0;
+    const total = sawContainers.length;
+
+    sawContainers.forEach((container, index) => {
+      // 회전 가속
+      this.tweens.add({
+        targets: container,
+        rotation: container.rotation + Math.PI * 8,
+        duration: 800,
+        ease: 'Quad.easeIn'
+      });
+
+      // 중앙으로 이동
+      this.tweens.add({
+        targets: container,
+        x: centerX,
+        y: centerY,
+        scaleX: 0.3,
+        scaleY: 0.3,
+        duration: 800,
+        delay: index * 50,
+        ease: 'Quad.easeIn',
+        onComplete: () => {
+          // 합체 시 스파크 효과
+          const spark = this.add.graphics();
+          spark.setDepth(300);
+          spark.fillStyle(0xff6600, 1);
+          spark.fillCircle(centerX, centerY, 15);
+          this.tweens.add({
+            targets: spark,
+            alpha: 0,
+            scaleX: 2,
+            scaleY: 2,
+            duration: 150,
+            onComplete: () => spark.destroy()
+          });
+
+          container.destroy();
+          completed++;
+
+          // 모든 톱니 합체 완료
+          if (completed >= total) {
+            this.saws = [];
+            this.enhancedSaws = [];
+            this.showGearTitanFormation(centerX, centerY);
+          }
+        }
+      });
+    });
+  }
+
+  // 기어 타이탄 형성 애니메이션
+  showGearTitanFormation(centerX, centerY) {
+    const { width, height } = this.cameras.main;
+
+    // 대폭발 효과
+    this.cameras.main.shake(500, 0.04);
+    this.cameras.main.flash(200, 255, 100, 0);
+
+    // 폭발 파티클
+    for (let i = 0; i < 20; i++) {
+      const angle = (i / 20) * Math.PI * 2;
+      const dist = Phaser.Math.Between(30, 80);
+      const particle = this.add.graphics();
+      particle.setDepth(301);
+      particle.fillStyle(0xff4400, 1);
+      particle.fillCircle(0, 0, Phaser.Math.Between(4, 10));
+      particle.x = centerX;
+      particle.y = centerY;
+
+      this.tweens.add({
+        targets: particle,
+        x: centerX + Math.cos(angle) * dist,
+        y: centerY + Math.sin(angle) * dist,
+        alpha: 0,
+        duration: 600,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 보스 등장
+    this.time.delayedCall(400, () => {
+      this.drawGearTitan();
+
+      // 보스 등장 후 무서운 대사 (자막 스타일)
+      this.time.delayedCall(600, () => {
+        this.showGearTitanDialogue("I AM GEAR TITAN... FORGED FROM YOUR FEAR!", () => {
+          // 두 번째 대사
+          this.showGearTitanDialogue("YOUR LITTLE SNAKE WILL BE CRUSHED!", () => {
+            // 뱀 반응 (말풍선)
+            this.showGearTitanSnakeBubble("Crushed? More like... slithered away!", () => {
+              // 차지 대시 튜토리얼 후 전투 시작
+              this.showChargeDashTutorial(() => {
+                this.canChargeDash = true;
+                this.gearTitanPhase = 'phase1';
+                this.moveTimer.paused = false;
+                this.showChargeUI();
+                this.advanceGearTitanPhase();
+              });
+            });
+          });
+        });
+      });
+    });
+  }
+
+  // 기어 타이탄 무서운 자막 대사
+  showGearTitanDialogue(text, callback) {
+    const { width, height } = this.cameras.main;
+
+    // 화면 하단 자막 스타일
+    const subtitleBg = this.add.rectangle(width / 2, height - 60, width, 80, 0x000000, 0.8);
+    subtitleBg.setDepth(5100);
+
+    const dialogue = this.add.text(width / 2, height - 60, '', {
+      fontSize: '22px',
+      fill: '#ff3300',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4,
+      shadow: { offsetX: 2, offsetY: 2, color: '#ff0000', blur: 10, fill: true }
+    }).setOrigin(0.5).setDepth(5101);
+
+    // 카메라 약간 흔들림 (위협적)
+    this.cameras.main.shake(200, 0.01);
+
+    // 타이핑 효과
+    let charIndex = 0;
+    const typeTimer = this.time.addEvent({
+      delay: 30,
+      callback: () => {
+        dialogue.setText(text.substring(0, charIndex + 1));
+        charIndex++;
+        if (charIndex >= text.length) {
+          typeTimer.destroy();
+          this.time.delayedCall(1200, () => {
+            this.tweens.add({
+              targets: [subtitleBg, dialogue],
+              alpha: 0,
+              duration: 300,
+              onComplete: () => {
+                subtitleBg.destroy();
+                dialogue.destroy();
+                if (callback) callback();
+              }
+            });
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  // 뱀 말풍선 대사 (기어 타이탄용 - 위트있는)
+  showGearTitanSnakeBubble(text, callback) {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 말풍선 컨테이너
+    const bubbleContainer = this.add.container(headX, headY - 55).setDepth(5001);
+
+    // 말풍선 배경
+    const bubble = this.add.graphics();
+    bubble.fillStyle(0xffffff, 0.95);
+    bubble.lineStyle(3, 0x333333, 1);
+    bubble.fillRoundedRect(-130, -25, 260, 50, 12);
+    bubble.strokeRoundedRect(-130, -25, 260, 50, 12);
+
+    // 말풍선 꼬리
+    bubble.fillStyle(0xffffff, 0.95);
+    bubble.fillTriangle(0, 25, -10, 15, 10, 15);
+    bubble.lineStyle(3, 0x333333, 1);
+    bubble.lineBetween(-10, 17, 0, 28);
+    bubble.lineBetween(10, 17, 0, 28);
+    bubbleContainer.add(bubble);
+
+    // 대사 텍스트
+    const dialogueText = this.add.text(0, 0, '', {
+      fontSize: '13px',
+      fill: '#222222',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    bubbleContainer.add(dialogueText);
+
+    // 말풍선 등장
+    bubbleContainer.setScale(0);
+    this.tweens.add({
+      targets: bubbleContainer,
+      scale: 1,
+      duration: 200,
+      ease: 'Back.easeOut'
+    });
+
+    // 타이핑 효과
+    let charIndex = 0;
+    this.time.delayedCall(200, () => {
+      const typeTimer = this.time.addEvent({
+        delay: 35,
+        callback: () => {
+          dialogueText.setText(text.substring(0, charIndex + 1));
+          charIndex++;
+          if (charIndex >= text.length) {
+            typeTimer.destroy();
+            this.time.delayedCall(1000, () => {
+              this.tweens.add({
+                targets: bubbleContainer,
+                scale: 0,
+                alpha: 0,
+                duration: 200,
+                onComplete: () => {
+                  bubbleContainer.destroy();
+                  if (callback) callback();
+                }
+              });
+            });
+          }
+        },
+        loop: true
+      });
+    });
+  }
+
+  showGearTitanIntro() {
+    const { width, height } = this.cameras.main;
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 화면 어둡게
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7);
+    overlay.setDepth(4999);
+
+    // WARNING 텍스트
+    const warningText = this.add.text(width / 2, height / 2 - 100, 'WARNING!', {
+      fontSize: '72px',
+      fill: '#ff0000',
+      fontStyle: 'bold',
+      stroke: '#660000',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(5000).setAlpha(0);
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(1000, 0.03);
+
+    // WARNING 애니메이션
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      duration: 200,
+      yoyo: true,
+      repeat: 3,
+      onComplete: () => {
+        warningText.destroy();
+
+        // 기어 타이탄 등장
+        this.drawGearTitan();
+
+        // 보스 이름 표시
+        const bossNameText = this.add.text(width / 2, height / 2 - 150, 'GEAR TITAN', {
+          fontSize: '64px',
+          fill: '#ffcc00',
+          fontStyle: 'bold',
+          stroke: '#664400',
+          strokeThickness: 6
+        }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+        this.tweens.add({
+          targets: bossNameText,
+          alpha: 1,
+          scaleX: { from: 2, to: 1 },
+          scaleY: { from: 2, to: 1 },
+          duration: 500,
+          ease: 'Back.easeOut',
+          onComplete: () => {
+            // 튜토리얼 표시
+            this.time.delayedCall(1000, () => {
+              this.showChargeDashTutorial(() => {
+                // 튜토리얼 후 게임 시작
+                this.tweens.add({
+                  targets: [overlay, bossNameText],
+                  alpha: 0,
+                  duration: 500,
+                  onComplete: () => {
+                    overlay.destroy();
+                    bossNameText.destroy();
+                    // 차지 UI 표시
+                    this.showChargeUI();
+                    // 첫 번째 공격 패턴 시작
+                    this.gearTitanPhase = 'phase1';
+                    this.moveTimer.paused = false;
+                    this.time.delayedCall(2000, () => {
+                      this.gearTitanPhase1Attack();
+                    });
+                  }
+                });
+              });
+            });
+          }
+        });
+      }
+    });
+  }
+
+  drawGearTitan() {
+    const { width, height } = this.cameras.main;
+    const centerX = this.gearTitanPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.gearTitanPosition.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 컨테이너 생성
+    this.gearTitanContainer = this.add.container(centerX, centerY);
+    this.gearTitanContainer.setDepth(300);
+    this.gearTitanContainer.setScale(0);
+
+    // 외부 기어들 (4개)
+    const gearRadius = this.gridSize * 2;
+    const gearPositions = [
+      { angle: 0, offset: gearRadius * 1.5 },
+      { angle: Math.PI / 2, offset: gearRadius * 1.5 },
+      { angle: Math.PI, offset: gearRadius * 1.5 },
+      { angle: Math.PI * 3 / 2, offset: gearRadius * 1.5 }
+    ];
+
+    gearPositions.forEach((pos, idx) => {
+      const gear = this.createGear(gearRadius * 0.8, 12, 0x888888);
+      gear.x = Math.cos(pos.angle) * pos.offset;
+      gear.y = Math.sin(pos.angle) * pos.offset;
+      this.gearTitanContainer.add(gear);
+      this.gearTitanGears.push(gear);
+
+      // 기어 회전 애니메이션
+      this.tweens.add({
+        targets: gear,
+        rotation: (idx % 2 === 0 ? 1 : -1) * Math.PI * 2,
+        duration: 3000,
+        repeat: -1,
+        ease: 'Linear'
+      });
+    });
+
+    // 중앙 코어 (약점)
+    this.gearTitanCore = this.add.graphics();
+    this.gearTitanCore.fillStyle(0x440000, 1);
+    this.gearTitanCore.fillCircle(0, 0, gearRadius * 0.8);
+    this.gearTitanCore.fillStyle(0xff0000, 1);
+    this.gearTitanCore.fillCircle(0, 0, gearRadius * 0.5);
+    // 눈 (코어 중앙)
+    this.gearTitanCore.fillStyle(0x000000, 1);
+    this.gearTitanCore.fillCircle(0, 0, gearRadius * 0.2);
+    this.gearTitanCore.fillStyle(0xffff00, 1);
+    this.gearTitanCore.fillCircle(0, -gearRadius * 0.05, gearRadius * 0.1);
+    this.gearTitanContainer.add(this.gearTitanCore);
+
+    // 등장 애니메이션
+    this.tweens.add({
+      targets: this.gearTitanContainer,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 1000,
+      ease: 'Back.easeOut'
+    });
+
+    // 전체 컨테이너 회전 (느리게)
+    this.gearTitanAnimTimer = this.time.addEvent({
+      delay: 50,
+      loop: true,
+      callback: () => {
+        if (this.gearTitanContainer && this.gearTitanContainer.active) {
+          this.gearTitanContainer.rotation += 0.005;
+        }
+      }
+    });
+  }
+
+  createGear(radius, teethCount, color) {
+    const gear = this.add.graphics();
+    const outerRadius = radius;
+    const innerRadius = radius * 0.7;
+    const toothDepth = radius * 0.15;
+
+    // 기어 몸체
+    gear.fillStyle(color, 1);
+    gear.beginPath();
+    for (let i = 0; i < teethCount; i++) {
+      const angle = (i / teethCount) * Math.PI * 2;
+      const nextAngle = ((i + 0.5) / teethCount) * Math.PI * 2;
+      const toothAngle = ((i + 0.25) / teethCount) * Math.PI * 2;
+      const toothAngle2 = ((i + 0.75) / teethCount) * Math.PI * 2;
+
+      if (i === 0) {
+        gear.moveTo(Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius);
+      }
+
+      // 톱니 외곽
+      gear.lineTo(Math.cos(toothAngle) * (outerRadius + toothDepth), Math.sin(toothAngle) * (outerRadius + toothDepth));
+      gear.lineTo(Math.cos(nextAngle) * outerRadius, Math.sin(nextAngle) * outerRadius);
+      gear.lineTo(Math.cos(toothAngle2) * innerRadius, Math.sin(toothAngle2) * innerRadius);
+      gear.lineTo(Math.cos((i + 1) / teethCount * Math.PI * 2) * outerRadius, Math.sin((i + 1) / teethCount * Math.PI * 2) * outerRadius);
+    }
+    gear.closePath();
+    gear.fill();
+
+    // 중앙 구멍
+    gear.fillStyle(0x333333, 1);
+    gear.fillCircle(0, 0, radius * 0.25);
+
+    return gear;
+  }
+
+  // =====================
+  // 차지 대시 시스템
+  // =====================
+
+  showChargeDashTutorial(callback) {
+    const { width, height } = this.cameras.main;
+
+    const tutorialBg = this.add.rectangle(width / 2, height / 2 + 50, 400, 150, 0x000000, 0.8);
+    tutorialBg.setDepth(5002);
+    tutorialBg.setStrokeStyle(3, 0xffcc00);
+
+    const tutorialText = this.add.text(width / 2, height / 2 + 30, 'HOLD SPACE to CHARGE\nRELEASE to DASH!', {
+      fontSize: '24px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      align: 'center'
+    }).setOrigin(0.5).setDepth(5003);
+
+    const skipText = this.add.text(width / 2, height / 2 + 100, 'Press ENTER to continue', {
+      fontSize: '16px',
+      fill: '#888888'
+    }).setOrigin(0.5).setDepth(5003);
+
+    // 깜빡임 애니메이션
+    this.tweens.add({
+      targets: skipText,
+      alpha: { from: 1, to: 0.3 },
+      duration: 500,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // 엔터 키 대기
+    const enterHandler = this.input.keyboard.once('keydown-ENTER', () => {
+      tutorialBg.destroy();
+      tutorialText.destroy();
+      skipText.destroy();
+      if (callback) callback();
+    });
+
+    // 자동 스킵 (5초 후)
+    this.time.delayedCall(5000, () => {
+      if (tutorialBg.active) {
+        tutorialBg.destroy();
+        tutorialText.destroy();
+        skipText.destroy();
+        if (callback) callback();
+      }
+    });
+  }
+
+  showChargeUI() {
+    const { width, height } = this.cameras.main;
+
+    // 차지 게이지 배경
+    this.chargeUI = this.add.container(width - 100, height - 50);
+    this.chargeUI.setDepth(1000);
+
+    const gaugeBg = this.add.rectangle(0, 0, 80, 20, 0x333333, 0.8);
+    gaugeBg.setStrokeStyle(2, 0x666666);
+    this.chargeUI.add(gaugeBg);
+
+    // 차지 게이지 바
+    this.chargeGaugeUI = this.add.rectangle(-38, 0, 0, 16, 0x00ff00, 1);
+    this.chargeGaugeUI.setOrigin(0, 0.5);
+    this.chargeUI.add(this.chargeGaugeUI);
+
+    // 라벨
+    const label = this.add.text(0, -20, 'CHARGE', {
+      fontSize: '12px',
+      fill: '#ffffff'
+    }).setOrigin(0.5);
+    this.chargeUI.add(label);
+
+    // 쿨다운 텍스트
+    this.chargeCooldownText = this.add.text(0, 20, '', {
+      fontSize: '10px',
+      fill: '#ffcc00'
+    }).setOrigin(0.5);
+    this.chargeUI.add(this.chargeCooldownText);
+  }
+
+  updateChargeUI(progress) {
+    if (!this.chargeGaugeUI) return;
+
+    const maxWidth = 76;
+    this.chargeGaugeUI.width = maxWidth * progress;
+
+    // 색상 변경 (차지 완료 시 노란색)
+    if (progress >= 1) {
+      this.chargeGaugeUI.fillColor = 0xffff00;
+    } else {
+      this.chargeGaugeUI.fillColor = 0x00ff00;
+    }
+  }
+
+  handleChargeInput() {
+    if (!this.canChargeDash || !this.gearTitanMode || this.gameOver) return;
+
+    // chargeUI가 아직 생성되지 않았거나 파괴된 경우 스킵
+    if (!this.chargeUI || !this.chargeUI.active) return;
+
+    const spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    const now = Date.now();
+
+    // 쿨다운 체크
+    if (now - this.lastDashTime < this.dashCooldown) {
+      const remaining = Math.ceil((this.dashCooldown - (now - this.lastDashTime)) / 1000);
+      if (this.chargeCooldownText && this.chargeCooldownText.active) {
+        this.chargeCooldownText.setText(`CD: ${remaining}s`);
+      }
+      return;
+    } else {
+      if (this.chargeCooldownText && this.chargeCooldownText.active) {
+        this.chargeCooldownText.setText('');
+      }
+    }
+
+    // 차지 시작/유지
+    if (spaceKey.isDown && !this.isDashing) {
+      if (!this.isCharging) {
+        this.startCharging();
+      } else {
+        this.updateCharge();
+      }
+    }
+
+    // 차지 해제 (대시 실행)
+    if (spaceKey.isUp && this.isCharging) {
+      this.releaseCharge();
+    }
+  }
+
+  startCharging() {
+    this.isCharging = true;
+    this.chargeStartTime = Date.now();
+    this.chargeReady = false;
+
+    // 차지 시작 효과
+    if (this.chargeUI) {
+      this.tweens.add({
+        targets: this.chargeUI,
+        scaleX: 1.1,
+        scaleY: 1.1,
+        duration: 100,
+        yoyo: true
+      });
+    }
+
+    // 에너지 모으는 이펙트 시작
+    this.startChargeEnergyEffect();
+  }
+
+  // 차지 에너지 이펙트 시작
+  startChargeEnergyEffect() {
+    // 기존 이펙트 정리
+    this.cleanupChargeEnergyEffect();
+
+    // 에너지 파티클 생성
+    this.chargeEffectParticles = [];
+    const particleCount = 12;
+
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (i / particleCount) * Math.PI * 2;
+      const particle = {
+        graphics: this.add.graphics().setDepth(98),
+        angle: angle,
+        radius: 60 + Phaser.Math.Between(0, 20),
+        speed: 0.03 + Math.random() * 0.02,
+        size: Phaser.Math.Between(3, 6),
+        color: Phaser.Math.RND.pick([0x00ffff, 0x00ff88, 0xffff00, 0xff8800]),
+        alpha: 0.8,
+        trail: []
+      };
+      this.chargeEffectParticles.push(particle);
+    }
+
+    // 오라 그래픽 생성
+    this.chargeAuraGraphics = this.add.graphics().setDepth(97);
+
+    // 60fps 업데이트 타이머
+    this.chargeEffectTimer = this.time.addEvent({
+      delay: 16,
+      loop: true,
+      callback: () => this.updateChargeEnergyEffect()
+    });
+  }
+
+  // 차지 에너지 이펙트 업데이트
+  updateChargeEnergyEffect() {
+    if (!this.isCharging || this.chargeEffectParticles.length === 0) {
+      this.cleanupChargeEnergyEffect();
+      return;
+    }
+
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    const elapsed = Date.now() - this.chargeStartTime;
+    const progress = Math.min(elapsed / this.chargeDuration, 1);
+
+    // 오라 그리기
+    if (this.chargeAuraGraphics && this.chargeAuraGraphics.active) {
+      this.chargeAuraGraphics.clear();
+
+      // 배경 오라 (점점 밝아짐)
+      const auraAlpha = 0.1 + progress * 0.3;
+      const auraSize = this.gridSize * (1 + progress * 0.5);
+      this.chargeAuraGraphics.fillStyle(0x00ffff, auraAlpha);
+      this.chargeAuraGraphics.fillCircle(headX, headY, auraSize);
+
+      // 내부 글로우
+      this.chargeAuraGraphics.fillStyle(0xffffff, auraAlpha * 0.5);
+      this.chargeAuraGraphics.fillCircle(headX, headY, auraSize * 0.6);
+
+      // 차지 완료 시 펄스
+      if (progress >= 1) {
+        const pulseSize = auraSize + Math.sin(Date.now() * 0.01) * 5;
+        this.chargeAuraGraphics.lineStyle(3, 0xffff00, 0.8);
+        this.chargeAuraGraphics.strokeCircle(headX, headY, pulseSize);
+      }
+    }
+
+    // 파티클 업데이트
+    this.chargeEffectParticles.forEach((particle, index) => {
+      if (!particle.graphics || !particle.graphics.active) return;
+
+      particle.graphics.clear();
+
+      // 반경이 점점 줄어듦 (에너지가 모임)
+      const targetRadius = 60 * (1 - progress * 0.9);
+      particle.radius = Phaser.Math.Linear(particle.radius, targetRadius, 0.05);
+
+      // 회전
+      particle.angle += particle.speed * (1 + progress * 2);
+
+      // 파티클 위치 계산
+      const px = headX + Math.cos(particle.angle) * particle.radius;
+      const py = headY + Math.sin(particle.angle) * particle.radius;
+
+      // 트레일 기록
+      particle.trail.push({ x: px, y: py });
+      if (particle.trail.length > 8) {
+        particle.trail.shift();
+      }
+
+      // 트레일 그리기
+      particle.trail.forEach((point, i) => {
+        const trailAlpha = (i / particle.trail.length) * particle.alpha * 0.5;
+        const trailSize = particle.size * (i / particle.trail.length);
+        particle.graphics.fillStyle(particle.color, trailAlpha);
+        particle.graphics.fillCircle(point.x, point.y, trailSize);
+      });
+
+      // 메인 파티클 그리기
+      particle.graphics.fillStyle(particle.color, particle.alpha);
+      particle.graphics.fillCircle(px, py, particle.size);
+
+      // 글로우
+      particle.graphics.fillStyle(0xffffff, particle.alpha * 0.5);
+      particle.graphics.fillCircle(px, py, particle.size * 0.5);
+
+      // 차지 완료 시 전기 스파크 효과
+      if (progress >= 1 && Math.random() < 0.1) {
+        const sparkAngle = Math.random() * Math.PI * 2;
+        const sparkDist = Phaser.Math.Between(5, 15);
+        particle.graphics.lineStyle(1, 0xffff00, 0.8);
+        particle.graphics.lineBetween(
+          px, py,
+          px + Math.cos(sparkAngle) * sparkDist,
+          py + Math.sin(sparkAngle) * sparkDist
+        );
+      }
+    });
+  }
+
+  // 차지 에너지 이펙트 정리
+  cleanupChargeEnergyEffect() {
+    if (this.chargeEffectTimer) {
+      this.chargeEffectTimer.remove();
+      this.chargeEffectTimer = null;
+    }
+
+    this.chargeEffectParticles.forEach(particle => {
+      if (particle.graphics && particle.graphics.active) {
+        particle.graphics.destroy();
+      }
+    });
+    this.chargeEffectParticles = [];
+
+    if (this.chargeAuraGraphics && this.chargeAuraGraphics.active) {
+      this.chargeAuraGraphics.destroy();
+      this.chargeAuraGraphics = null;
+    }
+  }
+
+  updateCharge() {
+    if (!this.isCharging) return;
+
+    const elapsed = Date.now() - this.chargeStartTime;
+    const progress = Math.min(elapsed / this.chargeDuration, 1);
+    this.updateChargeUI(progress);
+
+    // 차지 완료
+    if (progress >= 1 && !this.chargeReady) {
+      this.chargeReady = true;
+      this.showChargeReadyEffect();
+    }
+  }
+
+  showChargeReadyEffect() {
+    const { width, height } = this.cameras.main;
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 카메라 펄스 효과
+    this.cameras.main.flash(100, 255, 255, 0, true);
+
+    // READY 텍스트 (뱀 머리 위)
+    const readyText = this.add.text(headX, headY - 40, 'READY!', {
+      fontSize: '18px',
+      fill: '#ffff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(1001);
+
+    this.tweens.add({
+      targets: readyText,
+      y: headY - 60,
+      alpha: { from: 1, to: 0 },
+      scaleX: 1.5,
+      scaleY: 1.5,
+      duration: 800,
+      ease: 'Power2',
+      onComplete: () => readyText.destroy()
+    });
+
+    // 폭발 링 효과
+    const ring = this.add.graphics().setDepth(99);
+    ring.lineStyle(4, 0xffff00, 1);
+    ring.strokeCircle(headX, headY, 10);
+
+    this.tweens.add({
+      targets: ring,
+      scaleX: 4,
+      scaleY: 4,
+      alpha: 0,
+      duration: 400,
+      ease: 'Power2',
+      onComplete: () => ring.destroy()
+    });
+
+    // 에너지 방출 파티클
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const spark = this.add.graphics().setDepth(99);
+      spark.fillStyle(0xffff00, 1);
+      spark.fillCircle(0, 0, 4);
+      spark.x = headX;
+      spark.y = headY;
+
+      this.tweens.add({
+        targets: spark,
+        x: headX + Math.cos(angle) * 40,
+        y: headY + Math.sin(angle) * 40,
+        alpha: 0,
+        scaleX: 0.5,
+        scaleY: 0.5,
+        duration: 300,
+        ease: 'Power2',
+        onComplete: () => spark.destroy()
+      });
+    }
+  }
+
+  releaseCharge() {
+    if (this.chargeReady) {
+      this.performChargeDash();
+    }
+
+    this.isCharging = false;
+    this.chargeReady = false;
+    this.updateChargeUI(0);
+
+    // 에너지 이펙트 정리
+    this.cleanupChargeEnergyEffect();
+  }
+
+  performChargeDash() {
+    if (this.isDashing) return;
+
+    this.isDashing = true;
+    this.isInvincible = true;
+    this.lastDashTime = Date.now();
+
+    const head = this.snake[0];
+    const dir = this.direction;
+    const startPos = { x: head.x, y: head.y }; // 원래 위치 저장
+
+    // 방향에 따른 이동 벡터
+    const dirVectors = {
+      'UP': { dx: 0, dy: -1 },
+      'DOWN': { dx: 0, dy: 1 },
+      'LEFT': { dx: -1, dy: 0 },
+      'RIGHT': { dx: 1, dy: 0 }
+    };
+
+    const vec = dirVectors[dir];
+
+    // 반대 방향 매핑
+    const oppositeDir = {
+      'UP': 'DOWN',
+      'DOWN': 'UP',
+      'LEFT': 'RIGHT',
+      'RIGHT': 'LEFT'
+    };
+
+    // 대시 거리 계산 (벽/보스까지 또는 최대 거리)
+    let dashDist = this.dashDistance;
+    let hitBoss = false;
+    let hitBossAt = -1;
+
+    for (let i = 1; i <= this.dashDistance; i++) {
+      const testX = head.x + vec.dx * i;
+      const testY = head.y + vec.dy * i;
+
+      // 벽 충돌 체크
+      if (testX < 0 || testX >= this.cols || testY < 0 || testY >= this.rows) {
+        dashDist = i - 1;
+        break;
+      }
+
+      // 보스 충돌 체크 (대시 경로에 보스가 있는지)
+      if (this.gearTitanMode && this.gearTitanPosition) {
+        const distToBoss = Math.abs(testX - this.gearTitanPosition.x) + Math.abs(testY - this.gearTitanPosition.y);
+        if (distToBoss <= 2) {
+          hitBoss = true;
+          hitBossAt = i;
+          dashDist = i; // 보스 위치까지만 이동
+          break;
+        }
+      }
+    }
+
+    if (dashDist <= 0) {
+      this.isDashing = false;
+      this.isInvincible = false;
+      return;
+    }
+
+    // 대시 시작 효과
+    this.showDashEffect(head.x, head.y, dashDist, dir);
+
+    // 뱀 순간 이동 (대시)
+    const newHead = {
+      x: head.x + vec.dx * dashDist,
+      y: head.y + vec.dy * dashDist
+    };
+
+    // 대시 중간 경로 잔상 생성
+    for (let i = 0; i <= dashDist; i++) {
+      const ghostX = head.x + vec.dx * i;
+      const ghostY = head.y + vec.dy * i;
+      this.createDashGhost(ghostX, ghostY, i * 30);
+    }
+
+    // 뱀 머리 이동
+    this.snake.unshift(newHead);
+    this.snake.pop();
+
+    // 보스 충돌 처리
+    if (hitBoss && this.gearTitanMode) {
+      if (this.gearTitanVulnerable) {
+        // vulnerable 상태: HIT 처리
+        this.handleGearTitanHit();
+      } else {
+        // not vulnerable 상태: 튕겨나오기 + 방향 반전
+        this.bounceBackFromBoss(startPos, oppositeDir[dir]);
+        return; // 여기서 리턴 (아래의 무적 해제는 bounceBackFromBoss에서 처리)
+      }
+    }
+
+    // 대시 완료 후 무적 해제
+    this.time.delayedCall(200, () => {
+      this.isDashing = false;
+      this.isInvincible = false;
+      this.draw();
+    });
+  }
+
+  // 보스에 튕겨나오는 함수
+  bounceBackFromBoss(startPos, newDirection) {
+    const { width, height } = this.cameras.main;
+    const head = this.snake[0];
+
+    // 현재 위치에서 충돌 이펙트
+    const hitX = head.x * this.gridSize + this.gridSize / 2;
+    const hitY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 충돌 효과 - 빨간 플래시
+    this.cameras.main.flash(150, 255, 100, 100);
+    this.cameras.main.shake(200, 0.02);
+
+    // "BLOCKED!" 텍스트
+    const blockedText = this.add.text(hitX, hitY - 40, 'BLOCKED!', {
+      fontSize: '24px',
+      fill: '#ff4444',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(5000);
+
+    this.tweens.add({
+      targets: blockedText,
+      y: hitY - 80,
+      alpha: 0,
+      duration: 600,
+      ease: 'Power2',
+      onComplete: () => blockedText.destroy()
+    });
+
+    // 충돌 스파크 효과
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const spark = this.add.graphics().setDepth(100);
+      spark.fillStyle(0xff6600, 1);
+      spark.fillCircle(0, 0, Phaser.Math.Between(3, 6));
+      spark.x = hitX;
+      spark.y = hitY;
+
+      this.tweens.add({
+        targets: spark,
+        x: hitX + Math.cos(angle) * 50,
+        y: hitY + Math.sin(angle) * 50,
+        alpha: 0,
+        duration: 300,
+        ease: 'Power2',
+        onComplete: () => spark.destroy()
+      });
+    }
+
+    // 뱀을 원래 위치로 되돌리기 (애니메이션)
+    this.time.delayedCall(100, () => {
+      // 뱀 위치 복원
+      this.snake[0] = { x: startPos.x, y: startPos.y };
+
+      // 방향 반전
+      this.direction = newDirection;
+      this.inputQueue = []; // 입력 큐 초기화
+
+      // 복귀 이펙트
+      const backX = startPos.x * this.gridSize + this.gridSize / 2;
+      const backY = startPos.y * this.gridSize + this.gridSize / 2 + 60;
+
+      // 복귀 잔상
+      for (let i = 0; i < 4; i++) {
+        const ghost = this.add.graphics().setDepth(95);
+        ghost.fillStyle(0x00ff00, 0.5 - i * 0.1);
+        ghost.fillCircle(0, 0, this.gridSize / 2 - 2);
+        ghost.x = Phaser.Math.Linear(hitX, backX, i / 3);
+        ghost.y = Phaser.Math.Linear(hitY, backY, i / 3);
+
+        this.tweens.add({
+          targets: ghost,
+          alpha: 0,
+          scaleX: 0.5,
+          scaleY: 0.5,
+          duration: 200,
+          delay: i * 30,
+          onComplete: () => ghost.destroy()
+        });
+      }
+
+      // 착지 이펙트
+      const landEffect = this.add.graphics().setDepth(98);
+      landEffect.lineStyle(3, 0x00ffff, 1);
+      landEffect.strokeCircle(backX, backY, 5);
+
+      this.tweens.add({
+        targets: landEffect,
+        scaleX: 3,
+        scaleY: 3,
+        alpha: 0,
+        duration: 300,
+        onComplete: () => landEffect.destroy()
+      });
+
+      this.draw();
+
+      // 무적 해제
+      this.time.delayedCall(200, () => {
+        this.isDashing = false;
+        this.isInvincible = false;
+        this.draw();
+      });
+    });
+  }
+
+  showDashEffect(startX, startY, distance, direction) {
+    const { width, height } = this.cameras.main;
+
+    // 대시 라인 효과
+    const startPixelX = startX * this.gridSize + this.gridSize / 2;
+    const startPixelY = startY * this.gridSize + this.gridSize / 2 + 60;
+
+    const dirVectors = {
+      'UP': { dx: 0, dy: -1 },
+      'DOWN': { dx: 0, dy: 1 },
+      'LEFT': { dx: -1, dy: 0 },
+      'RIGHT': { dx: 1, dy: 0 }
+    };
+
+    const vec = dirVectors[direction];
+    const endPixelX = startPixelX + vec.dx * distance * this.gridSize;
+    const endPixelY = startPixelY + vec.dy * distance * this.gridSize;
+
+    // 모션 블러 라인
+    const dashLine = this.add.graphics();
+    dashLine.setDepth(98);
+    dashLine.lineStyle(8, 0x00ffff, 0.8);
+    dashLine.beginPath();
+    dashLine.moveTo(startPixelX, startPixelY);
+    dashLine.lineTo(endPixelX, endPixelY);
+    dashLine.stroke();
+
+    // 스파크 파티클
+    for (let i = 0; i < 10; i++) {
+      const t = i / 9;
+      const sparkX = startPixelX + (endPixelX - startPixelX) * t;
+      const sparkY = startPixelY + (endPixelY - startPixelY) * t;
+
+      const spark = this.add.graphics();
+      spark.setDepth(99);
+      spark.fillStyle(0x00ffff, 1);
+      spark.fillCircle(sparkX + Phaser.Math.Between(-5, 5), sparkY + Phaser.Math.Between(-5, 5), 3);
+
+      this.tweens.add({
+        targets: spark,
+        alpha: 0,
+        scaleX: 0,
+        scaleY: 0,
+        duration: 300,
+        delay: i * 20,
+        onComplete: () => spark.destroy()
+      });
+    }
+
+    // 대시 라인 페이드아웃
+    this.tweens.add({
+      targets: dashLine,
+      alpha: 0,
+      duration: 200,
+      onComplete: () => dashLine.destroy()
+    });
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(100, 0.01);
+  }
+
+  createDashGhost(x, y, delay) {
+    const pixelX = x * this.gridSize + this.gridSize / 2;
+    const pixelY = y * this.gridSize + this.gridSize / 2 + 60;
+
+    this.time.delayedCall(delay, () => {
+      const ghost = this.add.graphics();
+      ghost.setDepth(97);
+      ghost.fillStyle(0x00ffff, 0.5);
+      ghost.fillRect(
+        pixelX - this.gridSize / 2,
+        pixelY - this.gridSize / 2,
+        this.gridSize - 2,
+        this.gridSize - 2
+      );
+
+      this.tweens.add({
+        targets: ghost,
+        alpha: 0,
+        duration: 200,
+        onComplete: () => ghost.destroy()
+      });
+    });
+  }
+
+  checkGearTitanHit(snakeHead) {
+    if (!this.gearTitanPosition) return false;
+
+    const dist = Math.abs(snakeHead.x - this.gearTitanPosition.x) + Math.abs(snakeHead.y - this.gearTitanPosition.y);
+    return dist <= 2; // 보스 근처 2칸 이내
+  }
+
+  // =====================
+  // 기어 타이탄 공격 패턴
+  // =====================
+
+  gearTitanPhase1Attack() {
+    if (!this.gearTitanMode || this.gameOver) return;
+
+    const { width, height } = this.cameras.main;
+
+    // 경고 표시
+    const warningText = this.add.text(width / 2, 100, 'SAW BARRAGE!', {
+      fontSize: '32px',
+      fill: '#ff4400',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5000);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: { from: 1, to: 0 },
+      duration: 1000,
+      onComplete: () => warningText.destroy()
+    });
+
+    // 4방향에서 톱니 발사
+    const directions = [
+      { x: 0, y: 0 },
+      { x: this.cols - 1, y: 0 },
+      { x: 0, y: this.rows - 1 },
+      { x: this.cols - 1, y: this.rows - 1 }
+    ];
+
+    directions.forEach((pos, idx) => {
+      this.time.delayedCall(idx * 300, () => {
+        this.fireGearTitanSaw(pos.x, pos.y);
+      });
+    });
+
+    // 공격 완료 후 취약 상태
+    this.time.delayedCall(3000, () => {
+      this.makeGearTitanVulnerable();
+    });
+  }
+
+  fireGearTitanSaw(startX, startY) {
+    const pixelX = startX * this.gridSize + this.gridSize / 2;
+    const pixelY = startY * this.gridSize + this.gridSize / 2 + 60;
+
+    // 미니 톱니 생성
+    const sawContainer = this.add.container(pixelX, pixelY);
+    sawContainer.setDepth(250);
+
+    const sawGraphic = this.add.graphics();
+    const sawRadius = this.gridSize * 0.4;
+
+    sawGraphic.fillStyle(0xff6600, 1);
+    sawGraphic.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const nextAngle = ((i + 0.5) / 8) * Math.PI * 2;
+      const outerR = sawRadius * 1.2;
+      const innerR = sawRadius * 0.6;
+
+      if (i === 0) {
+        sawGraphic.moveTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+      } else {
+        sawGraphic.lineTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+      }
+      sawGraphic.lineTo(Math.cos(nextAngle) * innerR, Math.sin(nextAngle) * innerR);
+    }
+    sawGraphic.closePath();
+    sawGraphic.fill();
+
+    sawContainer.add(sawGraphic);
+
+    // 회전 애니메이션
+    this.tweens.add({
+      targets: sawGraphic,
+      rotation: Math.PI * 2,
+      duration: 200,
+      repeat: -1,
+      ease: 'Linear'
+    });
+
+    // 뱀 방향으로 이동
+    const head = this.snake[0];
+    const targetX = head.x * this.gridSize + this.gridSize / 2;
+    const targetY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    this.tweens.add({
+      targets: sawContainer,
+      x: targetX,
+      y: targetY,
+      duration: 1500,
+      ease: 'Linear',
+      onUpdate: () => {
+        // 충돌 체크 (무적이 아닐 때만)
+        if (!this.isInvincible && !this.isDashing) {
+          const sawGridX = Math.floor((sawContainer.x - this.gridSize / 2) / this.gridSize);
+          const sawGridY = Math.floor((sawContainer.y - this.gridSize / 2 - 60) / this.gridSize);
+          const snakeHead = this.snake[0];
+
+          if (sawGridX === snakeHead.x && sawGridY === snakeHead.y) {
+            this.endGame();
+          }
+        }
+      },
+      onComplete: () => {
+        sawContainer.destroy();
+      }
+    });
+  }
+
+  gearTitanPhase2Attack() {
+    if (!this.gearTitanMode || this.gameOver) return;
+
+    const { width, height } = this.cameras.main;
+
+    // 경고 표시
+    const warningText = this.add.text(width / 2, 100, 'GEAR LASER!', {
+      fontSize: '32px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5000);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: { from: 1, to: 0 },
+      duration: 1000,
+      onComplete: () => warningText.destroy()
+    });
+
+    // 랜덤으로 가로 또는 세로 레이저
+    const isHorizontal = Math.random() < 0.5;
+    const laserPos = isHorizontal
+      ? Phaser.Math.Between(3, this.rows - 4)
+      : Phaser.Math.Between(3, this.cols - 4);
+
+    // 경고선 표시
+    this.showLaserWarning(isHorizontal, laserPos, () => {
+      // 레이저 발사
+      this.fireLaser(isHorizontal, laserPos);
+    });
+  }
+
+  showLaserWarning(isHorizontal, pos, callback) {
+    const { width, height } = this.cameras.main;
+
+    const warningLine = this.add.graphics();
+    warningLine.setDepth(200);
+
+    if (isHorizontal) {
+      const y = pos * this.gridSize + this.gridSize / 2 + 60;
+      warningLine.lineStyle(this.gridSize, 0xff0000, 0.3);
+      warningLine.beginPath();
+      warningLine.moveTo(0, y);
+      warningLine.lineTo(width, y);
+      warningLine.stroke();
+    } else {
+      const x = pos * this.gridSize + this.gridSize / 2;
+      warningLine.lineStyle(this.gridSize, 0xff0000, 0.3);
+      warningLine.beginPath();
+      warningLine.moveTo(x, 60);
+      warningLine.lineTo(x, height);
+      warningLine.stroke();
+    }
+
+    // 경고선 깜빡임
+    this.tweens.add({
+      targets: warningLine,
+      alpha: { from: 0.3, to: 0.8 },
+      duration: 200,
+      yoyo: true,
+      repeat: 3,
+      onComplete: () => {
+        warningLine.destroy();
+        if (callback) callback();
+      }
+    });
+  }
+
+  fireLaser(isHorizontal, pos) {
+    const { width, height } = this.cameras.main;
+
+    const laser = this.add.graphics();
+    laser.setDepth(250);
+
+    // 레이저 효과
+    if (isHorizontal) {
+      const y = pos * this.gridSize + this.gridSize / 2 + 60;
+      laser.fillStyle(0xff4400, 0.9);
+      laser.fillRect(0, y - this.gridSize / 2, width, this.gridSize);
+      laser.fillStyle(0xffff00, 1);
+      laser.fillRect(0, y - 3, width, 6);
+    } else {
+      const x = pos * this.gridSize + this.gridSize / 2;
+      laser.fillStyle(0xff4400, 0.9);
+      laser.fillRect(x - this.gridSize / 2, 60, this.gridSize, height - 60);
+      laser.fillStyle(0xffff00, 1);
+      laser.fillRect(x - 3, 60, 6, height - 60);
+    }
+
+    // 충돌 체크
+    if (!this.isInvincible && !this.isDashing) {
+      const head = this.snake[0];
+      const hit = isHorizontal ? (head.y === pos) : (head.x === pos);
+      if (hit) {
+        this.endGame();
+      }
+    }
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(200, 0.02);
+
+    // 레이저 페이드아웃
+    this.tweens.add({
+      targets: laser,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => {
+        laser.destroy();
+        // 다음 공격 준비
+        this.time.delayedCall(1000, () => {
+          this.makeGearTitanVulnerable();
+        });
+      }
+    });
+  }
+
+  gearTitanPhase3Attack() {
+    if (!this.gearTitanMode || this.gameOver) return;
+
+    const { width, height } = this.cameras.main;
+
+    // 경고 표시
+    const warningText = this.add.text(width / 2, 100, 'GRIND CHARGE!', {
+      fontSize: '32px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5000);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: { from: 1, to: 0 },
+      duration: 1000,
+      onComplete: () => warningText.destroy()
+    });
+
+    // 보스가 뱀 방향으로 돌진
+    const head = this.snake[0];
+    const bossX = this.gearTitanPosition.x;
+    const bossY = this.gearTitanPosition.y;
+
+    // 돌진 방향 결정
+    let targetX, targetY;
+    if (Math.abs(head.x - bossX) > Math.abs(head.y - bossY)) {
+      // 가로 방향 돌진
+      targetX = head.x > bossX ? this.cols - 1 : 0;
+      targetY = bossY;
+    } else {
+      // 세로 방향 돌진
+      targetX = bossX;
+      targetY = head.y > bossY ? this.rows - 1 : 0;
+    }
+
+    const startPixelX = bossX * this.gridSize + this.gridSize / 2;
+    const startPixelY = bossY * this.gridSize + this.gridSize / 2 + 60;
+    const endPixelX = targetX * this.gridSize + this.gridSize / 2;
+    const endPixelY = targetY * this.gridSize + this.gridSize / 2 + 60;
+
+    // 경고선 표시
+    const chargeLine = this.add.graphics();
+    chargeLine.setDepth(199);
+    chargeLine.lineStyle(this.gridSize * 2, 0xff0000, 0.3);
+    chargeLine.beginPath();
+    chargeLine.moveTo(startPixelX, startPixelY);
+    chargeLine.lineTo(endPixelX, endPixelY);
+    chargeLine.stroke();
+
+    // 경고선 깜빡임
+    this.tweens.add({
+      targets: chargeLine,
+      alpha: { from: 0.3, to: 0.6 },
+      duration: 200,
+      yoyo: true,
+      repeat: 2,
+      onComplete: () => {
+        chargeLine.destroy();
+
+        // 돌진 실행
+        if (this.gearTitanContainer) {
+          this.tweens.add({
+            targets: this.gearTitanContainer,
+            x: endPixelX,
+            y: endPixelY,
+            duration: 500,
+            ease: 'Power2',
+            onUpdate: () => {
+              // 충돌 체크
+              if (!this.isInvincible && !this.isDashing && this.gearTitanContainer) {
+                const bossGridX = Math.floor((this.gearTitanContainer.x - this.gridSize / 2) / this.gridSize);
+                const bossGridY = Math.floor((this.gearTitanContainer.y - this.gridSize / 2 - 60) / this.gridSize);
+                const snakeHead = this.snake[0];
+
+                if (Math.abs(bossGridX - snakeHead.x) <= 1 && Math.abs(bossGridY - snakeHead.y) <= 1) {
+                  this.endGame();
+                }
+              }
+            },
+            onComplete: () => {
+              // 보스 위치 업데이트
+              this.gearTitanPosition = { x: targetX, y: targetY };
+
+              // 벽에 부딪혀서 스턴 (취약 상태)
+              this.cameras.main.shake(300, 0.03);
+              this.makeGearTitanVulnerable();
+            }
+          });
+        }
+      }
+    });
+  }
+
+  makeGearTitanVulnerable() {
+    if (!this.gearTitanMode) return;
+
+    this.gearTitanVulnerable = true;
+    this.gearTitanPhase = 'vulnerable';
+
+    const { width, height } = this.cameras.main;
+
+    // HIT ME! 텍스트
+    const hitMeText = this.add.text(width / 2, 100, 'HIT ME!', {
+      fontSize: '48px',
+      fill: '#00ff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5000);
+
+    this.tweens.add({
+      targets: hitMeText,
+      alpha: { from: 1, to: 0.5 },
+      scaleX: { from: 1, to: 1.2 },
+      scaleY: { from: 1, to: 1.2 },
+      duration: 300,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // 코어 색상 변경 (초록색)
+    if (this.gearTitanCore) {
+      this.gearTitanCore.clear();
+      this.gearTitanCore.fillStyle(0x004400, 1);
+      this.gearTitanCore.fillCircle(0, 0, this.gridSize * 2 * 0.8);
+      this.gearTitanCore.fillStyle(0x00ff00, 1);
+      this.gearTitanCore.fillCircle(0, 0, this.gridSize * 2 * 0.5);
+      this.gearTitanCore.fillStyle(0x000000, 1);
+      this.gearTitanCore.fillCircle(0, 0, this.gridSize * 2 * 0.2);
+      this.gearTitanCore.fillStyle(0xffffff, 1);
+      this.gearTitanCore.fillCircle(0, -this.gridSize * 2 * 0.05, this.gridSize * 2 * 0.1);
+    }
+
+    // 3초 후 취약 상태 종료
+    this.time.delayedCall(3000, () => {
+      if (hitMeText.active) hitMeText.destroy();
+
+      if (this.gearTitanMode && !this.gameOver) {
+        this.gearTitanVulnerable = false;
+
+        // 코어 색상 복원 (빨간색)
+        if (this.gearTitanCore) {
+          this.gearTitanCore.clear();
+          this.gearTitanCore.fillStyle(0x440000, 1);
+          this.gearTitanCore.fillCircle(0, 0, this.gridSize * 2 * 0.8);
+          this.gearTitanCore.fillStyle(0xff0000, 1);
+          this.gearTitanCore.fillCircle(0, 0, this.gridSize * 2 * 0.5);
+          this.gearTitanCore.fillStyle(0x000000, 1);
+          this.gearTitanCore.fillCircle(0, 0, this.gridSize * 2 * 0.2);
+          this.gearTitanCore.fillStyle(0xffff00, 1);
+          this.gearTitanCore.fillCircle(0, -this.gridSize * 2 * 0.05, this.gridSize * 2 * 0.1);
+        }
+
+        // 다음 공격 패턴
+        this.advanceGearTitanPhase();
+      }
+    });
+  }
+
+  advanceGearTitanPhase() {
+    const hitCount = this.gearTitanHitCount;
+
+    // 광폭화 체크 (HP 25% 이하 = 3 HIT 이상)
+    if (hitCount >= 3 && this.gearTitanPhase !== 'enrage') {
+      this.gearTitanEnrageMode();
+      return;
+    }
+
+    // 패턴 순환
+    const patterns = ['phase1', 'phase2', 'phase3'];
+    const currentIdx = patterns.indexOf(this.gearTitanPhase);
+    const nextIdx = (currentIdx + 1) % patterns.length;
+    this.gearTitanPhase = patterns[nextIdx];
+
+    this.time.delayedCall(1000, () => {
+      switch (this.gearTitanPhase) {
+        case 'phase1':
+          this.gearTitanPhase1Attack();
+          break;
+        case 'phase2':
+          this.gearTitanPhase2Attack();
+          break;
+        case 'phase3':
+          this.gearTitanPhase3Attack();
+          break;
+      }
+    });
+  }
+
+  gearTitanEnrageMode() {
+    if (!this.gearTitanMode) return;
+
+    this.gearTitanPhase = 'enrage';
+
+    const { width, height } = this.cameras.main;
+
+    // ENRAGE 텍스트
+    const enrageText = this.add.text(width / 2, height / 2, 'ENRAGE!', {
+      fontSize: '72px',
+      fill: '#ff0000',
+      fontStyle: 'bold',
+      stroke: '#660000',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(5000).setAlpha(0);
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(1000, 0.04);
+
+    // 보스 빨간색 틴트
+    if (this.gearTitanContainer) {
+      this.gearTitanGears.forEach(gear => {
+        gear.clear();
+        gear.fillStyle(0xff4400, 1);
+        // 기어 다시 그리기 (빨간색)
+        const radius = this.gridSize * 2 * 0.8;
+        gear.beginPath();
+        for (let i = 0; i < 12; i++) {
+          const angle = (i / 12) * Math.PI * 2;
+          const nextAngle = ((i + 0.5) / 12) * Math.PI * 2;
+          const outerR = radius;
+          const innerR = radius * 0.7;
+
+          if (i === 0) {
+            gear.moveTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+          }
+          gear.lineTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+          gear.lineTo(Math.cos(nextAngle) * innerR, Math.sin(nextAngle) * innerR);
+        }
+        gear.closePath();
+        gear.fill();
+      });
+    }
+
+    this.tweens.add({
+      targets: enrageText,
+      alpha: 1,
+      scaleX: { from: 2, to: 1 },
+      scaleY: { from: 2, to: 1 },
+      duration: 500,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.time.delayedCall(1000, () => {
+          enrageText.destroy();
+
+          // 광폭화 공격 (모든 패턴 동시)
+          this.gearTitanPhase1Attack();
+          this.time.delayedCall(500, () => this.gearTitanPhase2Attack());
+        });
+      }
+    });
+  }
+
+  // =====================
+  // 기어 타이탄 HIT/승리 처리
+  // =====================
+
+  handleGearTitanHit() {
+    if (!this.gearTitanVulnerable) return;
+
+    this.gearTitanHitCount++;
+    this.gearTitanVulnerable = false;
+
+    // 히트 후 일시적 무적 (보스 충돌 무시)
+    this.isInvincible = true;
+    this.moveTimer.paused = true;
+
+    const { width, height } = this.cameras.main;
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+    const bossX = this.gearTitanPosition.x * this.gridSize + this.gridSize / 2;
+    const bossY = this.gearTitanPosition.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // === 통쾌한 히트 애니메이션 ===
+
+    // 1. 슬로우 모션 효과 (잠깐)
+    this.cameras.main.flash(200, 0, 255, 100, false);
+
+    // 2. 임팩트 링 효과
+    for (let i = 0; i < 3; i++) {
+      const ring = this.add.graphics().setDepth(5002);
+      ring.lineStyle(4 - i, 0x00ffff, 1);
+      ring.strokeCircle(bossX, bossY, 10);
+
+      this.tweens.add({
+        targets: ring,
+        scaleX: 4 + i * 2,
+        scaleY: 4 + i * 2,
+        alpha: 0,
+        duration: 400,
+        delay: i * 100,
+        onComplete: () => ring.destroy()
+      });
+    }
+
+    // 3. 스파크 폭발
+    for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2;
+      const spark = this.add.graphics().setDepth(5003);
+      spark.fillStyle(Phaser.Math.RND.pick([0x00ffff, 0x00ff00, 0xffff00]), 1);
+      spark.fillCircle(0, 0, Phaser.Math.Between(4, 8));
+      spark.x = bossX;
+      spark.y = bossY;
+
+      this.tweens.add({
+        targets: spark,
+        x: bossX + Math.cos(angle) * Phaser.Math.Between(60, 120),
+        y: bossY + Math.sin(angle) * Phaser.Math.Between(60, 120),
+        alpha: 0,
+        duration: 500,
+        ease: 'Power2',
+        onComplete: () => spark.destroy()
+      });
+    }
+
+    // 4. HIT 텍스트 (더 역동적으로)
+    const hitText = this.add.text(width / 2, height / 2, `CRITICAL HIT!`, {
+      fontSize: '56px',
+      fill: '#00ffff',
+      fontStyle: 'bold',
+      stroke: '#004466',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(5010).setAlpha(0).setScale(3);
+
+    this.tweens.add({
+      targets: hitText,
+      alpha: 1,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        // HIT 카운트 표시
+        const countText = this.add.text(width / 2, height / 2 + 50, `${this.gearTitanHitCount}/4`, {
+          fontSize: '36px',
+          fill: '#ffcc00',
+          fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(5010);
+
+        this.tweens.add({
+          targets: [hitText, countText],
+          alpha: 0,
+          y: '-=30',
+          duration: 800,
+          delay: 500,
+          onComplete: () => {
+            hitText.destroy();
+            countText.destroy();
+          }
+        });
+      }
+    });
+
+    // 5. 카메라 쉐이크 (강력하게)
+    this.cameras.main.shake(400, 0.05);
+
+    // 6. 보스 피격 효과 (빨간 플래시 + 밀려남)
+    if (this.gearTitanContainer) {
+      // 빨간색으로 깜빡
+      this.gearTitanContainer.iterate(child => {
+        if (child.setTint) child.setTint(0xff0000);
+      });
+
+      this.tweens.add({
+        targets: this.gearTitanContainer,
+        alpha: { from: 1, to: 0.2 },
+        duration: 80,
+        yoyo: true,
+        repeat: 5,
+        onComplete: () => {
+          this.gearTitanContainer.iterate(child => {
+            if (child.clearTint) child.clearTint();
+          });
+        }
+      });
+    }
+
+    // 7. 뱀을 보스로부터 밀어내기
+    const pushDir = {
+      x: head.x - this.gearTitanPosition.x,
+      y: head.y - this.gearTitanPosition.y
+    };
+    const pushDist = Math.sqrt(pushDir.x * pushDir.x + pushDir.y * pushDir.y);
+    if (pushDist > 0) {
+      pushDir.x /= pushDist;
+      pushDir.y /= pushDist;
+    } else {
+      pushDir.x = 1;
+      pushDir.y = 0;
+    }
+
+    // 뱀을 4칸 밀어냄
+    const newX = Math.max(0, Math.min(this.cols - 1, Math.round(head.x + pushDir.x * 4)));
+    const newY = Math.max(0, Math.min(this.rows - 1, Math.round(head.y + pushDir.y * 4)));
+    this.snake[0] = { x: newX, y: newY };
+
+    // 8. 방향을 돌진 반대 방향으로 변경
+    const oppositeDirections = {
+      'RIGHT': 'LEFT',
+      'LEFT': 'RIGHT',
+      'UP': 'DOWN',
+      'DOWN': 'UP'
+    };
+    this.direction = oppositeDirections[this.direction] || this.direction;
+    this.inputQueue = []; // 입력 큐 초기화
+
+    this.draw();
+
+    // 9. 무적 해제 및 게임 재개
+    this.time.delayedCall(800, () => {
+      this.isInvincible = false;
+
+      // 4 HIT 시 승리
+      if (this.gearTitanHitCount >= 4) {
+        this.showGearTitanVictory();
+      } else {
+        // 게임 재개
+        this.moveTimer.paused = false;
+        // 다음 공격 패턴
+        this.time.delayedCall(500, () => {
+          this.advanceGearTitanPhase();
+        });
+      }
+    });
+  }
+
+  showGearTitanVictory() {
+    this.gearTitanPhase = 'victory';
+
+    const { width, height } = this.cameras.main;
+
+    // 보스 폭발 효과
+    if (this.gearTitanContainer) {
+      // 기어들이 분해되어 날아감
+      this.gearTitanGears.forEach((gear, idx) => {
+        const angle = (idx / 4) * Math.PI * 2;
+        this.tweens.add({
+          targets: gear,
+          x: gear.x + Math.cos(angle) * 200,
+          y: gear.y + Math.sin(angle) * 200,
+          alpha: 0,
+          rotation: Math.PI * 4,
+          duration: 1000,
+          ease: 'Power2'
+        });
+      });
+
+      // 코어 폭발
+      this.time.delayedCall(500, () => {
+        const explosionX = this.gearTitanContainer.x;
+        const explosionY = this.gearTitanContainer.y;
+
+        // 폭발 파티클
+        for (let i = 0; i < 20; i++) {
+          const particle = this.add.graphics();
+          particle.setDepth(400);
+          particle.fillStyle(Phaser.Math.RND.pick([0xff0000, 0xff6600, 0xffff00]), 1);
+          particle.fillCircle(explosionX, explosionY, Phaser.Math.Between(5, 15));
+
+          const angle = (i / 20) * Math.PI * 2;
+          const dist = Phaser.Math.Between(50, 150);
+
+          this.tweens.add({
+            targets: particle,
+            x: explosionX + Math.cos(angle) * dist,
+            y: explosionY + Math.sin(angle) * dist,
+            alpha: 0,
+            duration: 800,
+            onComplete: () => particle.destroy()
+          });
+        }
+
+        // 화면 플래시
+        const flash = this.add.rectangle(width / 2, height / 2, width, height, 0xffffff, 1);
+        flash.setDepth(5000);
+        this.tweens.add({
+          targets: flash,
+          alpha: 0,
+          duration: 500,
+          onComplete: () => flash.destroy()
+        });
+
+        // 컨테이너 제거
+        this.gearTitanContainer.destroy();
+        this.gearTitanContainer = null;
+      });
+    }
+
+    // BOSS CLEAR 텍스트
+    this.time.delayedCall(1500, () => {
+      const clearText = this.add.text(width / 2, height / 2 - 50, 'BOSS CLEAR!', {
+        fontSize: '72px',
+        fill: '#00ff00',
+        fontStyle: 'bold',
+        stroke: '#004400',
+        strokeThickness: 8
+      }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+      this.tweens.add({
+        targets: clearText,
+        alpha: 1,
+        scaleX: { from: 2, to: 1 },
+        scaleY: { from: 2, to: 1 },
+        duration: 500,
+        ease: 'Back.easeOut'
+      });
+
+      // +1000 BONUS
+      this.time.delayedCall(500, () => {
+        const bonusText = this.add.text(width / 2, height / 2 + 50, '+1000 BONUS!', {
+          fontSize: '48px',
+          fill: '#ffcc00',
+          fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(5001).setAlpha(0);
+
+        this.tweens.add({
+          targets: bonusText,
+          alpha: 1,
+          y: height / 2 + 30,
+          duration: 500,
+          onComplete: () => {
+            // 점수 추가
+            this.score += 1000;
+            this.scoreText.setText(this.score.toString());
+
+            // 정리 및 다음 단계
+            this.time.delayedCall(2000, () => {
+              clearText.destroy();
+              bonusText.destroy();
+
+              // 콤보 복원
+              this.combo = this.savedCombo;
+              this.comboShieldCount = this.savedComboShieldCount;
+              if (this.combo > 0) {
+                this.comboText.setText(`x${this.combo}`);
+              }
+
+              // 보스 모드 종료
+              this.gearTitanMode = false;
+              this.gearTitanPhase = 'none';
+              this.bossMode = false;
+              this.isBossStage = false;
+              this.canChargeDash = false;
+              this.cleanupChargeUI();
+
+              // 상점 오픈 (뱀 점프 애니메이션 포함)
+              this.stageClear();
+            });
+          }
+        });
+      });
+    });
   }
 
   startDeadZoneSequence() {
@@ -3600,6 +6714,10 @@ export default class SnakeGame extends Phaser.Scene {
     // 이전 프레임 지우기
     if (this.graphics) {
       this.graphics.clear();
+      // 그래픽이 숨겨져 있으면 다시 보이게 (hideSnakeGraphics 후 복구)
+      if (!this.graphics.visible) {
+        this.graphics.setVisible(true);
+      }
     } else {
       this.graphics = this.add.graphics();
     }
@@ -4444,6 +7562,15 @@ export default class SnakeGame extends Phaser.Scene {
     // 게임 일시정지
     this.moveTimer.paused = true;
 
+    // 스테이지 클리어 플래그 설정 (톱니 충돌 무시용)
+    this.isStageClearingAnimation = true;
+
+    // 모든 톱니 정지 (일시정지만, 타이머 유지)
+    this.pauseAllSaws();
+
+    // 뱀 그래픽 숨기기 (점프 애니메이션에서 별도 렉탱글로 표시)
+    this.hideSnakeGraphics();
+
     const { width, height } = this.cameras.main;
 
     // 먹이 즉시 숨김
@@ -4698,18 +7825,25 @@ export default class SnakeGame extends Phaser.Scene {
     const { width, height } = this.cameras.main;
 
     const { stage: nextStage, isTestMode } = this.getNextStageAfterClear();
+
+    // Stage -2 -> -1 전환 시 톱니 보존 플래그 설정
+    if (this.currentStage === -2 && nextStage === -1) {
+      this.preserveSawsForNextStage = true;
+    }
+
     this.currentStage = nextStage;
     this.isTestMode = isTestMode;
 
-    // Boss stage checks (bullet/fog handled separately)
+    // Boss stage checks (bullet/fog/gear titan handled separately)
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
-    const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && (
+    const isGearTitan = this.isGearTitanStage();
+    const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && !isGearTitan && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
 
-    const isAnyBossStage = isPoisonFrogBoss || isBulletBoss || isFogBoss;
+    const isAnyBossStage = isPoisonFrogBoss || isBulletBoss || isFogBoss || isGearTitan;
 
     if (isAnyBossStage) {
       this.enterBossStage();
@@ -4720,6 +7854,12 @@ export default class SnakeGame extends Phaser.Scene {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
       this.bossIntroMoveCount = 0;
+    } else if (isGearTitan) {
+      // 기어 타이탄: 톱니 날아가기 애니메이션 후 resetStage
+      this.moveTimer.paused = true;
+      this.food = { x: -100, y: -100 };
+      this.hideFoodGraphics();
+      // resetStage는 톱니 날아간 후 호출됨
     } else if (isAnyBossStage) {
       this.resetStage();
       this.moveTimer.paused = true;
@@ -4740,6 +7880,24 @@ export default class SnakeGame extends Phaser.Scene {
 
     if (!isAnyBossStage) {
       this.resetStage();
+    }
+
+    // Stage -1: 강화 톱니 시작 (기존 톱니 유지 + 강화 톱니 3개 추가)
+    if (this.currentStage === -1 && this.isTestMode) {
+      this.time.delayedCall(1000, () => {
+        this.startEnhancedSawHellStage();
+      });
+    }
+
+    // Stage 0: 기어 타이탄 보스 시작 (톱니 날아가기 애니메이션 먼저)
+    if (isGearTitan) {
+      this.time.delayedCall(500, () => {
+        this.animateSawsFlyOut(() => {
+          this.resetStage();
+          this.showSnakeGraphics(); // 뱀 다시 보이기
+          this.startGearTitan();
+        });
+      });
     }
 
     if (this.hasSpeedBoost) {
@@ -4787,6 +7945,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   resetStage() {
+    // 스테이지 클리어 애니메이션 플래그 리셋
+    this.isStageClearingAnimation = false;
+
     // 스피드 부스트 궤도 정리 (새로 생성하기 전에)
     this.cleanupSpeedBoostOrbitals();
     this.resetFogOfWar();
@@ -4796,7 +7957,17 @@ export default class SnakeGame extends Phaser.Scene {
       this.cleanupFogBoss();
     }
 
-    this.destroyAllSaws();
+    // 기어 타이탄 보스 정리
+    if (this.gearTitanMode) {
+      this.cleanupGearTitan();
+    }
+
+    // 톱니 보존 체크: Stage -2 -> -1 전환 시에만 톱니 유지
+    if (!this.shouldPreserveSaws()) {
+      this.destroyAllSaws();
+      this.destroyAllEnhancedSaws();
+    }
+    this.preserveSawsForNextStage = false; // 플래그 리셋
 
     // 독가스 정리
     this.stopGasZone();
@@ -4834,8 +8005,13 @@ export default class SnakeGame extends Phaser.Scene {
     // 콤보는 유지 (스테이지 넘어가도 이어짐)
     this.directionChangesCount = 0;
 
-    // 먹이 생성
-    this.food = this.generateFood();
+    // 먹이 생성 (보스 스테이지에서는 생성 안함)
+    if (!this.isBossStage && !this.gearTitanMode) {
+      this.food = this.generateFood();
+    } else {
+      // 보스전에서는 먹이를 화면 밖으로
+      this.food = { x: -100, y: -100 };
+    }
 
     // 모든 스테이지 시작 속도 90ms 고정
     const startSpeed = 90;
@@ -12305,6 +15481,34 @@ export default class SnakeGame extends Phaser.Scene {
     this.draw();
   }
 
+  hideSnakeGraphics() {
+    // graphics 숨기기 (draw()에서 사용하는 객체)
+    if (this.graphics) {
+      this.graphics.clear();
+      this.graphics.setVisible(false);
+    }
+    // 스피드 부스트 궤도도 숨기기
+    if (this.speedBoostOrbitals) {
+      this.speedBoostOrbitals.forEach(o => {
+        if (o && o.setVisible) o.setVisible(false);
+      });
+    }
+  }
+
+  showSnakeGraphics() {
+    // graphics 다시 보이기
+    if (this.graphics) {
+      this.graphics.setVisible(true);
+    }
+    // 스피드 부스트 궤도도 보이기
+    if (this.hasSpeedBoost && this.speedBoostOrbitals) {
+      this.speedBoostOrbitals.forEach(o => {
+        if (o && o.setVisible) o.setVisible(true);
+      });
+    }
+    this.draw();
+  }
+
   showBulletBossIntro() {
     const { width, height } = this.cameras.main;
 
@@ -19706,6 +22910,11 @@ export default class SnakeGame extends Phaser.Scene {
   update() {
     // 타이머 이벤트가 자동으로 moveSnake를 호출하므로
     // update에서는 아무것도 하지 않아도 됨
+
+    // 기어 타이탄 보스: 차지 대시 입력 처리
+    if (this.gearTitanMode && this.canChargeDash && !this.gameOver) {
+      this.handleChargeInput();
+    }
   }
 }
 

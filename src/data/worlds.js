@@ -60,9 +60,28 @@ export const WORLD_CONFIG = {
 // Test stages for new world development (현재: 기계왕국 개발 중)
 // -2 = Stage 10, -1 = Stage 11, 0 = Stage 12 (보스)
 export const TEST_STAGES = {
-  '-2': { name: 'Test Stage -2', isTest: true, worldName: 'Machine Kingdom', mappedStage: 10 },
-  '-1': { name: 'Test Stage -1', isTest: true, worldName: 'Machine Kingdom', mappedStage: 11 },
-  '0': { name: 'Test Stage 0', isTest: true, isBoss: true, worldName: 'Machine Kingdom', mappedStage: 12 }
+  '-2': {
+    name: 'Test Stage -2',
+    isTest: true,
+    worldName: 'Machine Kingdom',
+    mappedStage: 10,
+    features: { saws: true }
+  },
+  '-1': {
+    name: 'Test Stage -1',
+    isTest: true,
+    worldName: 'Machine Kingdom',
+    mappedStage: 11,
+    features: { saws: true, enhancedSaws: true }
+  },
+  '0': {
+    name: 'Test Stage 0',
+    isTest: true,
+    isBoss: true,
+    worldName: 'Machine Kingdom',
+    mappedStage: 12,
+    bossType: 'gear_titan'
+  }
 };
 
 /**
@@ -92,10 +111,11 @@ export function getWorldByStage(stage) {
       nameKo: '기계왕국 (개발)',
       range: [-2, 0],
       bossStage: 0,
-      bossType: 'machine_boss', // TBD
+      bossType: 'gear_titan',
       isTest: true,
       features: {
-        saws: true
+        saws: true,
+        enhancedSaws: stage === -1
       }
     };
   }
