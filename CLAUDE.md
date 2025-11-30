@@ -1,6 +1,6 @@
 # Snake Game - Phaser 3
 
-> Last updated: 2025-11-26
+> Last updated: 2025-11-29
 
 ## 프로젝트 개요
 Phaser 3 기반 Snake 게임. 월드/스테이지 시스템, 콤보, 아이템, 데드존, 상점, 대출 시스템 등 다양한 기능이 포함된 클래식 게임.
@@ -84,14 +84,16 @@ my-phaser-game/
 - **T**: 테스트 스테이지 토글 (테스트 스테이지 선택 시)
 - **ESC**: 개발자 모드 종료
 
-### 신규 월드 테스트 스테이지 (-2, -1, 0)
+### 테스트 스테이지: 사이버월드 확장 (-2, -1, 0)
 
-신규 월드 개발 시 테스트용 스테이지입니다.
+현재 사이버월드(Cyber World)의 확장 기능을 테스트하는 스테이지입니다.
 
 #### 구조
-- **Stage -2**: 신규 월드 첫 번째 스테이지
-- **Stage -1**: 신규 월드 두 번째 스테이지
-- **Stage 0**: 신규 월드 보스 스테이지
+| Stage | 이름 | 특징 |
+|-------|------|------|
+| -2 | Cyber World (Base) | Gas Zone (기본 사이버월드) |
+| -1 | Flux Maze | Gas Zone + Polarity System + Magnetic Turrets + Floating Mines |
+| 0 | Magnetar (Boss) | 3-Phase Boss Battle |
 
 #### 동작 방식
 1. 개발자 모드에서 테스트 스테이지를 활성화 (T 키)
@@ -578,6 +580,128 @@ updateBullets()                          // 60fps 위치 업데이트
 handleDodge()                            // 회피 실행
 performSideRoll()                        // 사이드 롤 동작
 showDodgeTutorial(callback)              // 튜토리얼 표시
+```
+
+### 16. Flux Maze 시스템 (Stage -1)
+
+#### 개요
+Stage -1 "Flux Maze"는 사이버월드의 확장 스테이지로, 극성 시스템과 자석 탑, 떠다니는 기뢰가 등장합니다.
+
+#### 극성 시스템 (Polarity System)
+- **동작**: 뱀에 N극 또는 S극 극성이 부여됨
+- **극성 변경**: 10초마다 자동 전환 (N↔S)
+- **경고**: 변경 2초 전 경고 표시 + EMP 링 효과
+- **시각화**: 뱀 머리 위에 [N] 또는 [S] 마커 표시
+
+#### 자석 탑 (Magnetic Turrets)
+- **배치**: 맵에 4개 고정 위치
+  - (8, 6) - N극, (32, 6) - S극
+  - (8, 21) - S극, (32, 21) - N극
+- **속도 영향**: 극성에 따른 이동 속도 변화
+  - 같은 극 (척력): 속도 감소 (0.5x ~ 1.0x)
+  - 다른 극 (인력): 속도 증가 (1.0x ~ 1.5x)
+- **영향 범위**: 5타일
+- **충돌**: 탑에 닿으면 즉사
+
+#### 떠다니는 기뢰 (Floating Mines)
+- **생성**: 5초마다 새 기뢰 생성 (최대 4개)
+- **이동**: 1.5초마다 1칸, 15% 확률로 방향 변경
+- **반사**: 벽이나 탑에서 반사
+- **충돌**: 기뢰에 닿으면 몸통 1칸 제거
+- **즉사 조건**: 뱀 길이 3 이하면 즉사
+
+#### 주요 변수
+```javascript
+// 극성 시스템
+this.polarityEnabled = false
+this.currentPolarity = 'N'               // 'N' or 'S'
+this.polarityChangeInterval = 10000      // 10초
+
+// 자석 탑
+this.magneticTurrets = []                // [{x, y, polarity, element}]
+this.turretForceRadius = 5               // 영향 범위 (타일)
+this.currentSpeedModifier = 1.0          // 속도 배율
+
+// 떠다니는 기뢰
+this.floatingMines = []                  // [{x, y, element, dx, dy}]
+this.maxFloatingMines = 4
+this.mineSpeed = 1500                    // ms per tile
+```
+
+### 17. Magnetar 보스 시스템 (Stage 0)
+
+#### 개요
+Stage 0 "Magnetar"는 사이버월드의 보스 스테이지로, 3개의 페이즈를 가진 자석 보스와 싸웁니다.
+
+#### 보스 위치
+- 맵 중앙 고정 (cols/2, rows/2)
+
+#### 페이즈 흐름
+```
+INTRO → PHASE 1 (Reverse Field)
+           ↓ [1 HIT]
+       PHASE 2 (EMP Beam)
+           ↓ [2 HIT]
+       PHASE 3 (Event Horizon) → 4개 생성기 파괴 → VICTORY
+```
+
+**총 HIT 필요:** 2 HIT (Phase 전환) + 4 생성기 = 6 HIT
+
+#### Phase 1: Reverse Field (조작 반전)
+- **패턴**: 5초간 조작 반전 (↑=↓, ←=→) + 3초 휴식 반복
+- **경고**: 2초 전 보라색 테두리 깜빡임
+- **UI**: "CONTROLS REVERSED!" 텍스트 표시
+- **HIT**: 보스 위치에 도달하면 Phase 2로 전환
+
+#### Phase 2: EMP Beam (십자 레이저)
+- **패턴**: 십자(+) 또는 X자 레이저 랜덤 발사
+- **경고**: 1초간 노란색 경고선 표시
+- **발사**: 0.5초간 마젠타색 레이저 활성
+- **즉사**: 레이저에 닿으면 즉사
+- **HIT**: 보스 위치에 도달하면 Phase 3로 전환
+
+#### Phase 3: Event Horizon (최종 페이즈)
+- **가스 가속**: 자기장 축소 간격 800ms (기존 2000ms)
+- **보호막 생성기**: 4개가 보스 주위를 공전
+  - 6타일 반경 궤도
+  - 뱀이 생성기에 닿으면 파괴
+- **승리 조건**: 4개 생성기 모두 파괴
+- **패배 조건**: 가스 자기장에 갇히면 패배
+
+#### 주요 변수
+```javascript
+this.magnetarMode = false
+this.magnetarPhase = 'none'              // 'intro'|'phase1'|'phase2'|'phase3'|'victory'
+this.magnetarPosition = {x, y}           // 맵 중앙
+this.magnetarHitCount = 0                // 0-6
+this.magnetarControlsReversed = false    // Phase 1 조작 반전
+this.empBeamActive = false               // Phase 2 레이저 활성
+this.shieldGenerators = []               // Phase 3 생성기
+this.magnetarPhase3GasInterval = 800     // Phase 3 가스 속도
+```
+
+#### 주요 함수
+```javascript
+// 보스 시작/정리
+startMagnetar()
+cleanupMagnetar()
+
+// Phase 1
+activateReverseField()
+deactivateReverseField()
+
+// Phase 2
+startEMPBeamCycle()
+fireEMPBeam(pattern)
+isOnEMPBeam(x, y)
+
+// Phase 3
+createShieldGenerators()
+updateGeneratorOrbits()
+checkGeneratorCollision(x, y)
+
+// 승리
+showMagnetarVictory()
 ```
 
 ---

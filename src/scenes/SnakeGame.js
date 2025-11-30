@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
-import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, getEffectiveStage, TEST_STAGES } from '../data/worlds.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, TEST_STAGES } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -154,6 +154,67 @@ export default class SnakeGame extends Phaser.Scene {
     this.gasZonePulseTime = 0; // 펄스 애니메이션용
     this.gasZoneCenterX = 0; // 원 중심 X
     this.gasZoneCenterY = 0; // 원 중심 Y
+
+    // ===== Polarity System (비활성화 - 레이저 터렛으로 대체) =====
+    this.polarityEnabled = false;
+    this.currentPolarity = 'N';
+    this.polarityChangeInterval = 10000;
+    this.polarityTimer = null;
+    this.polarityWarningTimer = null;
+    this.polarityMarker = null;
+    this.polarityUI = null;
+    this.polarityUILabel = null;
+    this.polarityChangeWarningTime = 2000;
+    this.isPolarityWarning = false;
+
+    // ===== Magnetic Turrets (비활성화 - 레이저 터렛으로 대체) =====
+    this.magneticTurrets = [];
+    this.turretForceRadius = 5;
+    this.turretPulseTime = 0;
+    this.turretAnimTimer = null;
+    this.baseSpeed = 90;
+    this.currentSpeedModifier = 1.0;
+
+    // ===== Laser Turrets (Stage -1: Flux Maze) =====
+    this.laserTurrets = []; // [{x, y, container, angle, laserGraphics, warningGraphics, isActive}]
+    this.laserTurretPositions = [
+      { x: 10, y: 8 },   // 좌상단
+      { x: 29, y: 8 },   // 우상단
+      { x: 10, y: 19 },  // 좌하단
+      { x: 29, y: 19 }   // 우하단
+    ];
+    this.laserRotationSpeed = 0.02; // 레이저 회전 속도 (라디안/프레임)
+    this.laserLength = 25; // 레이저 길이 (타일)
+    this.laserFireInterval = 4000; // 4초마다 발사 패턴
+    this.laserWarningDuration = 1500; // 경고 1.5초
+    this.laserActiveDuration = 2000; // 레이저 활성 2초
+    this.laserAnimTimer = null; // 60fps 애니메이션 타이머
+    this.laserFireTimer = null; // 발사 타이머
+    this.laserPhase = 'idle'; // 'idle' | 'warning' | 'firing'
+
+    // ===== Floating Mines (Stage -1: Flux Maze) =====
+    this.floatingMines = []; // [{x, y, element, dx, dy, moveTimer}]
+    this.maxFloatingMines = 4;
+    this.mineSpeed = 1500; // 1.5초에 1칸 이동
+    this.mineSpawnTimer = null; // 기뢰 생성 타이머
+    this.mineSpawnInterval = 5000; // 5초마다 생성
+
+    // ===== Magnetar Boss (Stage 0) =====
+    this.magnetarMode = false;
+    this.magnetarPhase = 'none'; // 'none' | 'intro' | 'phase1' | 'phase2' | 'phase3' | 'victory'
+    this.magnetarPosition = null; // 보스 위치 (맵 중앙)
+    this.magnetarElement = null; // 보스 그래픽 컨테이너
+    this.magnetarCore = null; // 보스 코어 그래픽
+    this.magnetarHitCount = 0; // 보스 HIT 횟수
+    this.magnetarControlsReversed = false; // 조작 반전 상태
+    this.magnetarReverseEndTime = 0; // 반전 종료 시간
+    this.magnetarReverseTimer = null; // 반전 타이머
+    this.magnetarLaserPatterns = []; // 활성 레이저 패턴들
+    this.magnetarShieldGenerators = []; // [{orbitAngle, orbitRadius, destroyed, element, body, beam, x, y}]
+    this.magnetarOrbitTimer = null; // 생성기 공전 타이머
+    this.magnetarAttackTimer = null; // 공격 패턴 타이머
+    this.magnetarGeneratorsVulnerable = false; // 생성기 파괴 가능 여부
+    this.magnetarPhase3GasInterval = 800; // Phase 3 가스 축소 간격 (ms)
 
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
@@ -736,7 +797,15 @@ export default class SnakeGame extends Phaser.Scene {
       const notOnGasZone = !this.isInGasZone(foodPos.x, foodPos.y);
       const notOnSaw = !this.isSawOccupyingTile(foodPos.x, foodPos.y);
 
-      validPosition = notOnSnake && notOnDeadZone && notOnGasZone && notOnSaw;
+      // 자석 탑과 겹치지 않는지 체크 (Flux Maze)
+      const notOnTurret = !this.isTurretAtPosition(foodPos.x, foodPos.y);
+
+      // 떠다니는 기뢰와 겹치지 않는지 체크 (Flux Maze)
+      const notOnMine = !this.floatingMines.some(mine =>
+        mine.x === foodPos.x && mine.y === foodPos.y
+      );
+
+      validPosition = notOnSnake && notOnDeadZone && notOnGasZone && notOnSaw && notOnTurret && notOnMine;
     }
 
     // 먹이가 벽에 붙어있으면 말풍선 표시
@@ -1186,7 +1255,14 @@ export default class SnakeGame extends Phaser.Scene {
     const head = this.snake[0];
     let newHead = { x: head.x, y: head.y };
 
-    switch (this.direction) {
+    // Magnetar 조작 반전 적용 (Phase 1)
+    let effectiveDirection = this.direction;
+    if (this.magnetarControlsReversed) {
+      const reverseMap = { 'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT' };
+      effectiveDirection = reverseMap[this.direction] || this.direction;
+    }
+
+    switch (effectiveDirection) {
       case 'LEFT':
         newHead.x -= 1;
         break;
@@ -1228,6 +1304,30 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
+    // 자석 탑 충돌 체크 (Flux Maze)
+    if (this.isTurretAtPosition(newHead.x, newHead.y)) {
+      this.endGame();
+      return;
+    }
+
+    // 떠다니는 기뢰 충돌 체크 (Flux Maze)
+    if (this.checkMineCollision(newHead.x, newHead.y)) {
+      // checkMineCollision handles the damage/death internally
+      if (this.gameOver) return;
+    }
+
+    // 레이저 터렛 충돌 체크 (Flux Maze - Stage -1)
+    if (this.checkLaserCollision(newHead.x, newHead.y)) {
+      this.endGame();
+      return;
+    }
+
+    // EMP 레이저 충돌 체크 (Magnetar Phase 2)
+    if (this.isOnEMPBeam(newHead.x, newHead.y)) {
+      this.endGame();
+      return;
+    }
+
     // 자기 몸 충돌 체크
     if (this.snake.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
       this.endGame();
@@ -1260,6 +1360,25 @@ export default class SnakeGame extends Phaser.Scene {
         this.handleBulletBossHit();
         this.draw();
         return;
+      }
+    }
+
+    // Magnetar 보스 관련 충돌 체크
+    if (this.magnetarMode) {
+      // Phase 3: 보호막 생성기 충돌 체크
+      if (this.checkGeneratorCollision(newHead.x, newHead.y)) {
+        this.draw();
+        return;
+      }
+
+      // Phase 1/2: 보스 위치에 도달하면 HIT
+      if (this.magnetarPosition &&
+          newHead.x === this.magnetarPosition.x && newHead.y === this.magnetarPosition.y) {
+        if (this.magnetarPhase === 'phase1' || this.magnetarPhase === 'phase2') {
+          this.handleMagnetarHit();
+          this.draw();
+          return;
+        }
       }
     }
 
@@ -1581,6 +1700,16 @@ export default class SnakeGame extends Phaser.Scene {
     // 아이템 업데이트 및 충돌 체크 (보스전 중에는 아이템 비활성화)
     if (!this.bossMode) {
       this.updateItems(newHead);
+    }
+
+    // 극성 마커 위치 업데이트 (Flux Maze)
+    if (this.polarityEnabled) {
+      this.updatePolarityMarkerPosition();
+    }
+
+    // 자기력에 의한 속도 영향 적용 (Flux Maze)
+    if (this.magneticTurrets.length > 0) {
+      this.applyMagneticSpeedEffect();
     }
 
     // 화면 다시 그리기
@@ -4014,7 +4143,8 @@ export default class SnakeGame extends Phaser.Scene {
   // =====================
 
   isGearTitanStage() {
-    return this.currentStage === 0 && this.isTestMode;
+    // Gear Titan 보스 비활성화 - Stage 0은 Magnetar 보스만 사용
+    return false;
   }
 
   cleanupGearTitan() {
@@ -8343,11 +8473,6 @@ export default class SnakeGame extends Phaser.Scene {
 
     const { stage: nextStage, isTestMode } = this.getNextStageAfterClear();
 
-    // Stage -2 -> -1 전환 시 톱니 보존 플래그 설정
-    if (this.currentStage === -2 && nextStage === -1) {
-      this.preserveSawsForNextStage = true;
-    }
-
     this.currentStage = nextStage;
     this.isTestMode = isTestMode;
 
@@ -8397,13 +8522,6 @@ export default class SnakeGame extends Phaser.Scene {
 
     if (!isAnyBossStage) {
       this.resetStage();
-    }
-
-    // Stage -1: 강화 톱니 시작 (기존 톱니 유지 + 강화 톱니 3개 추가)
-    if (this.currentStage === -1 && this.isTestMode) {
-      this.time.delayedCall(1000, () => {
-        this.startEnhancedSawHellStage();
-      });
     }
 
     // Stage 0: 기어 타이탄 보스 시작 (톱니 날아가기 애니메이션 먼저)
@@ -8489,6 +8607,15 @@ export default class SnakeGame extends Phaser.Scene {
     // 독가스 정리
     this.stopGasZone();
 
+    // Flux Maze 시스템 정리
+    this.stopPolaritySystem();
+    this.cleanupMagneticTurrets();
+    this.cleanupLaserTurrets();
+    this.cleanupFloatingMines();
+
+    // Magnetar 보스 정리
+    this.cleanupMagnetar();
+
     // 뱀 초기화
     this.snake = [
       { x: 10, y: 15 },
@@ -8564,6 +8691,30 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.isFogBossStage()) {
       this.time.delayedCall(500, () => {
         this.startFogBoss();
+      });
+    }
+
+    // Flux Maze 기능 활성화 (Stage -1) - 레이저 터렛 시스템
+    if (shouldHaveLaserTurrets(this.currentStage)) {
+      this.time.delayedCall(1000, () => {
+        this.initLaserTurrets();
+      });
+    }
+
+    if (shouldHaveFloatingMines(this.currentStage)) {
+      this.time.delayedCall(2000, () => {
+        this.startMineSpawner();
+      });
+    }
+
+    // Magnetar 보스 스테이지 체크 (Stage 0)
+    if (isMagnetarStage(this.currentStage)) {
+      this.bossPhase = 'intro';
+      this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.hideFoodGraphics();
+      this.time.delayedCall(500, () => {
+        this.startMagnetar();
       });
     }
   }
@@ -14399,6 +14550,2267 @@ export default class SnakeGame extends Phaser.Scene {
       hold: 1000,
       onComplete: () => warningText.destroy()
     });
+  }
+
+  // =====================================================
+  // ===== POLARITY SYSTEM (Stage -1: Flux Maze) =====
+  // =====================================================
+
+  startPolaritySystem() {
+    if (this.polarityEnabled) return;
+
+    this.polarityEnabled = true;
+    this.currentPolarity = Phaser.Math.RND.pick(['N', 'S']);
+
+    // 뱀 머리 위 극성 마커 생성
+    this.createPolarityMarker();
+
+    // 화면 UI 생성
+    this.createPolarityUI();
+
+    // 극성 변경 타이머 시작
+    this.polarityTimer = this.time.addEvent({
+      delay: this.polarityChangeInterval,
+      callback: this.changePolarity,
+      callbackScope: this,
+      loop: true
+    });
+
+    // 경고 타이머 (변경 2초 전)
+    this.polarityWarningTimer = this.time.addEvent({
+      delay: this.polarityChangeInterval - this.polarityChangeWarningTime,
+      callback: this.showPolarityChangeWarning,
+      callbackScope: this,
+      loop: true
+    });
+
+    console.log('[Polarity] System started with polarity:', this.currentPolarity);
+  }
+
+  stopPolaritySystem() {
+    this.polarityEnabled = false;
+
+    if (this.polarityTimer) {
+      this.polarityTimer.destroy();
+      this.polarityTimer = null;
+    }
+
+    if (this.polarityWarningTimer) {
+      this.polarityWarningTimer.destroy();
+      this.polarityWarningTimer = null;
+    }
+
+    if (this.polarityMarker) {
+      this.polarityMarker.destroy();
+      this.polarityMarker = null;
+    }
+
+    if (this.polarityUI) {
+      this.polarityUI.destroy();
+      this.polarityUI = null;
+      this.polarityUILabel = null;
+    }
+
+    console.log('[Polarity] System stopped');
+  }
+
+  createPolarityMarker() {
+    const color = this.currentPolarity === 'N' ? '#00aaff' : '#ff4400';
+
+    this.polarityMarker = this.add.text(0, 0, `[${this.currentPolarity}]`, {
+      fontSize: '14px',
+      fill: color,
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(150);
+
+    this.updatePolarityMarkerPosition();
+  }
+
+  updatePolarityMarkerPosition() {
+    if (!this.polarityMarker || !this.snake || !this.snake[0]) return;
+
+    const head = this.snake[0];
+    const x = head.x * this.gridSize + this.gridSize / 2;
+    const y = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY - 18;
+
+    this.polarityMarker.setPosition(x, y);
+  }
+
+  createPolarityUI() {
+    const { width } = this.cameras.main;
+
+    // 우측 상단에 극성 표시 UI
+    this.polarityUI = this.add.container(width - 60, 30).setDepth(2500);
+
+    const bg = this.add.rectangle(0, 0, 50, 28, 0x222222, 0.9);
+    bg.setStrokeStyle(2, this.currentPolarity === 'N' ? 0x00aaff : 0xff4400);
+
+    const label = this.add.text(0, 0, `[${this.currentPolarity}]`, {
+      fontSize: '18px',
+      fill: this.currentPolarity === 'N' ? '#00aaff' : '#ff4400',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+
+    this.polarityUI.add([bg, label]);
+    this.polarityUILabel = label;
+    this.polarityUIBg = bg;
+  }
+
+  updatePolarityUI() {
+    if (!this.polarityUILabel) return;
+
+    const color = this.currentPolarity === 'N' ? '#00aaff' : '#ff4400';
+    const hexColor = this.currentPolarity === 'N' ? 0x00aaff : 0xff4400;
+
+    this.polarityUILabel.setText(`[${this.currentPolarity}]`);
+    this.polarityUILabel.setColor(color);
+
+    if (this.polarityUIBg) {
+      this.polarityUIBg.setStrokeStyle(2, hexColor);
+    }
+
+    // 마커 업데이트
+    if (this.polarityMarker) {
+      this.polarityMarker.setText(`[${this.currentPolarity}]`);
+      this.polarityMarker.setColor(color);
+    }
+  }
+
+  showPolarityChangeWarning() {
+    if (!this.polarityEnabled) return;
+    this.isPolarityWarning = true;
+
+    // 마커 깜빡임
+    if (this.polarityMarker) {
+      this.tweens.add({
+        targets: this.polarityMarker,
+        alpha: 0.3,
+        duration: 150,
+        yoyo: true,
+        repeat: 5
+      });
+    }
+
+    // 경고 텍스트
+    const { width, height } = this.cameras.main;
+    const warningText = this.add.text(width / 2, height / 2 - 80, 'POLARITY SHIFT!', {
+      fontSize: '28px',
+      fill: '#ffff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(3000).setAlpha(0);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      scale: { from: 0.8, to: 1.1 },
+      duration: 150,
+      yoyo: true,
+      repeat: 5,
+      onComplete: () => warningText.destroy()
+    });
+
+    // 화면 가장자리 글로우
+    const flash = this.add.rectangle(width / 2, height / 2, width, height, 0xffff00, 0);
+    flash.setDepth(2999);
+    this.tweens.add({
+      targets: flash,
+      fillAlpha: 0.15,
+      duration: 200,
+      yoyo: true,
+      repeat: 4,
+      onComplete: () => flash.destroy()
+    });
+  }
+
+  changePolarity() {
+    if (!this.polarityEnabled) return;
+    this.isPolarityWarning = false;
+
+    const oldPolarity = this.currentPolarity;
+    this.currentPolarity = this.currentPolarity === 'N' ? 'S' : 'N';
+
+    // 시각 효과
+    this.showPolarityChangeEffect(oldPolarity, this.currentPolarity);
+
+    // UI 업데이트
+    this.updatePolarityUI();
+
+    // 자기력 효과 재계산
+    if (this.magneticTurrets.length > 0) {
+      this.applyMagneticSpeedEffect();
+    }
+
+    console.log('[Polarity] Changed from', oldPolarity, 'to', this.currentPolarity);
+  }
+
+  showPolarityChangeEffect(from, to) {
+    if (!this.snake || !this.snake[0]) return;
+
+    const head = this.snake[0];
+    const x = head.x * this.gridSize + this.gridSize / 2;
+    const y = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const color = to === 'N' ? 0x00aaff : 0xff4400;
+
+    // EMP 링 효과
+    const ring = this.add.graphics().setDepth(200);
+    ring.lineStyle(4, color, 1);
+    ring.strokeCircle(x, y, 10);
+
+    this.tweens.add({
+      targets: ring,
+      scaleX: 6,
+      scaleY: 6,
+      alpha: 0,
+      duration: 400,
+      ease: 'Power2',
+      onComplete: () => ring.destroy()
+    });
+
+    // 파티클 효과
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const particle = this.add.graphics().setDepth(200);
+      particle.fillStyle(color, 1);
+      particle.fillCircle(0, 0, 4);
+      particle.x = x;
+      particle.y = y;
+
+      this.tweens.add({
+        targets: particle,
+        x: x + Math.cos(angle) * 40,
+        y: y + Math.sin(angle) * 40,
+        alpha: 0,
+        duration: 350,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(150, 0.008);
+  }
+
+  // =====================================================
+  // ===== MAGNETIC TURRETS (Stage -1: Flux Maze) =====
+  // =====================================================
+
+  initMagneticTurrets() {
+    if (this.magneticTurrets.length > 0) return;
+
+    // 4개 고정 위치 (대칭 배치)
+    const positions = [
+      { x: 8, y: 6, polarity: 'N' },
+      { x: 32, y: 6, polarity: 'S' },
+      { x: 8, y: 21, polarity: 'S' },
+      { x: 32, y: 21, polarity: 'N' }
+    ];
+
+    positions.forEach(pos => {
+      this.createMagneticTurret(pos.x, pos.y, pos.polarity);
+    });
+
+    // 애니메이션 타이머 시작
+    this.turretAnimTimer = this.time.addEvent({
+      delay: 16, // 60fps
+      callback: this.updateTurretAnimations,
+      callbackScope: this,
+      loop: true
+    });
+
+    console.log('[Turrets] Initialized', this.magneticTurrets.length, 'turrets');
+  }
+
+  createMagneticTurret(tileX, tileY, polarity) {
+    const gs = this.gridSize;
+    const x = tileX * gs + gs / 2;
+    const y = tileY * gs + gs / 2 + this.gameAreaY;
+
+    const container = this.add.container(x, y).setDepth(65);
+
+    // 영향 범위 표시용 그래픽
+    const forceField = this.add.graphics();
+    container.add(forceField);
+
+    // 베이스 (금속 원형)
+    const base = this.add.graphics();
+    base.fillStyle(0x333344, 1);
+    base.fillCircle(0, 0, gs * 0.7);
+    base.lineStyle(3, polarity === 'N' ? 0x00aaff : 0xff4400, 1);
+    base.strokeCircle(0, 0, gs * 0.7);
+    container.add(base);
+
+    // 극성 텍스트
+    const polarityText = this.add.text(0, 0, polarity, {
+      fontSize: '14px',
+      fill: polarity === 'N' ? '#00aaff' : '#ff4400',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(polarityText);
+
+    // 코어 글로우
+    const coreGlow = this.add.graphics();
+    coreGlow.fillStyle(polarity === 'N' ? 0x00aaff : 0xff4400, 0.3);
+    coreGlow.fillCircle(0, 0, gs * 0.4);
+    container.add(coreGlow);
+    container.sendToBack(coreGlow);
+
+    const turret = {
+      x: tileX,
+      y: tileY,
+      polarity: polarity,
+      element: container,
+      forceField: forceField,
+      forceRadius: this.turretForceRadius,
+      pulsePhase: Math.random() * Math.PI * 2,
+      base: base,
+      coreGlow: coreGlow
+    };
+
+    this.magneticTurrets.push(turret);
+
+    // 생성 애니메이션
+    container.setScale(0).setAlpha(0);
+    this.tweens.add({
+      targets: container,
+      scale: 1,
+      alpha: 1,
+      duration: 500,
+      ease: 'Back.easeOut'
+    });
+  }
+
+  updateTurretAnimations() {
+    if (!this.polarityEnabled) return;
+
+    this.turretPulseTime += 0.05;
+
+    this.magneticTurrets.forEach(turret => {
+      if (!turret.forceField) return;
+
+      turret.forceField.clear();
+
+      const alpha = 0.15 + Math.sin(this.turretPulseTime + turret.pulsePhase) * 0.1;
+      const radius = turret.forceRadius * this.gridSize;
+      const color = turret.polarity === 'N' ? 0x00aaff : 0xff4400;
+
+      // 외곽 링
+      turret.forceField.lineStyle(2, color, alpha * 1.5);
+      turret.forceField.strokeCircle(0, 0, radius);
+
+      // 내부 펄스 링들
+      for (let i = 1; i <= 3; i++) {
+        const ringRadius = radius * (i / 4);
+        const ringAlpha = alpha * (1 - i / 5);
+        turret.forceField.lineStyle(1, color, ringAlpha);
+        turret.forceField.strokeCircle(0, 0, ringRadius);
+      }
+
+      // 코어 글로우 펄스
+      if (turret.coreGlow) {
+        const glowScale = 1 + Math.sin(this.turretPulseTime * 2 + turret.pulsePhase) * 0.15;
+        turret.coreGlow.setScale(glowScale);
+      }
+    });
+  }
+
+  calculateMagneticSpeedModifier() {
+    if (!this.polarityEnabled || this.magneticTurrets.length === 0) {
+      return 1.0;
+    }
+
+    if (!this.snake || !this.snake[0]) return 1.0;
+
+    const head = this.snake[0];
+    let totalModifier = 1.0;
+
+    this.magneticTurrets.forEach(turret => {
+      const dist = Math.sqrt(
+        Math.pow(head.x - turret.x, 2) +
+        Math.pow(head.y - turret.y, 2)
+      );
+
+      if (dist <= turret.forceRadius && dist > 0.5) {
+        const distanceRatio = dist / turret.forceRadius;
+        const samePolarity = this.currentPolarity === turret.polarity;
+
+        if (samePolarity) {
+          // 척력: 속도 감소 (거리 가까우면 0.5x까지)
+          const modifier = 0.5 + distanceRatio * 0.5;
+          totalModifier = Math.min(totalModifier, modifier);
+        } else {
+          // 인력: 속도 증가 (거리 가까우면 1.5x까지)
+          const modifier = 1.5 - distanceRatio * 0.5;
+          totalModifier = Math.max(totalModifier, modifier);
+        }
+      }
+    });
+
+    return totalModifier;
+  }
+
+  applyMagneticSpeedEffect() {
+    if (!this.polarityEnabled) return;
+
+    const newModifier = this.calculateMagneticSpeedModifier();
+    const prevModifier = this.currentSpeedModifier;
+
+    // 속도 배율이 변경되었을 때만 업데이트
+    if (Math.abs(newModifier - prevModifier) > 0.01) {
+      this.currentSpeedModifier = newModifier;
+
+      // 실제 속도 적용 (baseSpeed가 없으면 현재 delay 기준)
+      if (!this.baseSpeed) {
+        this.baseSpeed = this.moveTimer.delay;
+      }
+
+      // 속도 배율 적용: modifier가 크면 빠름 (delay 감소)
+      const newDelay = Math.round(this.baseSpeed / newModifier);
+      this.moveTimer.delay = Math.max(30, Math.min(150, newDelay)); // 30~150ms 범위
+
+      // 시각적 피드백
+      this.showMagneticSpeedFeedback(newModifier, prevModifier);
+    }
+
+    // 매 프레임 자기력 파티클 효과
+    this.updateMagneticParticles();
+  }
+
+  updateMagneticParticles() {
+    if (!this.snake || !this.snake[0]) return;
+
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 가까운 탑을 찾아서 자기력 선 표시
+    this.magneticTurrets.forEach(turret => {
+      const dist = Math.sqrt(
+        Math.pow(head.x - turret.x, 2) +
+        Math.pow(head.y - turret.y, 2)
+      );
+
+      if (dist <= turret.forceRadius && dist > 1) {
+        const turretX = turret.x * this.gridSize + this.gridSize / 2;
+        const turretY = turret.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+        const samePolarity = this.currentPolarity === turret.polarity;
+        const color = samePolarity ? 0xff4400 : 0x00aaff;
+
+        // 10% 확률로 자기력 파티클 생성
+        if (Math.random() < 0.1) {
+          this.createMagneticFieldParticle(headX, headY, turretX, turretY, color, samePolarity);
+        }
+      }
+    });
+  }
+
+  createMagneticFieldParticle(fromX, fromY, toX, toY, color, isRepulsion) {
+    const particle = this.add.circle(fromX, fromY, 3, color, 0.8);
+    particle.setDepth(90);
+
+    if (isRepulsion) {
+      // 척력: 탑에서 뱀으로 밀려나오는 방향
+      const angle = Math.atan2(fromY - toY, fromX - toX);
+      const targetX = fromX + Math.cos(angle) * 30;
+      const targetY = fromY + Math.sin(angle) * 30;
+
+      this.tweens.add({
+        targets: particle,
+        x: targetX,
+        y: targetY,
+        alpha: 0,
+        scale: 0.3,
+        duration: 400,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    } else {
+      // 인력: 뱀에서 탑으로 끌려가는 방향
+      const midX = (fromX + toX) / 2 + Phaser.Math.Between(-20, 20);
+      const midY = (fromY + toY) / 2 + Phaser.Math.Between(-20, 20);
+
+      this.tweens.add({
+        targets: particle,
+        x: midX,
+        y: midY,
+        alpha: 0,
+        scale: 0.5,
+        duration: 300,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+  }
+
+  showMagneticSpeedFeedback(modifier, prevModifier) {
+    if (!this.snake || !this.snake[0]) return;
+
+    const head = this.snake[0];
+    const x = head.x * this.gridSize + this.gridSize / 2;
+    const y = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 속도 변화 판단
+    let color, text, particleCount;
+    if (modifier < 0.8) {
+      color = 0xff4400; // 척력 - 빨간색 (느려짐)
+      text = 'SLOW!';
+      particleCount = 8;
+    } else if (modifier > 1.2) {
+      color = 0x00aaff; // 인력 - 파란색 (빨라짐)
+      text = 'FAST!';
+      particleCount = 8;
+    } else if (modifier < 0.95) {
+      color = 0xff6644;
+      text = null;
+      particleCount = 4;
+    } else if (modifier > 1.05) {
+      color = 0x44aaff;
+      text = null;
+      particleCount = 4;
+    } else {
+      // 효과 범위 벗어남 - 원래 속도로 복원
+      if (this.baseSpeed) {
+        this.moveTimer.delay = this.baseSpeed;
+      }
+      return;
+    }
+
+    // 글로우 링 효과
+    const glow = this.add.graphics().setDepth(95);
+    glow.lineStyle(3, color, 0.8);
+    glow.strokeCircle(x, y, this.gridSize * 0.6);
+
+    this.tweens.add({
+      targets: glow,
+      alpha: 0,
+      scaleX: 2,
+      scaleY: 2,
+      duration: 400,
+      ease: 'Power2',
+      onComplete: () => glow.destroy()
+    });
+
+    // 파티클 버스트
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (i / particleCount) * Math.PI * 2;
+      const particle = this.add.circle(x, y, 4, color, 0.9);
+      particle.setDepth(95);
+
+      const dist = modifier < 1 ? 25 : 40; // 척력은 짧게, 인력은 길게
+      this.tweens.add({
+        targets: particle,
+        x: x + Math.cos(angle) * dist,
+        y: y + Math.sin(angle) * dist,
+        alpha: 0,
+        scale: 0.3,
+        duration: 350,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 텍스트 표시 (강한 효과일 때만)
+    if (text) {
+      const feedbackText = this.add.text(x, y - 25, text, {
+        fontSize: '14px',
+        fontFamily: 'monospace',
+        color: color === 0xff4400 ? '#ff4400' : '#00aaff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(100);
+
+      this.tweens.add({
+        targets: feedbackText,
+        y: y - 45,
+        alpha: 0,
+        duration: 600,
+        ease: 'Power2',
+        onComplete: () => feedbackText.destroy()
+      });
+
+      // 화면 테두리 효과
+      this.showMagneticBorderEffect(color);
+    }
+  }
+
+  showMagneticBorderEffect(color) {
+    const { width, height } = this.cameras.main;
+
+    const border = this.add.graphics().setDepth(200);
+    border.lineStyle(4, color, 0.6);
+    border.strokeRect(5, 5, width - 10, height - 10);
+
+    this.tweens.add({
+      targets: border,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => border.destroy()
+    });
+
+    // 텍스트 피드백 (가끔만 표시)
+    if (Math.random() < 0.3) {
+      const feedbackText = this.add.text(x, y - 25, text, {
+        fontSize: '12px',
+        fill: modifier < 0.9 ? '#ff4400' : '#00aaff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(200).setAlpha(0.8);
+
+      this.tweens.add({
+        targets: feedbackText,
+        y: y - 45,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => feedbackText.destroy()
+      });
+    }
+  }
+
+  getAdjustedMoveDelay() {
+    // 자기력 영향 반영한 실제 이동 딜레이
+    const baseDelay = this.moveTimer ? this.moveTimer.delay : this.baseSpeed;
+    return Math.round(baseDelay / this.currentSpeedModifier);
+  }
+
+  cleanupMagneticTurrets() {
+    this.magneticTurrets.forEach(turret => {
+      if (turret.element) turret.element.destroy();
+    });
+    this.magneticTurrets = [];
+
+    if (this.turretAnimTimer) {
+      this.turretAnimTimer.destroy();
+      this.turretAnimTimer = null;
+    }
+
+    this.currentSpeedModifier = 1.0;
+
+    console.log('[Turrets] Cleaned up');
+  }
+
+  isTurretAtPosition(x, y) {
+    return this.magneticTurrets.some(t => t.x === x && t.y === y) ||
+           this.laserTurrets.some(t => t.x === x && t.y === y);
+  }
+
+  // =====================================================
+  // ===== LASER TURRETS (Stage -1: Flux Maze) =====
+  // =====================================================
+
+  initLaserTurrets() {
+    if (this.laserTurrets.length > 0) return;
+
+    console.log('[LaserTurrets] Initializing laser turrets...');
+
+    // 4개 고정 위치에 터렛 생성
+    this.laserTurretPositions.forEach((pos, index) => {
+      this.createLaserTurret(pos.x, pos.y, index);
+    });
+
+    // 60fps 애니메이션 타이머
+    this.laserAnimTimer = this.time.addEvent({
+      delay: 16,
+      callback: this.updateLaserTurretAnimations,
+      callbackScope: this,
+      loop: true
+    });
+
+    // 발사 주기 타이머 시작
+    this.startLaserFireCycle();
+
+    console.log('[LaserTurrets] Initialized', this.laserTurrets.length, 'turrets');
+  }
+
+  createLaserTurret(tileX, tileY, index) {
+    const gs = this.gridSize;
+    const x = tileX * gs + gs / 2;
+    const y = tileY * gs + gs / 2 + this.gameAreaY;
+
+    const container = this.add.container(x, y).setDepth(70);
+
+    // EMP 스타일 베이스 - 가스존과 통일된 비주얼
+    const baseGlow = this.add.graphics();
+    baseGlow.fillStyle(0x00ffff, 0.3);
+    baseGlow.fillCircle(0, 0, gs * 1.2);
+    container.add(baseGlow);
+
+    // 터렛 코어 (마젠타/시안 그라데이션 느낌)
+    const core = this.add.graphics();
+    core.fillStyle(0xff00ff, 0.8);
+    core.fillCircle(0, 0, gs * 0.6);
+    core.fillStyle(0x00ffff, 1);
+    core.fillCircle(0, 0, gs * 0.35);
+    core.fillStyle(0xffffff, 1);
+    core.fillCircle(0, 0, gs * 0.15);
+    container.add(core);
+
+    // 회전하는 외곽 링
+    const outerRing = this.add.graphics();
+    outerRing.lineStyle(2, 0x00ffff, 0.8);
+    outerRing.strokeCircle(0, 0, gs * 0.9);
+    // 작은 노드 4개
+    for (let i = 0; i < 4; i++) {
+      const angle = (i * Math.PI / 2);
+      const nx = Math.cos(angle) * gs * 0.9;
+      const ny = Math.sin(angle) * gs * 0.9;
+      outerRing.fillStyle(0xff00ff, 1);
+      outerRing.fillCircle(nx, ny, 3);
+    }
+    container.add(outerRing);
+
+    // 레이저 그래픽 (발사 시에만 표시)
+    const laserGraphics = this.add.graphics();
+    laserGraphics.setVisible(false);
+    container.add(laserGraphics);
+
+    // 경고 그래픽 (경고 시에만 표시)
+    const warningGraphics = this.add.graphics();
+    warningGraphics.setVisible(false);
+    container.add(warningGraphics);
+
+    // 초기 각도 설정 (각 터렛이 서로 다른 방향)
+    const initialAngle = (index * Math.PI / 2) + Math.PI / 4;
+
+    const turret = {
+      x: tileX,
+      y: tileY,
+      container,
+      core,
+      outerRing,
+      baseGlow,
+      laserGraphics,
+      warningGraphics,
+      angle: initialAngle,
+      isActive: false,
+      isWarning: false,
+      pulsePhase: Math.random() * Math.PI * 2
+    };
+
+    this.laserTurrets.push(turret);
+  }
+
+  startLaserFireCycle() {
+    // 첫 발사 전 대기
+    this.time.delayedCall(2000, () => {
+      this.fireLaserSequence();
+    });
+  }
+
+  fireLaserSequence() {
+    if (this.laserTurrets.length === 0) return;
+    if (this.gameOver || this.bossPhase === 'victory') return;
+
+    // 경고 단계
+    this.laserPhase = 'warning';
+    this.showLaserWarning();
+
+    // 경고 후 발사
+    this.time.delayedCall(this.laserWarningDuration, () => {
+      if (this.gameOver) return;
+      this.laserPhase = 'firing';
+      this.activateLasers();
+
+      // 발사 종료
+      this.time.delayedCall(this.laserActiveDuration, () => {
+        this.deactivateLasers();
+        this.laserPhase = 'idle';
+
+        // 다음 발사 사이클
+        this.time.delayedCall(this.laserFireInterval - this.laserWarningDuration - this.laserActiveDuration, () => {
+          this.fireLaserSequence();
+        });
+      });
+    });
+  }
+
+  showLaserWarning() {
+    this.laserTurrets.forEach(turret => {
+      turret.isWarning = true;
+      turret.warningGraphics.setVisible(true);
+
+      // 경고 사운드/효과
+      this.cameras.main.shake(100, 0.003);
+    });
+
+    // 경고 텍스트
+    const warningText = this.add.text(
+      this.cameras.main.width / 2,
+      this.cameras.main.height / 2 - 50,
+      'LASER WARNING!',
+      {
+        fontSize: '32px',
+        fill: '#ff0000',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 4
+      }
+    ).setOrigin(0.5).setDepth(200);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: { from: 1, to: 0.3 },
+      yoyo: true,
+      repeat: 2,
+      duration: 250,
+      onComplete: () => warningText.destroy()
+    });
+  }
+
+  activateLasers() {
+    this.laserTurrets.forEach(turret => {
+      turret.isWarning = false;
+      turret.isActive = true;
+      turret.warningGraphics.setVisible(false);
+      turret.laserGraphics.setVisible(true);
+    });
+
+    // 발사 플래시 효과
+    this.cameras.main.flash(200, 0, 255, 255, false, null, this);
+  }
+
+  deactivateLasers() {
+    this.laserTurrets.forEach(turret => {
+      turret.isActive = false;
+      turret.laserGraphics.setVisible(false);
+    });
+  }
+
+  updateLaserTurretAnimations() {
+    const time = this.time.now;
+
+    this.laserTurrets.forEach(turret => {
+      // 회전
+      turret.angle += this.laserRotationSpeed;
+      if (turret.outerRing) {
+        turret.outerRing.rotation = turret.angle;
+      }
+
+      // 펄스 효과
+      turret.pulsePhase += 0.05;
+      const pulse = 0.8 + Math.sin(turret.pulsePhase) * 0.2;
+      if (turret.baseGlow) {
+        turret.baseGlow.setAlpha(0.3 * pulse);
+      }
+
+      // 경고 그래픽 업데이트
+      if (turret.isWarning) {
+        this.drawLaserWarning(turret);
+      }
+
+      // 레이저 그래픽 업데이트
+      if (turret.isActive) {
+        this.drawActiveLaser(turret);
+      }
+    });
+  }
+
+  drawLaserWarning(turret) {
+    const gs = this.gridSize;
+    const g = turret.warningGraphics;
+    g.clear();
+
+    // 점선 경고 라인 (2방향 - 반대 방향)
+    const angles = [turret.angle, turret.angle + Math.PI];
+
+    angles.forEach(angle => {
+      g.lineStyle(3, 0xffff00, 0.6 + Math.sin(this.time.now * 0.01) * 0.4);
+
+      const dashLength = gs * 0.8;
+      const gapLength = gs * 0.4;
+      const totalLength = this.laserLength * gs;
+
+      for (let dist = gs; dist < totalLength; dist += dashLength + gapLength) {
+        const x1 = Math.cos(angle) * dist;
+        const y1 = Math.sin(angle) * dist;
+        const x2 = Math.cos(angle) * Math.min(dist + dashLength, totalLength);
+        const y2 = Math.sin(angle) * Math.min(dist + dashLength, totalLength);
+
+        g.beginPath();
+        g.moveTo(x1, y1);
+        g.lineTo(x2, y2);
+        g.strokePath();
+      }
+    });
+  }
+
+  drawActiveLaser(turret) {
+    const gs = this.gridSize;
+    const g = turret.laserGraphics;
+    g.clear();
+
+    // 메인 레이저 빔 (2방향)
+    const angles = [turret.angle, turret.angle + Math.PI];
+
+    angles.forEach(angle => {
+      const endX = Math.cos(angle) * this.laserLength * gs;
+      const endY = Math.sin(angle) * this.laserLength * gs;
+
+      // 외곽 글로우
+      g.lineStyle(12, 0xff00ff, 0.3);
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(endX, endY);
+      g.strokePath();
+
+      // 중간 빔
+      g.lineStyle(6, 0x00ffff, 0.7);
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(endX, endY);
+      g.strokePath();
+
+      // 코어 빔
+      g.lineStyle(2, 0xffffff, 1);
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(endX, endY);
+      g.strokePath();
+    });
+  }
+
+  checkLaserCollision(headX, headY) {
+    if (this.laserPhase !== 'firing') return false;
+
+    const gs = this.gridSize;
+    const headPixelX = headX * gs + gs / 2;
+    const headPixelY = headY * gs + gs / 2 + this.gameAreaY;
+
+    for (const turret of this.laserTurrets) {
+      if (!turret.isActive) continue;
+
+      const turretPixelX = turret.x * gs + gs / 2;
+      const turretPixelY = turret.y * gs + gs / 2 + this.gameAreaY;
+
+      // 두 방향 레이저 체크
+      const angles = [turret.angle, turret.angle + Math.PI];
+
+      for (const angle of angles) {
+        // 선분-점 거리 계산
+        const laserEndX = turretPixelX + Math.cos(angle) * this.laserLength * gs;
+        const laserEndY = turretPixelY + Math.sin(angle) * this.laserLength * gs;
+
+        const dist = this.pointToLineDistance(
+          headPixelX, headPixelY,
+          turretPixelX, turretPixelY,
+          laserEndX, laserEndY
+        );
+
+        // 레이저 두께 내에 있으면 충돌
+        if (dist < gs * 0.6) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  pointToLineDistance(px, py, x1, y1, x2, y2) {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = -1;
+
+    if (lenSq !== 0) {
+      param = dot / lenSq;
+    }
+
+    let xx, yy;
+
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+
+    const dx = px - xx;
+    const dy = py - yy;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  cleanupLaserTurrets() {
+    this.laserTurrets.forEach(turret => {
+      if (turret.container) turret.container.destroy(true);
+    });
+    this.laserTurrets = [];
+
+    if (this.laserAnimTimer) {
+      this.laserAnimTimer.destroy();
+      this.laserAnimTimer = null;
+    }
+
+    if (this.laserFireTimer) {
+      this.laserFireTimer.destroy();
+      this.laserFireTimer = null;
+    }
+
+    this.laserPhase = 'idle';
+
+    console.log('[LaserTurrets] Cleaned up');
+  }
+
+  // =====================================================
+  // ===== FLOATING MINES (Stage -1: Flux Maze) =====
+  // =====================================================
+
+  startMineSpawner() {
+    if (this.mineSpawnTimer) return;
+
+    this.mineSpawnTimer = this.time.addEvent({
+      delay: this.mineSpawnInterval,
+      callback: this.spawnFloatingMine,
+      callbackScope: this,
+      loop: true
+    });
+
+    console.log('[Mines] Spawner started');
+  }
+
+  stopMineSpawner() {
+    if (this.mineSpawnTimer) {
+      this.mineSpawnTimer.destroy();
+      this.mineSpawnTimer = null;
+    }
+  }
+
+  spawnFloatingMine() {
+    if (this.floatingMines.length >= this.maxFloatingMines) return;
+    if (this.gameOver) return;
+
+    const pos = this.getMineSpawnPosition();
+    if (!pos) return;
+
+    const gs = this.gridSize;
+    const x = pos.x * gs + gs / 2;
+    const y = pos.y * gs + gs / 2 + this.gameAreaY;
+
+    const container = this.add.container(x, y).setDepth(70);
+
+    // 경고 글로우 (뒤)
+    const glow = this.add.graphics();
+    glow.fillStyle(0xff6600, 0.25);
+    glow.fillCircle(0, 0, gs * 0.6);
+    container.add(glow);
+
+    // 기뢰 본체
+    const body = this.add.graphics();
+    body.fillStyle(0x444444, 1);
+    body.fillCircle(0, 0, gs * 0.35);
+    body.lineStyle(2, 0x666666, 1);
+    body.strokeCircle(0, 0, gs * 0.35);
+    container.add(body);
+
+    // 스파이크들
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const spike = this.add.graphics();
+      spike.fillStyle(0x888888, 1);
+      spike.beginPath();
+      const innerR = gs * 0.3;
+      const outerR = gs * 0.5;
+      spike.moveTo(Math.cos(angle - 0.15) * innerR, Math.sin(angle - 0.15) * innerR);
+      spike.lineTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+      spike.lineTo(Math.cos(angle + 0.15) * innerR, Math.sin(angle + 0.15) * innerR);
+      spike.closePath();
+      spike.fillPath();
+      container.add(spike);
+    }
+
+    // 위험 표시 (중앙)
+    const danger = this.add.text(0, 0, '!', {
+      fontSize: '12px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(danger);
+
+    // 랜덤 방향
+    const directions = [
+      { dx: 1, dy: 0 }, { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 }, { dx: 0, dy: -1 }
+    ];
+    const dir = Phaser.Math.RND.pick(directions);
+
+    const mine = {
+      x: pos.x,
+      y: pos.y,
+      element: container,
+      glow: glow,
+      dx: dir.dx,
+      dy: dir.dy,
+      moveTimer: null
+    };
+
+    // 생성 애니메이션
+    container.setScale(0).setAlpha(0);
+    this.tweens.add({
+      targets: container,
+      scale: 1,
+      alpha: 1,
+      duration: 400,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.startMineMovement(mine);
+      }
+    });
+
+    // 호흡 애니메이션
+    this.tweens.add({
+      targets: glow,
+      alpha: 0.15,
+      duration: 800,
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.floatingMines.push(mine);
+
+    console.log('[Mines] Spawned mine at', pos.x, pos.y, '- total:', this.floatingMines.length);
+  }
+
+  getMineSpawnPosition() {
+    const edges = [];
+
+    // 맵 가장자리
+    for (let x = 2; x < this.cols - 2; x++) {
+      edges.push({ x, y: 1 });
+      edges.push({ x, y: this.rows - 2 });
+    }
+    for (let y = 2; y < this.rows - 2; y++) {
+      edges.push({ x: 1, y });
+      edges.push({ x: this.cols - 2, y });
+    }
+
+    Phaser.Utils.Array.Shuffle(edges);
+
+    for (const pos of edges) {
+      const notOnSnake = !this.snake.some(s => s.x === pos.x && s.y === pos.y);
+      const notOnFood = !(this.food && this.food.x === pos.x && this.food.y === pos.y);
+      const notOnTurret = !this.isTurretAtPosition(pos.x, pos.y);
+      const notOnMine = !this.floatingMines.some(m => m.x === pos.x && m.y === pos.y);
+      const notOnDeadzone = !this.deadZones.some(d => d.x === pos.x && d.y === pos.y);
+      const notInGas = !this.isInGasZone(pos.x, pos.y);
+
+      if (notOnSnake && notOnFood && notOnTurret && notOnMine && notOnDeadzone && notInGas) {
+        return pos;
+      }
+    }
+
+    return null;
+  }
+
+  startMineMovement(mine) {
+    mine.moveTimer = this.time.addEvent({
+      delay: this.mineSpeed,
+      callback: () => this.moveFloatingMine(mine),
+      loop: true
+    });
+  }
+
+  moveFloatingMine(mine) {
+    if (this.gameOver || !mine || !mine.element) return;
+
+    let newX = mine.x + mine.dx;
+    let newY = mine.y + mine.dy;
+
+    // 경계 체크 및 반사
+    let bounced = false;
+    if (newX < 1 || newX >= this.cols - 1) {
+      mine.dx *= -1;
+      newX = mine.x;
+      bounced = true;
+    }
+    if (newY < 1 || newY >= this.rows - 1) {
+      mine.dy *= -1;
+      newY = mine.y;
+      bounced = true;
+    }
+
+    // 터렛 충돌 체크 (반사)
+    if (this.isTurretAtPosition(newX, newY)) {
+      mine.dx *= -1;
+      mine.dy *= -1;
+      bounced = true;
+      newX = mine.x;
+      newY = mine.y;
+    }
+
+    // 가스존 체크 (들어가지 않음)
+    if (this.isInGasZone(newX, newY)) {
+      mine.dx *= -1;
+      mine.dy *= -1;
+      bounced = true;
+      newX = mine.x;
+      newY = mine.y;
+    }
+
+    if (!bounced) {
+      // 가끔 방향 변경 (15%)
+      if (Math.random() < 0.15) {
+        const directions = [
+          { dx: 1, dy: 0 }, { dx: -1, dy: 0 },
+          { dx: 0, dy: 1 }, { dx: 0, dy: -1 }
+        ];
+        const newDir = Phaser.Math.RND.pick(directions);
+        mine.dx = newDir.dx;
+        mine.dy = newDir.dy;
+      }
+
+      // 이동
+      mine.x = newX;
+      mine.y = newY;
+
+      const gs = this.gridSize;
+      const targetX = newX * gs + gs / 2;
+      const targetY = newY * gs + gs / 2 + this.gameAreaY;
+
+      this.tweens.add({
+        targets: mine.element,
+        x: targetX,
+        y: targetY,
+        duration: this.mineSpeed * 0.7,
+        ease: 'Linear'
+      });
+    }
+  }
+
+  checkMineCollision() {
+    if (this.floatingMines.length === 0) return false;
+    if (!this.snake || !this.snake[0]) return false;
+
+    const head = this.snake[0];
+
+    for (let i = this.floatingMines.length - 1; i >= 0; i--) {
+      const mine = this.floatingMines[i];
+      if (mine.x === head.x && mine.y === head.y) {
+        this.handleMineHit(mine, i);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  handleMineHit(mine, index) {
+    const x = mine.element.x;
+    const y = mine.element.y;
+
+    // 폭발 파티클
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const particle = this.add.graphics().setDepth(200);
+      particle.fillStyle(0xff6600, 1);
+      particle.fillCircle(0, 0, 4);
+      particle.x = x;
+      particle.y = y;
+
+      this.tweens.add({
+        targets: particle,
+        x: x + Math.cos(angle) * 50,
+        y: y + Math.sin(angle) * 50,
+        alpha: 0,
+        duration: 350,
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 폭발 플래시
+    const flash = this.add.graphics().setDepth(195);
+    flash.fillStyle(0xff6600, 0.6);
+    flash.fillCircle(x, y, this.gridSize);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scaleX: 2,
+      scaleY: 2,
+      duration: 200,
+      onComplete: () => flash.destroy()
+    });
+
+    // 기뢰 제거
+    this.destroyMine(mine, index);
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(150, 0.015);
+
+    // 몸통 1칸 제거
+    if (this.snake.length > 3) {
+      const removedSegment = this.snake.pop();
+
+      // 제거된 세그먼트 플래시
+      const segX = removedSegment.x * this.gridSize + this.gridSize / 2;
+      const segY = removedSegment.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      const segFlash = this.add.graphics().setDepth(150);
+      segFlash.fillStyle(0xff0000, 0.8);
+      segFlash.fillRect(
+        removedSegment.x * this.gridSize,
+        removedSegment.y * this.gridSize + this.gameAreaY,
+        this.gridSize,
+        this.gridSize
+      );
+
+      this.tweens.add({
+        targets: segFlash,
+        alpha: 0,
+        duration: 300,
+        onComplete: () => segFlash.destroy()
+      });
+
+      // 경고 텍스트
+      const warningText = this.add.text(segX, segY - 20, '-1 SEGMENT!', {
+        fontSize: '14px',
+        fill: '#ff4400',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 2
+      }).setOrigin(0.5).setDepth(200);
+
+      this.tweens.add({
+        targets: warningText,
+        y: segY - 50,
+        alpha: 0,
+        duration: 800,
+        onComplete: () => warningText.destroy()
+      });
+
+      // 뱀 다시 그리기
+      this.draw();
+
+      console.log('[Mines] Snake hit! Length:', this.snake.length);
+    } else {
+      // 뱀이 너무 짧으면 즉사
+      console.log('[Mines] Snake too short - game over!');
+      this.endGame();
+    }
+  }
+
+  destroyMine(mine, index) {
+    if (mine.moveTimer) {
+      mine.moveTimer.destroy();
+      mine.moveTimer = null;
+    }
+
+    if (mine.element) {
+      mine.element.destroy();
+    }
+
+    if (index !== undefined) {
+      this.floatingMines.splice(index, 1);
+    } else {
+      const idx = this.floatingMines.indexOf(mine);
+      if (idx > -1) this.floatingMines.splice(idx, 1);
+    }
+  }
+
+  cleanupFloatingMines() {
+    this.stopMineSpawner();
+
+    this.floatingMines.forEach(mine => {
+      if (mine.moveTimer) mine.moveTimer.destroy();
+      if (mine.element) mine.element.destroy();
+    });
+    this.floatingMines = [];
+
+    console.log('[Mines] Cleaned up');
+  }
+
+  isMineAtPosition(x, y) {
+    return this.floatingMines.some(m => m.x === x && m.y === y);
+  }
+
+  // ========== Magnetar 보스 시스템 (Stage 0) ==========
+
+  startMagnetar() {
+    console.log('[Magnetar] Starting boss battle');
+    this.magnetarMode = true;
+    this.magnetarPhase = 'intro';
+    this.magnetarHitCount = 0;
+    this.magnetarControlsReversed = false;
+    this.magnetarPosition = {
+      x: Math.floor(this.cols / 2),
+      y: Math.floor(this.rows / 2)
+    };
+
+    // 보스 이미지 생성
+    this.createMagnetarBoss();
+
+    // 인트로 시퀀스
+    this.showMagnetarIntro();
+  }
+
+  createMagnetarBoss() {
+    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 보스 컨테이너
+    this.magnetarElement = this.add.container(centerX, centerY);
+
+    // 중앙 코어 (자석 모양)
+    const core = this.add.graphics();
+    core.fillStyle(0x444466, 1);
+    core.fillCircle(0, 0, 25);
+    core.fillStyle(0x6666aa, 1);
+    core.fillCircle(0, 0, 18);
+    this.magnetarElement.add(core);
+
+    // N극 (파란색 위)
+    const northPole = this.add.graphics();
+    northPole.fillStyle(0x00aaff, 1);
+    northPole.fillRect(-12, -30, 24, 12);
+    northPole.fillStyle(0x00ddff, 1);
+    northPole.fillRect(-8, -28, 16, 8);
+    this.magnetarElement.add(northPole);
+
+    // S극 (빨간색 아래)
+    const southPole = this.add.graphics();
+    southPole.fillStyle(0xff4400, 1);
+    southPole.fillRect(-12, 18, 24, 12);
+    southPole.fillStyle(0xff6644, 1);
+    southPole.fillRect(-8, 20, 16, 8);
+    this.magnetarElement.add(southPole);
+
+    // N/S 라벨
+    const nLabel = this.add.text(0, -24, 'N', {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      color: '#ffffff'
+    }).setOrigin(0.5);
+    this.magnetarElement.add(nLabel);
+
+    const sLabel = this.add.text(0, 24, 'S', {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      color: '#ffffff'
+    }).setOrigin(0.5);
+    this.magnetarElement.add(sLabel);
+
+    // 자기장 링 효과
+    this.magnetarRings = [];
+    for (let i = 0; i < 3; i++) {
+      const ring = this.add.graphics();
+      ring.lineStyle(2, i === 0 ? 0x00aaff : (i === 1 ? 0xff4400 : 0xaa44ff), 0.5);
+      ring.strokeCircle(0, 0, 35 + i * 15);
+      this.magnetarElement.add(ring);
+      this.magnetarRings.push(ring);
+    }
+
+    // 펄스 애니메이션
+    this.tweens.add({
+      targets: this.magnetarElement,
+      scaleX: 1.1,
+      scaleY: 1.1,
+      duration: 1000,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    // 회전 애니메이션 (링)
+    this.magnetarRingTimer = this.time.addEvent({
+      delay: 50,
+      callback: () => {
+        this.magnetarRings.forEach((ring, i) => {
+          ring.rotation += (i % 2 === 0 ? 0.02 : -0.02);
+        });
+      },
+      loop: true
+    });
+
+    this.magnetarElement.setDepth(100);
+    this.magnetarElement.setAlpha(0);
+  }
+
+  showMagnetarIntro() {
+    const { width, height } = this.cameras.main;
+
+    // 화면 어둡게
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7);
+    overlay.setDepth(90);
+
+    // WARNING 텍스트
+    const warningText = this.add.text(width / 2, height / 2 - 80, '⚡ WARNING ⚡', {
+      fontSize: '36px',
+      fontFamily: 'monospace',
+      color: '#ff4400'
+    }).setOrigin(0.5).setDepth(95);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: 0.3,
+      duration: 300,
+      yoyo: true,
+      repeat: 4
+    });
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(500, 0.01);
+
+    // 보스 등장
+    this.time.delayedCall(1500, () => {
+      // 보스 페이드인
+      this.tweens.add({
+        targets: this.magnetarElement,
+        alpha: 1,
+        duration: 500,
+        ease: 'Power2'
+      });
+
+      // 자기장 플래시 효과
+      const flash = this.add.graphics();
+      flash.fillStyle(0x00aaff, 0.5);
+      flash.fillCircle(width / 2, height / 2 + 30, 200);
+      flash.setDepth(91);
+
+      this.tweens.add({
+        targets: flash,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => flash.destroy()
+      });
+    });
+
+    // 보스 대사
+    this.time.delayedCall(2500, () => {
+      const dialogue1 = this.add.text(width / 2, height / 2 + 100, '"I am MAGNETAR..."', {
+        fontSize: '20px',
+        fontFamily: 'monospace',
+        color: '#00ffff'
+      }).setOrigin(0.5).setDepth(95);
+
+      this.time.delayedCall(1500, () => {
+        dialogue1.setText('"Feel my magnetic force!"');
+
+        this.time.delayedCall(1500, () => {
+          // 인트로 종료, 게임 시작
+          overlay.destroy();
+          warningText.destroy();
+          dialogue1.destroy();
+
+          this.magnetarPhase = 'phase1';
+          this.moveTimer.paused = false;
+
+          // Phase 1 시작
+          this.startMagnetarPhase1();
+        });
+      });
+    });
+  }
+
+  startMagnetarPhase1() {
+    console.log('[Magnetar] Phase 1: Reverse Field');
+    this.magnetarPhase = 'phase1';
+
+    // Phase 1 안내
+    this.showMagnetarPhaseText('PHASE 1: REVERSE FIELD');
+
+    // 조작 반전 시작
+    this.time.delayedCall(2000, () => {
+      this.startReverseFieldCycle();
+    });
+  }
+
+  startReverseFieldCycle() {
+    if (this.magnetarPhase !== 'phase1' || !this.magnetarMode) return;
+
+    // 조작 반전 경고
+    this.showReverseFieldWarning();
+
+    this.time.delayedCall(2000, () => {
+      if (this.magnetarPhase !== 'phase1' || !this.magnetarMode) return;
+
+      // 조작 반전 활성화
+      this.activateReverseField();
+
+      // 5초 후 반전 해제
+      this.time.delayedCall(5000, () => {
+        this.deactivateReverseField();
+
+        // 3초 후 다시 반전 (사이클)
+        this.time.delayedCall(3000, () => {
+          if (this.magnetarPhase === 'phase1' && this.magnetarMode) {
+            this.startReverseFieldCycle();
+          }
+        });
+      });
+    });
+  }
+
+  showReverseFieldWarning() {
+    const { width, height } = this.cameras.main;
+
+    // 경고 테두리
+    const warningBorder = this.add.graphics();
+    warningBorder.lineStyle(8, 0xaa00ff, 1);
+    warningBorder.strokeRect(5, 5, width - 10, height - 10);
+    warningBorder.setDepth(200);
+
+    this.tweens.add({
+      targets: warningBorder,
+      alpha: 0,
+      duration: 200,
+      yoyo: true,
+      repeat: 4,
+      onComplete: () => warningBorder.destroy()
+    });
+
+    // 경고 텍스트
+    const warningText = this.add.text(width / 2, height / 2 - 100, '⚠ MAGNETIC REVERSAL ⚠', {
+      fontSize: '24px',
+      fontFamily: 'monospace',
+      color: '#ff00ff'
+    }).setOrigin(0.5).setDepth(201);
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: 0,
+      y: height / 2 - 120,
+      duration: 1500,
+      onComplete: () => warningText.destroy()
+    });
+  }
+
+  activateReverseField() {
+    this.magnetarControlsReversed = true;
+    console.log('[Magnetar] Controls REVERSED!');
+
+    const { width, height } = this.cameras.main;
+
+    // 반전 활성 UI
+    this.reverseFieldOverlay = this.add.graphics();
+    this.reverseFieldOverlay.lineStyle(4, 0xaa00ff, 0.8);
+    this.reverseFieldOverlay.strokeRect(10, 10, width - 20, height - 20);
+    this.reverseFieldOverlay.setDepth(199);
+
+    // 펄스 효과
+    this.tweens.add({
+      targets: this.reverseFieldOverlay,
+      alpha: 0.3,
+      duration: 500,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // "CONTROLS REVERSED!" 텍스트
+    this.reverseFieldText = this.add.text(width / 2, 90, 'CONTROLS REVERSED!', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#ff00ff',
+      backgroundColor: '#000000',
+      padding: { x: 10, y: 5 }
+    }).setOrigin(0.5).setDepth(200);
+
+    this.tweens.add({
+      targets: this.reverseFieldText,
+      scaleX: 1.05,
+      scaleY: 1.05,
+      duration: 300,
+      yoyo: true,
+      repeat: -1
+    });
+  }
+
+  deactivateReverseField() {
+    this.magnetarControlsReversed = false;
+    console.log('[Magnetar] Controls restored');
+
+    // UI 정리
+    if (this.reverseFieldOverlay) {
+      this.tweens.killTweensOf(this.reverseFieldOverlay);
+      this.reverseFieldOverlay.destroy();
+      this.reverseFieldOverlay = null;
+    }
+    if (this.reverseFieldText) {
+      this.tweens.killTweensOf(this.reverseFieldText);
+      this.reverseFieldText.destroy();
+      this.reverseFieldText = null;
+    }
+
+    // 복원 피드백
+    const { width, height } = this.cameras.main;
+    const restoreText = this.add.text(width / 2, 90, 'CONTROLS RESTORED', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#00ff00',
+      backgroundColor: '#000000',
+      padding: { x: 10, y: 5 }
+    }).setOrigin(0.5).setDepth(200);
+
+    this.tweens.add({
+      targets: restoreText,
+      alpha: 0,
+      y: 70,
+      duration: 1000,
+      onComplete: () => restoreText.destroy()
+    });
+  }
+
+  showMagnetarPhaseText(text) {
+    const { width, height } = this.cameras.main;
+
+    const phaseText = this.add.text(width / 2, height / 2, text, {
+      fontSize: '32px',
+      fontFamily: 'monospace',
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(300);
+
+    this.tweens.add({
+      targets: phaseText,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      alpha: 0,
+      duration: 2000,
+      ease: 'Power2',
+      onComplete: () => phaseText.destroy()
+    });
+  }
+
+  handleMagnetarHit() {
+    this.magnetarHitCount++;
+    console.log(`[Magnetar] HIT ${this.magnetarHitCount}/6`);
+
+    const { width, height } = this.cameras.main;
+
+    // HIT 표시
+    const hitText = this.add.text(width / 2, height / 2 - 50, `HIT ${this.magnetarHitCount}/6!`, {
+      fontSize: '36px',
+      fontFamily: 'monospace',
+      color: '#ffff00'
+    }).setOrigin(0.5).setDepth(300);
+
+    this.tweens.add({
+      targets: hitText,
+      scaleX: 1.5,
+      scaleY: 1.5,
+      alpha: 0,
+      duration: 1000,
+      onComplete: () => hitText.destroy()
+    });
+
+    // 보스 피격 효과
+    this.cameras.main.shake(300, 0.02);
+    this.tweens.add({
+      targets: this.magnetarElement,
+      alpha: 0.3,
+      duration: 100,
+      yoyo: true,
+      repeat: 3
+    });
+
+    // Phase 전환
+    if (this.magnetarHitCount === 1 && this.magnetarPhase === 'phase1') {
+      this.deactivateReverseField();
+      this.time.delayedCall(1000, () => {
+        this.startMagnetarPhase2();
+      });
+    } else if (this.magnetarHitCount === 2 && this.magnetarPhase === 'phase2') {
+      this.stopEMPBeams();
+      this.time.delayedCall(1000, () => {
+        this.startMagnetarPhase3();
+      });
+    } else if (this.magnetarHitCount >= 6) {
+      // 승리!
+      this.showMagnetarVictory();
+    }
+  }
+
+  // Phase 2: EMP Beam
+  startMagnetarPhase2() {
+    console.log('[Magnetar] Phase 2: EMP Beam');
+    this.magnetarPhase = 'phase2';
+
+    this.showMagnetarPhaseText('PHASE 2: EMP BEAM');
+
+    // EMP 레이저 공격 시작
+    this.time.delayedCall(2000, () => {
+      this.startEMPBeamCycle();
+    });
+  }
+
+  startEMPBeamCycle() {
+    if (this.magnetarPhase !== 'phase2' || !this.magnetarMode) return;
+
+    // 랜덤 패턴 선택 (십자 또는 X자)
+    const pattern = Phaser.Math.Between(0, 1) === 0 ? 'cross' : 'x';
+    this.showEMPBeamWarning(pattern);
+
+    this.time.delayedCall(1000, () => {
+      if (this.magnetarPhase !== 'phase2' || !this.magnetarMode) return;
+
+      this.fireEMPBeam(pattern);
+
+      // 3초 후 다음 빔
+      this.time.delayedCall(3000, () => {
+        if (this.magnetarPhase === 'phase2' && this.magnetarMode) {
+          this.startEMPBeamCycle();
+        }
+      });
+    });
+  }
+
+  showEMPBeamWarning(pattern) {
+    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const { width, height } = this.cameras.main;
+
+    this.empWarningLines = [];
+
+    if (pattern === 'cross') {
+      // 십자 경고선
+      const hLine = this.add.graphics();
+      hLine.lineStyle(3, 0xffff00, 0.5);
+      hLine.lineBetween(0, centerY, width, centerY);
+      hLine.setDepth(150);
+      this.empWarningLines.push(hLine);
+
+      const vLine = this.add.graphics();
+      vLine.lineStyle(3, 0xffff00, 0.5);
+      vLine.lineBetween(centerX, this.gameAreaY, centerX, height);
+      vLine.setDepth(150);
+      this.empWarningLines.push(vLine);
+    } else {
+      // X자 경고선
+      const line1 = this.add.graphics();
+      line1.lineStyle(3, 0xffff00, 0.5);
+      line1.lineBetween(0, this.gameAreaY, width, height);
+      line1.setDepth(150);
+      this.empWarningLines.push(line1);
+
+      const line2 = this.add.graphics();
+      line2.lineStyle(3, 0xffff00, 0.5);
+      line2.lineBetween(width, this.gameAreaY, 0, height);
+      line2.setDepth(150);
+      this.empWarningLines.push(line2);
+    }
+
+    // 경고선 깜빡임
+    this.empWarningLines.forEach(line => {
+      this.tweens.add({
+        targets: line,
+        alpha: 0.2,
+        duration: 150,
+        yoyo: true,
+        repeat: 3
+      });
+    });
+  }
+
+  fireEMPBeam(pattern) {
+    // 경고선 제거
+    this.empWarningLines.forEach(line => line.destroy());
+    this.empWarningLines = [];
+
+    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const { width, height } = this.cameras.main;
+
+    this.empBeamLines = [];
+    this.empBeamPattern = pattern;
+
+    if (pattern === 'cross') {
+      // 십자 레이저
+      const hBeam = this.add.graphics();
+      hBeam.fillStyle(0xff00ff, 0.9);
+      hBeam.fillRect(0, centerY - 8, width, 16);
+      hBeam.setDepth(160);
+      this.empBeamLines.push(hBeam);
+
+      const vBeam = this.add.graphics();
+      vBeam.fillStyle(0xff00ff, 0.9);
+      vBeam.fillRect(centerX - 8, this.gameAreaY, 16, height - this.gameAreaY);
+      vBeam.setDepth(160);
+      this.empBeamLines.push(vBeam);
+    } else {
+      // X자 레이저 (대각선은 그래픽으로 표현이 복잡하므로 단순화)
+      const diag1 = this.add.graphics();
+      diag1.lineStyle(16, 0xff00ff, 0.9);
+      diag1.lineBetween(0, this.gameAreaY, width, height);
+      diag1.setDepth(160);
+      this.empBeamLines.push(diag1);
+
+      const diag2 = this.add.graphics();
+      diag2.lineStyle(16, 0xff00ff, 0.9);
+      diag2.lineBetween(width, this.gameAreaY, 0, height);
+      diag2.setDepth(160);
+      this.empBeamLines.push(diag2);
+    }
+
+    // 레이저 발사 효과음 + 화면 플래시
+    this.cameras.main.flash(100, 255, 0, 255);
+
+    // 레이저 활성 시간 (0.5초)
+    this.empBeamActive = true;
+
+    this.time.delayedCall(500, () => {
+      this.empBeamActive = false;
+      this.empBeamLines.forEach(beam => beam.destroy());
+      this.empBeamLines = [];
+    });
+  }
+
+  stopEMPBeams() {
+    this.empBeamActive = false;
+    if (this.empWarningLines) {
+      this.empWarningLines.forEach(line => line.destroy());
+      this.empWarningLines = [];
+    }
+    if (this.empBeamLines) {
+      this.empBeamLines.forEach(beam => beam.destroy());
+      this.empBeamLines = [];
+    }
+  }
+
+  isOnEMPBeam(x, y) {
+    if (!this.empBeamActive || !this.magnetarMode) return false;
+
+    const tileX = x * this.gridSize + this.gridSize / 2;
+    const tileY = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    if (this.empBeamPattern === 'cross') {
+      // 십자 레이저: 중심 X나 Y와 겹치면 피격
+      const onHorizontal = Math.abs(tileY - centerY) < 20;
+      const onVertical = Math.abs(tileX - centerX) < 20;
+      return onHorizontal || onVertical;
+    } else {
+      // X자 레이저: 대각선상에 있으면 피격 (근사치)
+      const { width, height } = this.cameras.main;
+      const ratio1 = (tileX) / width;
+      const ratio2 = 1 - ratio1;
+      const expectedY1 = this.gameAreaY + ratio1 * (height - this.gameAreaY);
+      const expectedY2 = this.gameAreaY + ratio2 * (height - this.gameAreaY);
+      return Math.abs(tileY - expectedY1) < 25 || Math.abs(tileY - expectedY2) < 25;
+    }
+  }
+
+  // Phase 3: Event Horizon
+  startMagnetarPhase3() {
+    console.log('[Magnetar] Phase 3: Event Horizon');
+    this.magnetarPhase = 'phase3';
+
+    this.showMagnetarPhaseText('PHASE 3: EVENT HORIZON');
+
+    // 가스 자기장 가속
+    if (this.gasZoneTimer) {
+      this.gasZoneTimer.remove();
+    }
+    this.gasZoneTimer = this.time.addEvent({
+      delay: this.magnetarPhase3GasInterval, // 800ms
+      callback: () => this.expandGasZone(),
+      loop: true
+    });
+
+    // 4개 보호막 생성기 생성
+    this.time.delayedCall(2000, () => {
+      this.createShieldGenerators();
+    });
+  }
+
+  createShieldGenerators() {
+    this.shieldGenerators = [];
+    const centerX = this.magnetarPosition.x;
+    const centerY = this.magnetarPosition.y;
+    const orbitRadius = 6; // 타일 단위
+
+    // 4개 생성기를 원형으로 배치
+    for (let i = 0; i < 4; i++) {
+      const angle = (i * Math.PI / 2) + Math.PI / 4; // 45도부터 시작
+      const gx = Math.round(centerX + Math.cos(angle) * orbitRadius);
+      const gy = Math.round(centerY + Math.sin(angle) * orbitRadius);
+
+      const generator = {
+        x: gx,
+        y: gy,
+        angle: angle,
+        alive: true,
+        element: null
+      };
+
+      // 생성기 시각화
+      const pixelX = gx * this.gridSize + this.gridSize / 2;
+      const pixelY = gy * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      const container = this.add.container(pixelX, pixelY);
+
+      // 크리스탈 모양
+      const crystal = this.add.graphics();
+      crystal.fillStyle(0x00ffff, 1);
+      crystal.fillTriangle(0, -12, -8, 8, 8, 8);
+      crystal.fillStyle(0x00aaff, 0.8);
+      crystal.fillTriangle(0, -8, -5, 5, 5, 5);
+      container.add(crystal);
+
+      // 에너지 빔 (보스로 연결)
+      const beam = this.add.graphics();
+      beam.lineStyle(2, 0x00ffff, 0.5);
+      const bossPixelX = centerX * this.gridSize + this.gridSize / 2;
+      const bossPixelY = centerY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+      beam.lineBetween(0, 0, bossPixelX - pixelX, bossPixelY - pixelY);
+      container.add(beam);
+
+      container.setDepth(95);
+      generator.element = container;
+
+      // 펄스 애니메이션
+      this.tweens.add({
+        targets: container,
+        scaleX: 1.2,
+        scaleY: 1.2,
+        duration: 500,
+        yoyo: true,
+        repeat: -1
+      });
+
+      this.shieldGenerators.push(generator);
+    }
+
+    // 공전 타이머
+    this.generatorOrbitTimer = this.time.addEvent({
+      delay: 100,
+      callback: () => this.updateGeneratorOrbits(),
+      loop: true
+    });
+
+    console.log('[Magnetar] Shield generators created');
+  }
+
+  updateGeneratorOrbits() {
+    if (!this.shieldGenerators || !this.magnetarMode) return;
+
+    const centerX = this.magnetarPosition.x;
+    const centerY = this.magnetarPosition.y;
+    const orbitRadius = 6;
+
+    this.shieldGenerators.forEach(gen => {
+      if (!gen.alive) return;
+
+      // 공전 (시계 방향)
+      gen.angle += 0.02;
+      gen.x = Math.round(centerX + Math.cos(gen.angle) * orbitRadius);
+      gen.y = Math.round(centerY + Math.sin(gen.angle) * orbitRadius);
+
+      // 위치 업데이트
+      if (gen.element) {
+        const pixelX = gen.x * this.gridSize + this.gridSize / 2;
+        const pixelY = gen.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+        gen.element.setPosition(pixelX, pixelY);
+      }
+    });
+  }
+
+  checkGeneratorCollision(x, y) {
+    if (!this.shieldGenerators || this.magnetarPhase !== 'phase3') return false;
+
+    for (const gen of this.shieldGenerators) {
+      if (gen.alive && gen.x === x && gen.y === y) {
+        this.destroyGenerator(gen);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  destroyGenerator(gen) {
+    gen.alive = false;
+
+    // 폭발 효과
+    const pixelX = gen.x * this.gridSize + this.gridSize / 2;
+    const pixelY = gen.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 파티클
+    for (let i = 0; i < 8; i++) {
+      const particle = this.add.circle(pixelX, pixelY, 4, 0x00ffff);
+      const angle = (i / 8) * Math.PI * 2;
+      this.tweens.add({
+        targets: particle,
+        x: pixelX + Math.cos(angle) * 50,
+        y: pixelY + Math.sin(angle) * 50,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 요소 제거
+    if (gen.element) {
+      this.tweens.killTweensOf(gen.element);
+      gen.element.destroy();
+      gen.element = null;
+    }
+
+    // HIT 카운트 증가
+    this.magnetarHitCount++;
+    console.log(`[Magnetar] Generator destroyed! HIT ${this.magnetarHitCount}/6`);
+
+    // 승리 체크
+    const aliveCount = this.shieldGenerators.filter(g => g.alive).length;
+    if (aliveCount === 0) {
+      this.showMagnetarVictory();
+    } else {
+      // HIT 표시
+      const { width, height } = this.cameras.main;
+      const hitText = this.add.text(width / 2, height / 2 - 50, `GENERATOR ${4 - aliveCount}/4!`, {
+        fontSize: '24px',
+        fontFamily: 'monospace',
+        color: '#00ffff'
+      }).setOrigin(0.5).setDepth(300);
+
+      this.tweens.add({
+        targets: hitText,
+        alpha: 0,
+        y: height / 2 - 80,
+        duration: 1000,
+        onComplete: () => hitText.destroy()
+      });
+    }
+  }
+
+  showMagnetarVictory() {
+    console.log('[Magnetar] Victory!');
+    this.magnetarPhase = 'victory';
+    this.moveTimer.paused = true;
+
+    const { width, height } = this.cameras.main;
+
+    // 보스 폭발
+    this.cameras.main.shake(1000, 0.03);
+    this.cameras.main.flash(500, 255, 255, 255);
+
+    // 보스 사라짐
+    if (this.magnetarElement) {
+      this.tweens.add({
+        targets: this.magnetarElement,
+        scaleX: 2,
+        scaleY: 2,
+        alpha: 0,
+        duration: 1000,
+        onComplete: () => {
+          this.magnetarElement.destroy();
+          this.magnetarElement = null;
+        }
+      });
+    }
+
+    // 폭발 파티클
+    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    for (let i = 0; i < 20; i++) {
+      const color = [0x00ffff, 0xff00ff, 0xffff00][i % 3];
+      const particle = this.add.circle(centerX, centerY, 8, color);
+      const angle = (i / 20) * Math.PI * 2;
+      const dist = Phaser.Math.Between(80, 150);
+      this.tweens.add({
+        targets: particle,
+        x: centerX + Math.cos(angle) * dist,
+        y: centerY + Math.sin(angle) * dist,
+        alpha: 0,
+        scaleX: 0.2,
+        scaleY: 0.2,
+        duration: 1500,
+        ease: 'Power2',
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    // 승리 텍스트
+    this.time.delayedCall(1500, () => {
+      const victoryText = this.add.text(width / 2, height / 2 - 30, 'BOSS CLEAR!', {
+        fontSize: '48px',
+        fontFamily: 'monospace',
+        color: '#00ff00'
+      }).setOrigin(0.5).setDepth(300);
+
+      this.tweens.add({
+        targets: victoryText,
+        scaleX: 1.2,
+        scaleY: 1.2,
+        duration: 500,
+        yoyo: true,
+        repeat: 2
+      });
+
+      // 보너스 점수
+      this.time.delayedCall(1000, () => {
+        const bonusText = this.add.text(width / 2, height / 2 + 30, '+1000 BONUS!', {
+          fontSize: '32px',
+          fontFamily: 'monospace',
+          color: '#ffff00'
+        }).setOrigin(0.5).setDepth(300);
+
+        this.score += 1000;
+        this.scoreText.setText(this.score.toString());
+
+        // 정리 및 다음 단계
+        this.time.delayedCall(2000, () => {
+          victoryText.destroy();
+          bonusText.destroy();
+          this.cleanupMagnetar();
+
+          // 스테이지 클리어 처리
+          this.magnetarMode = false;
+          this.stageClear();
+        });
+      });
+    });
+  }
+
+  cleanupMagnetar() {
+    console.log('[Magnetar] Cleanup');
+
+    // 조작 반전 해제
+    this.deactivateReverseField();
+
+    // 보스 요소 정리
+    if (this.magnetarElement) {
+      this.tweens.killTweensOf(this.magnetarElement);
+      this.magnetarElement.destroy();
+      this.magnetarElement = null;
+    }
+
+    // 링 타이머 정리
+    if (this.magnetarRingTimer) {
+      this.magnetarRingTimer.destroy();
+      this.magnetarRingTimer = null;
+    }
+
+    // EMP 빔 정리
+    this.stopEMPBeams();
+
+    // 생성기 정리
+    if (this.shieldGenerators) {
+      this.shieldGenerators.forEach(gen => {
+        if (gen.element) {
+          this.tweens.killTweensOf(gen.element);
+          gen.element.destroy();
+        }
+      });
+      this.shieldGenerators = [];
+    }
+
+    if (this.generatorOrbitTimer) {
+      this.generatorOrbitTimer.destroy();
+      this.generatorOrbitTimer = null;
+    }
+
+    // 상태 초기화
+    this.magnetarMode = false;
+    this.magnetarPhase = 'none';
+    this.magnetarHitCount = 0;
+    this.magnetarControlsReversed = false;
+    this.empBeamActive = false;
   }
 
   // ========== 탄막 슈팅 보스 시스템 (Bullet Hell Boss) ==========
@@ -23225,7 +25637,7 @@ export default class SnakeGame extends Phaser.Scene {
     }
 
     // 독개구리 보스 (Stage 3, 12, 15 등 - 탄막/안개 보스 제외)
-    const isPoisonBoss = !this.isBulletBossStage() && !this.isFogBossStage() && (
+    const isPoisonBoss = !this.isBulletBossStage() && !this.isFogBossStage() && !isMagnetarStage(this.currentStage) && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
@@ -23233,6 +25645,30 @@ export default class SnakeGame extends Phaser.Scene {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
       this.bossIntroMoveCount = 0;
+    }
+
+    // Flux Maze 기능 활성화 (Stage -1) - 레이저 터렛 시스템
+    if (shouldHaveLaserTurrets(this.currentStage)) {
+      this.time.delayedCall(1000, () => {
+        this.initLaserTurrets();
+      });
+    }
+
+    if (shouldHaveFloatingMines(this.currentStage)) {
+      this.time.delayedCall(2000, () => {
+        this.startMineSpawner();
+      });
+    }
+
+    // Magnetar 보스 스테이지 체크 (Stage 0)
+    if (isMagnetarStage(this.currentStage)) {
+      this.bossPhase = 'intro';
+      this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.hideFoodGraphics();
+      this.time.delayedCall(500, () => {
+        this.startMagnetar();
+      });
     }
   }
 
@@ -23243,6 +25679,15 @@ export default class SnakeGame extends Phaser.Scene {
     this.resetFogOfWar();
     this.destroyAllSaws();
     this.stopGasZone();
+
+    // Flux Maze 시스템 정리
+    this.stopPolaritySystem();
+    this.cleanupMagneticTurrets();
+    this.cleanupLaserTurrets();
+    this.cleanupFloatingMines();
+
+    // Magnetar 보스 정리
+    this.cleanupMagnetar();
 
     // 안개 보스 정리
     if (this.fogBossMode) {

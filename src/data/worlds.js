@@ -57,30 +57,34 @@ export const WORLD_CONFIG = {
   }
 };
 
-// Test stages for new world development (현재: 기계왕국 개발 중)
-// -2 = Stage 10, -1 = Stage 11, 0 = Stage 12 (보스)
+// Test stages for new world development (현재: 사이버월드 확장 개발 중)
+// -2 = Stage 13 (Gas Zone), -1 = Stage 14 (Flux Maze), 0 = Stage 15 (Magnetar Boss)
 export const TEST_STAGES = {
   '-2': {
     name: 'Test Stage -2',
     isTest: true,
-    worldName: 'Machine Kingdom',
-    mappedStage: 10,
-    features: { saws: true }
+    worldName: 'Cyber World',
+    mappedStage: 13,
+    features: { gasZone: true }
   },
   '-1': {
-    name: 'Test Stage -1',
+    name: 'Flux Maze',
     isTest: true,
-    worldName: 'Machine Kingdom',
-    mappedStage: 11,
-    features: { saws: true, enhancedSaws: true }
+    worldName: 'Cyber World',
+    mappedStage: 14,
+    features: {
+      gasZone: true,
+      laserTurrets: true,    // 회전 레이저 터렛 (자석 터렛 대체)
+      floatingMines: true
+    }
   },
   '0': {
-    name: 'Test Stage 0',
+    name: 'Magnetar',
     isTest: true,
     isBoss: true,
-    worldName: 'Machine Kingdom',
-    mappedStage: 12,
-    bossType: 'gear_titan'
+    worldName: 'Cyber World',
+    mappedStage: 15,
+    bossType: 'magnetar'
   }
 };
 
@@ -103,20 +107,18 @@ export function getEffectiveStage(stage) {
  * @returns {object} World configuration object
  */
 export function getWorldByStage(stage) {
-  // Test stages - 기계왕국 개발 중
+  // Test stages - 사이버월드 확장 개발 중
   if (stage <= 0) {
+    const testStage = TEST_STAGES[stage.toString()];
     return {
       worldId: 'test',
-      name: 'Machine Kingdom (Dev)',
-      nameKo: '기계왕국 (개발)',
+      name: 'Cyber World (Dev)',
+      nameKo: '사이버월드 (개발)',
       range: [-2, 0],
       bossStage: 0,
-      bossType: 'gear_titan',
+      bossType: 'magnetar',
       isTest: true,
-      features: {
-        saws: true,
-        enhancedSaws: stage === -1
-      }
+      features: testStage ? testStage.features : { gasZone: true }
     };
   }
 
@@ -176,8 +178,9 @@ export function getBossInfoForStage(stage) {
  */
 export function getStageFeatures(stage) {
   if (stage <= 0) {
-    // 테스트 스테이지 - 기계왕국 기능 활성화
-    return { isTest: true, saws: true };
+    // 테스트 스테이지 - 사이버월드 기능 활성화
+    const testStage = TEST_STAGES[stage.toString()];
+    return { isTest: true, ...(testStage ? testStage.features : { gasZone: true }) };
   }
 
   const world = getWorldByStage(stage);
@@ -200,7 +203,58 @@ export function shouldHaveSaws(stage) {
  * @returns {boolean}
  */
 export function shouldHaveGasZone(stage) {
+  // Test stages -2, -1, 0 all have gas zone
+  if (stage <= 0 && stage >= -2) {
+    return true;
+  }
   return stage >= 13 && stage <= 15;
+}
+
+/**
+ * Check if polarity system should be active for a stage
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ * @deprecated Polarity system removed - use shouldHaveLaserTurrets instead
+ */
+export function shouldHavePolarity(stage) {
+  return false; // 극성 시스템 비활성화
+}
+
+/**
+ * Check if magnetic turrets should be active for a stage
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ * @deprecated Magnetic turrets removed - use shouldHaveLaserTurrets instead
+ */
+export function shouldHaveMagneticTurrets(stage) {
+  return false; // 자석 터렛 비활성화
+}
+
+/**
+ * Check if laser turrets should be active for a stage
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ */
+export function shouldHaveLaserTurrets(stage) {
+  return stage === -1; // Stage -1 (Flux Maze) only
+}
+
+/**
+ * Check if floating mines should be active for a stage
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ */
+export function shouldHaveFloatingMines(stage) {
+  return stage === -1; // Stage -1 (Flux Maze) only
+}
+
+/**
+ * Check if this is the Magnetar boss stage
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ */
+export function isMagnetarStage(stage) {
+  return stage === 0; // Stage 0 (Magnetar Boss)
 }
 
 /**
