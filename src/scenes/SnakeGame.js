@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
-import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, TEST_STAGES } from '../data/worlds.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -101,7 +101,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.sawBaseDelay = 600;
     this.maxSaws = 5;
 
-    // Enhanced saws (Stage -1 강화 톱니)
+    // Enhanced saws (Stage 14 강화 톱니)
     this.enhancedSaws = [];
     this.maxEnhancedSaws = 3;
     this.enhancedSawDelay = 400; // 기본 600ms보다 빠름
@@ -109,7 +109,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.enhancedSawTextureKey = 'enhanced_saw';
     this.preserveSawsForNextStage = false; // 톱니 보존 플래그
 
-    // Gear Titan Boss (Stage 0)
+    // Gear Titan Boss (disabled)
     this.gearTitanMode = false;
     this.gearTitanPhase = 'none'; // 'none' | 'intro' | 'phase1' | 'phase2' | 'phase3' | 'vulnerable' | 'enrage' | 'victory'
     this.gearTitanPosition = null;
@@ -175,7 +175,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.baseSpeed = 90;
     this.currentSpeedModifier = 1.0;
 
-    // ===== Laser Turrets (Stage -1: Flux Maze) =====
+    // ===== Laser Turrets (Stage 14: Flux Maze) =====
     this.laserTurrets = []; // [{x, y, container, angle, laserGraphics, warningGraphics, isActive}]
     this.laserTurretPositions = [
       { x: 10, y: 8 },   // 좌상단
@@ -183,38 +183,38 @@ export default class SnakeGame extends Phaser.Scene {
       { x: 10, y: 19 },  // 좌하단
       { x: 29, y: 19 }   // 우하단
     ];
-    this.laserRotationSpeed = 0.02; // 레이저 회전 속도 (라디안/프레임)
-    this.laserLength = 25; // 레이저 길이 (타일)
-    this.laserFireInterval = 4000; // 4초마다 발사 패턴
+    this.laserRotationSpeed = 0.015; // 레이저 회전 속도 완화
+    this.laserLength = 22; // 레이저 길이 (타일) 소폭 감소
+    this.laserFireInterval = 6000; // 발사 주기 완화
     this.laserWarningDuration = 1500; // 경고 1.5초
-    this.laserActiveDuration = 2000; // 레이저 활성 2초
+    this.laserActiveDuration = 1500; // 레이저 활성 시간 단축
     this.laserAnimTimer = null; // 60fps 애니메이션 타이머
     this.laserFireTimer = null; // 발사 타이머
     this.laserPhase = 'idle'; // 'idle' | 'warning' | 'firing'
 
-    // ===== Floating Mines (Stage -1: Flux Maze) =====
+    // ===== Floating Mines (Stage 14: Flux Maze) =====
     this.floatingMines = []; // [{x, y, element, dx, dy, moveTimer}]
-    this.maxFloatingMines = 4;
-    this.mineSpeed = 1500; // 1.5초에 1칸 이동
+    this.maxFloatingMines = 3;
+    this.mineSpeed = 2000; // 2초에 1칸 이동 (완화)
     this.mineSpawnTimer = null; // 기뢰 생성 타이머
-    this.mineSpawnInterval = 5000; // 5초마다 생성
+    this.mineSpawnInterval = 7500; // 생성 간격 완화
 
-    // ===== Magnetar Boss (Stage 0) =====
+    // ===== Magnetar Boss (Stage 15) =====
     this.magnetarMode = false;
-    this.magnetarPhase = 'none'; // 'none' | 'intro' | 'phase1' | 'phase2' | 'phase3' | 'victory'
+    this.magnetarPhase = 'none'; // 'none' | 'intro' | 'battle' | 'vulnerable' | 'victory'
     this.magnetarPosition = null; // 보스 위치 (맵 중앙)
     this.magnetarElement = null; // 보스 그래픽 컨테이너
     this.magnetarCore = null; // 보스 코어 그래픽
-    this.magnetarHitCount = 0; // 보스 HIT 횟수
-    this.magnetarControlsReversed = false; // 조작 반전 상태
-    this.magnetarReverseEndTime = 0; // 반전 종료 시간
-    this.magnetarReverseTimer = null; // 반전 타이머
-    this.magnetarLaserPatterns = []; // 활성 레이저 패턴들
-    this.magnetarShieldGenerators = []; // [{orbitAngle, orbitRadius, destroyed, element, body, beam, x, y}]
-    this.magnetarOrbitTimer = null; // 생성기 공전 타이머
-    this.magnetarAttackTimer = null; // 공격 패턴 타이머
-    this.magnetarGeneratorsVulnerable = false; // 생성기 파괴 가능 여부
-    this.magnetarPhase3GasInterval = 800; // Phase 3 가스 축소 간격 (ms)
+    this.magnetarShield = null; // 보호막 그래픽
+    this.magnetarHitCount = 0; // 보스 HIT 횟수 (4회 클리어)
+    this.magnetarVulnerable = false; // 코어 오픈 상태
+    this.magnetarControlsReversed = false; // (신규 패턴에서 미사용 기본값)
+    this.magnetarBeams = []; // 회전 빔 정보
+    this.magnetarBeamTimer = null; // 빔 업데이트 타이머
+    this.magnetarShockwaves = []; // 확산 충격파
+    this.magnetarShockwaveTimer = null; // 충격파 업데이트 타이머
+    this.magnetarShockwaveTickEvent = null; // 충격파 확장 타이머
+    this.magnetarCycleTimer = null; // 코어 오픈 사이클 타이머
 
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
@@ -512,10 +512,6 @@ export default class SnakeGame extends Phaser.Scene {
     this.kPressThreshold = 300; // 더블 프레스 인식 시간 (ms)
     this.selectedDevStage = 1; // 선택된 스테이지
     this.devScrollOffset = 0; // 스크롤 오프셋
-
-    // ========== 신규 월드 테스트 스테이지 시스템 ==========
-    this.testStagesEnabled = this.loadTestStageConfig(); // localStorage에서 로드
-    this.isTestMode = false; // 테스트 모드 진행 중
 
     // 키 입력 (입력 큐 시스템)
     this.input.keyboard.on('keydown-LEFT', () => {
@@ -1255,14 +1251,7 @@ export default class SnakeGame extends Phaser.Scene {
     const head = this.snake[0];
     let newHead = { x: head.x, y: head.y };
 
-    // Magnetar 조작 반전 적용 (Phase 1)
-    let effectiveDirection = this.direction;
-    if (this.magnetarControlsReversed) {
-      const reverseMap = { 'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT' };
-      effectiveDirection = reverseMap[this.direction] || this.direction;
-    }
-
-    switch (effectiveDirection) {
+    switch (this.direction) {
       case 'LEFT':
         newHead.x -= 1;
         break;
@@ -1316,7 +1305,7 @@ export default class SnakeGame extends Phaser.Scene {
       if (this.gameOver) return;
     }
 
-    // 레이저 터렛 충돌 체크 (Flux Maze - Stage -1)
+    // 레이저 터렛 충돌 체크 (Flux Maze - Stage 14)
     if (this.checkLaserCollision(newHead.x, newHead.y)) {
       this.endGame();
       return;
@@ -1371,12 +1360,20 @@ export default class SnakeGame extends Phaser.Scene {
         return;
       }
 
-      // Phase 1/2: 보스 위치에 도달하면 HIT
+      // Magnetar hazard check
+      if (this.checkMagnetarHazardCollision(newHead.x, newHead.y)) {
+        this.endGame();
+        return;
+      }
+
       if (this.magnetarPosition &&
           newHead.x === this.magnetarPosition.x && newHead.y === this.magnetarPosition.y) {
-        if (this.magnetarPhase === 'phase1' || this.magnetarPhase === 'phase2') {
+        if (this.magnetarVulnerable) {
           this.handleMagnetarHit();
           this.draw();
+          return;
+        } else {
+          this.endGame();
           return;
         }
       }
@@ -3604,12 +3601,12 @@ export default class SnakeGame extends Phaser.Scene {
   // =====================
 
   shouldPreserveSaws() {
-    // Stage -2 -> -1 전환 시 톱니 보존
+    // Stage 13 -> 14 전환 시 톱니 보존
     return this.preserveSawsForNextStage;
   }
 
   // =====================
-  // 강화 톱니 시스템 (Stage -1)
+  // 강화 톱니 시스템 (Stage 14)
   // =====================
 
   destroyEnhancedSaw(saw) {
@@ -4063,7 +4060,7 @@ export default class SnakeGame extends Phaser.Scene {
                       duration: 300,
                       onComplete: () => {
                         warningText.destroy();
-                        // Stage -1 전용 카운트다운 (톱니 시작 포함)
+                        // Stage 14 전용 카운트다운 (톱니 시작 포함)
                         this.startEnhancedSawCountdown();
                       }
                     });
@@ -4077,7 +4074,7 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
-  // Stage -1 전용 카운트다운 (톱니 이동 시작 포함)
+  // Stage 14 전용 카운트다운 (톱니 이동 시작 포함)
   startEnhancedSawCountdown() {
     const { width, height } = this.cameras.main;
 
@@ -4139,11 +4136,11 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   // =====================
-  // 기어 타이탄 보스 시스템 (Stage 0) - 기본 함수들
+  // 기어 타이탄 보스 시스템 (비활성) - 기본 함수들
   // =====================
 
   isGearTitanStage() {
-    // Gear Titan 보스 비활성화 - Stage 0은 Magnetar 보스만 사용
+    // Gear Titan 보스 비활성화 - Magnetar 보스로 대체됨
     return false;
   }
 
@@ -8447,16 +8444,7 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   getNextStageAfterClear() {
-    // 테스트 스테이지는 -2 -> -1 -> 0 순서로 강제 진행
-    if (this.isTestMode || this.currentStage <= 0) {
-      const nextTestStage = this.currentStage + 1;
-      if (nextTestStage <= 0 && TEST_STAGES[nextTestStage.toString()]) {
-        return { stage: nextTestStage, isTestMode: true };
-      }
-      return { stage: 1, isTestMode: false };
-    }
-
-    return { stage: this.currentStage + 1, isTestMode: false };
+    return { stage: this.currentStage + 1 };
   }
 
   enterBossStage() {
@@ -8471,16 +8459,15 @@ export default class SnakeGame extends Phaser.Scene {
   showNextStage() {
     const { width, height } = this.cameras.main;
 
-    const { stage: nextStage, isTestMode } = this.getNextStageAfterClear();
+    const { stage: nextStage } = this.getNextStageAfterClear();
 
     this.currentStage = nextStage;
-    this.isTestMode = isTestMode;
 
     // Boss stage checks (bullet/fog/gear titan handled separately)
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
     const isGearTitan = this.isGearTitanStage();
-    const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && !isGearTitan && (
+    const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && !isGearTitan && !isMagnetarStage(this.currentStage) && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
@@ -8524,7 +8511,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.resetStage();
     }
 
-    // Stage 0: 기어 타이탄 보스 시작 (톱니 날아가기 애니메이션 먼저)
+    // 기어 타이탄 보스 시작 (톱니 날아가기 애니메이션 먼저)
     if (isGearTitan) {
       this.time.delayedCall(500, () => {
         this.animateSawsFlyOut(() => {
@@ -8539,11 +8526,9 @@ export default class SnakeGame extends Phaser.Scene {
       this.initSpeedBoostOrbitals();
     }
 
-    const stageLabel = this.currentStage <= 0
-      ? `TEST ${this.currentStage}`
-      : `STAGE ${this.currentStage}`;
-    const stageColor = this.currentStage <= 0 ? '#ff6600' : '#00ff00';
-    const strokeColor = this.currentStage <= 0 ? '#884400' : '#008800';
+    const stageLabel = `STAGE ${this.currentStage}`;
+    const stageColor = '#00ff00';
+    const strokeColor = '#008800';
 
     const stageText = this.add.text(width / 2, height / 2 - 100, stageLabel, {
       fontSize: '96px',
@@ -8597,7 +8582,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.cleanupGearTitan();
     }
 
-    // 톱니 보존 체크: Stage -2 -> -1 전환 시에만 톱니 유지
+    // 톱니 보존 체크: Stage 13 -> 14 전환 시에만 톱니 유지
     if (!this.shouldPreserveSaws()) {
       this.destroyAllSaws();
       this.destroyAllEnhancedSaws();
@@ -8694,7 +8679,7 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // Flux Maze 기능 활성화 (Stage -1) - 레이저 터렛 시스템
+    // Flux Maze 기능 활성화 (Stage 14) - 레이저 터렛 시스템
     if (shouldHaveLaserTurrets(this.currentStage)) {
       this.time.delayedCall(1000, () => {
         this.initLaserTurrets();
@@ -8707,7 +8692,7 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // Magnetar 보스 스테이지 체크 (Stage 0)
+    // Magnetar 보스 스테이지 체크 (Stage 15)
     if (isMagnetarStage(this.currentStage)) {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
@@ -14553,7 +14538,7 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   // =====================================================
-  // ===== POLARITY SYSTEM (Stage -1: Flux Maze) =====
+  // ===== POLARITY SYSTEM (Stage 14: Flux Maze) =====
   // =====================================================
 
   startPolaritySystem() {
@@ -14796,7 +14781,7 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   // =====================================================
-  // ===== MAGNETIC TURRETS (Stage -1: Flux Maze) =====
+  // ===== MAGNETIC TURRETS (Stage 14: Flux Maze) =====
   // =====================================================
 
   initMagneticTurrets() {
@@ -15196,7 +15181,7 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   // =====================================================
-  // ===== LASER TURRETS (Stage -1: Flux Maze) =====
+  // ===== LASER TURRETS (Stage 14: Flux Maze) =====
   // =====================================================
 
   initLaserTurrets() {
@@ -15561,7 +15546,7 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   // =====================================================
-  // ===== FLOATING MINES (Stage -1: Flux Maze) =====
+  // ===== FLOATING MINES (Stage 14: Flux Maze) =====
   // =====================================================
 
   startMineSpawner() {
@@ -15930,7 +15915,7 @@ export default class SnakeGame extends Phaser.Scene {
     return this.floatingMines.some(m => m.x === x && m.y === y);
   }
 
-  // ========== Magnetar 보스 시스템 (Stage 0) ==========
+  // ========== Magnetar 보스 시스템 (Stage 15) ==========
 
   startMagnetar() {
     console.log('[Magnetar] Starting boss battle');
@@ -16323,6 +16308,46 @@ export default class SnakeGame extends Phaser.Scene {
       // 승리!
       this.showMagnetarVictory();
     }
+  }
+
+  // Magnetar 빔/충격파 충돌 체크 (새 시스템 및 구 시스템 모두 안전하게 처리)
+  checkMagnetarHazardCollision(tileX, tileY) {
+    if (!this.magnetarMode) return false;
+
+    const px = tileX * this.gridSize + this.gridSize / 2;
+    const py = tileY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const cx = this.magnetarPosition ? this.magnetarPosition.x * this.gridSize + this.gridSize / 2 : 0;
+    const cy = this.magnetarPosition ? this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY : 0;
+
+    // 회전 빔 (신규 패턴)
+    if (this.magnetarBeams && this.magnetarBeams.length > 0) {
+      const beamThickness = 18;
+      const maxLen = Math.max(this.cameras.main.width, this.cameras.main.height);
+      for (const beam of this.magnetarBeams) {
+        if (!beam.active) continue;
+        const dirX = Math.cos(beam.angle);
+        const dirY = Math.sin(beam.angle);
+        const proj = ((px - cx) * dirX + (py - cy) * dirY);
+        if (proj < 0 || proj > maxLen) continue;
+        const dist = Math.abs((px - cx) * dirY - (py - cy) * dirX);
+        if (dist <= beamThickness) return true;
+      }
+    }
+
+    // 확산 충격파 (신규 패턴)
+    if (this.magnetarShockwaves && this.magnetarShockwaves.length > 0) {
+      for (const wave of this.magnetarShockwaves) {
+        const dist = Phaser.Math.Distance.Between(px, py, cx, cy);
+        if (Math.abs(dist - wave.radius) < 12) return true;
+      }
+    }
+
+    // 구 EMP 빔 패턴 호환
+    if (typeof this.isOnEMPBeam === 'function' && this.isOnEMPBeam(tileX, tileY)) {
+      return true;
+    }
+
+    return false;
   }
 
   // Phase 2: EMP Beam
@@ -25283,38 +25308,6 @@ export default class SnakeGame extends Phaser.Scene {
 
   // ========== 개발자 테스트 모드 (KK) ==========
 
-  // localStorage에서 테스트 스테이지 설정 로드
-  loadTestStageConfig() {
-    try {
-      const saved = localStorage.getItem('snakeGame_testStages');
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (e) {
-      console.warn('Failed to load test stage config:', e);
-    }
-    return { '-2': false, '-1': false, '0': false };
-  }
-
-  // localStorage에 테스트 스테이지 설정 저장
-  saveTestStageConfig() {
-    try {
-      localStorage.setItem('snakeGame_testStages', JSON.stringify(this.testStagesEnabled));
-    } catch (e) {
-      console.warn('Failed to save test stage config:', e);
-    }
-  }
-
-  // 테스트 스테이지 토글
-  toggleTestStage(stage) {
-    const key = stage.toString();
-    if (this.testStagesEnabled.hasOwnProperty(key)) {
-      this.testStagesEnabled[key] = !this.testStagesEnabled[key];
-      this.saveTestStageConfig();
-      this.updateDevModeUI();
-    }
-  }
-
   // 개발자 모드 열기
   openDevMode() {
     if (this.devModeEnabled) return;
@@ -25359,31 +25352,23 @@ export default class SnakeGame extends Phaser.Scene {
     const listY = 100;
     const listHeight = height - 180;
     const itemHeight = 26;
-    const visibleItems = Math.floor(listHeight / itemHeight);
+    const visibleItems = Math.max(1, Math.floor(listHeight / itemHeight));
+    const contentStartY = listY + 25;
+    this.devListConfig = { listY, listHeight, itemHeight, visibleItems, contentStartY };
+    this.devScrollOffset = 0;
 
-    // 테스트 스테이지 섹션
-    const testLabel = this.add.text(60, listY, '[TEST STAGES]', {
+    const allStages = Array.from({ length: 30 }, (_, i) => i + 1);
+
+    let currentY = listY;
+    const normalLabel = this.add.text(60, currentY, '[STAGES]', {
       fontSize: '14px',
-      fill: '#ff6600',
+      fill: '#00ff00',
       fontStyle: 'bold'
     }).setDepth(9001);
-    this.devModeElements.push(testLabel);
+    this.devModeElements.push(normalLabel);
+    currentY += 25;
 
-    // 모든 스테이지 생성 (테스트 + 일반)
-    const allStages = [-2, -1, 0, ...Array.from({ length: 30 }, (_, i) => i + 1)];
-
-    let currentY = listY + 25;
-    allStages.forEach((stage, index) => {
-      // 일반 스테이지 시작 시 구분선
-      if (stage === 1) {
-        const normalLabel = this.add.text(60, currentY, '[NORMAL STAGES]', {
-          fontSize: '14px',
-          fill: '#00ff00',
-          fontStyle: 'bold'
-        }).setDepth(9001);
-        this.devModeElements.push(normalLabel);
-        currentY += 25;
-      }
+    allStages.forEach((stage) => {
 
       const world = getWorldByStage(stage);
       const bossInfo = getBossInfoForStage(stage);
@@ -25391,25 +25376,14 @@ export default class SnakeGame extends Phaser.Scene {
       let label = '';
       let color = '#ffffff';
 
-      if (stage <= 0) {
-        // 테스트 스테이지 (기계왕국 개발)
-        const enabled = this.testStagesEnabled[stage.toString()];
-        const checkbox = enabled ? '[v]' : '[ ]';
-        const testStageInfo = TEST_STAGES[stage.toString()];
-        const mappedStage = testStageInfo ? testStageInfo.mappedStage : 10;
-        label = `${checkbox} Test ${stage} -> S${mappedStage}`;
-        if (stage === 0) label += ' [BOSS]';
-        color = enabled ? '#00ff00' : '#888888';
-      } else {
-        // 일반 스테이지
-        label = `Stage ${stage}`;
-        if (world && world.name) {
-          label += ` (${world.name})`;
-        }
-        if (bossInfo) {
-          label += ' [BOSS]';
-          color = '#ff6666';
-        }
+      // 일반 스테이지
+      label = `Stage ${stage}`;
+      if (world && world.name) {
+        label += ` (${world.name})`;
+      }
+      if (bossInfo) {
+        label += ' [BOSS]';
+        color = '#ff6666';
       }
 
       // 현재 스테이지 표시
@@ -25418,7 +25392,7 @@ export default class SnakeGame extends Phaser.Scene {
         color = '#00ffff';
       }
 
-      const btn = this.add.text(80, currentY, label, {
+      const btn = this.add.text(80, contentStartY + (this.devStageButtons.length * itemHeight), label, {
         fontSize: '16px',
         fill: color,
         padding: { x: 8, y: 2 }
@@ -25450,7 +25424,7 @@ export default class SnakeGame extends Phaser.Scene {
     // 안내 텍스트
     const helpText = this.add.text(width / 2, height - 60, [
       'Arrow Keys: Select    ENTER: Start Stage',
-      'T: Toggle Test Stage    ESC: Cancel'
+      'ESC: Cancel'
     ].join('\n'), {
       fontSize: '14px',
       fill: '#888888',
@@ -25478,24 +25452,13 @@ export default class SnakeGame extends Phaser.Scene {
       let label = '';
       let color = '#ffffff';
 
-      if (stage <= 0) {
-        // 테스트 스테이지 (기계왕국 개발)
-        const enabled = this.testStagesEnabled[stage.toString()];
-        const checkbox = enabled ? '[v]' : '[ ]';
-        const testStageInfo = TEST_STAGES[stage.toString()];
-        const mappedStage = testStageInfo ? testStageInfo.mappedStage : 10;
-        label = `${checkbox} Test ${stage} -> S${mappedStage}`;
-        if (stage === 0) label += ' [BOSS]';
-        color = enabled ? '#00ff00' : '#888888';
-      } else {
-        label = `Stage ${stage}`;
-        if (world && world.name) {
-          label += ` (${world.name})`;
-        }
-        if (bossInfo) {
-          label += ' [BOSS]';
-          color = '#ff6666';
-        }
+      label = `Stage ${stage}`;
+      if (world && world.name) {
+        label += ` (${world.name})`;
+      }
+      if (bossInfo) {
+        label += ' [BOSS]';
+        color = '#ff6666';
       }
 
       if (stage === this.currentStage) {
@@ -25512,6 +25475,7 @@ export default class SnakeGame extends Phaser.Scene {
         btn.setFill(color);
       }
     });
+    this.updateDevStageListLayout();
   }
 
   // 선택 UI 업데이트
@@ -25525,6 +25489,37 @@ export default class SnakeGame extends Phaser.Scene {
         btn.setFontStyle('normal');
       }
     });
+    this.ensureDevStageVisible();
+  }
+
+  // 스크롤 영역에 맞춰 버튼 배치
+  updateDevStageListLayout() {
+    if (!this.devListConfig) return;
+    const { contentStartY, itemHeight, visibleItems } = this.devListConfig;
+
+    this.devStageButtons.forEach((btn, index) => {
+      const inView = index >= this.devScrollOffset && index < this.devScrollOffset + visibleItems;
+      btn.setVisible(inView);
+      if (inView) {
+        btn.setY(contentStartY + (index - this.devScrollOffset) * itemHeight);
+      }
+    });
+  }
+
+  // 선택된 항목이 화면에 보이도록 스크롤 조정
+  ensureDevStageVisible() {
+    if (!this.devListConfig) return;
+    const { visibleItems } = this.devListConfig;
+    const currentIndex = this.devStageButtons.findIndex(btn => btn.stageValue === this.selectedDevStage);
+    if (currentIndex === -1) return;
+
+    if (currentIndex < this.devScrollOffset) {
+      this.devScrollOffset = currentIndex;
+    } else if (currentIndex >= this.devScrollOffset + visibleItems) {
+      this.devScrollOffset = currentIndex - visibleItems + 1;
+    }
+
+    this.updateDevStageListLayout();
   }
 
   // 개발자 모드 키보드 입력 처리
@@ -25554,13 +25549,6 @@ export default class SnakeGame extends Phaser.Scene {
       case 'Escape':
         this.closeDevMode();
         break;
-      case 't':
-      case 'T':
-        // 테스트 스테이지 토글 (테스트 스테이지 선택 중일 때만)
-        if (this.selectedDevStage <= 0) {
-          this.toggleTestStage(this.selectedDevStage);
-        }
-        break;
     }
   }
 
@@ -25568,8 +25556,6 @@ export default class SnakeGame extends Phaser.Scene {
   startFromDevMode(targetStage) {
     this.closeDevMode();
 
-    // 테스트 모드 여부
-    this.isTestMode = targetStage <= 0;
     this.currentStage = targetStage;
 
     // 게임 오버 상태 초기화
@@ -25581,7 +25567,7 @@ export default class SnakeGame extends Phaser.Scene {
     // 보스 스테이지 여부
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
-    const isPoisonBoss = !isBulletBoss && !isFogBoss && (
+    const isPoisonBoss = !isBulletBoss && !isFogBoss && !isMagnetarStage(this.currentStage) && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
@@ -25636,7 +25622,7 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // 독개구리 보스 (Stage 3, 12, 15 등 - 탄막/안개 보스 제외)
+    // Poison Frog boss (every 3 stages except bullet/fog/Magnetar)
     const isPoisonBoss = !this.isBulletBossStage() && !this.isFogBossStage() && !isMagnetarStage(this.currentStage) && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
@@ -25647,7 +25633,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.bossIntroMoveCount = 0;
     }
 
-    // Flux Maze 기능 활성화 (Stage -1) - 레이저 터렛 시스템
+    // Flux Maze 기능 활성화 (Stage 14) - 레이저 터렛 시스템
     if (shouldHaveLaserTurrets(this.currentStage)) {
       this.time.delayedCall(1000, () => {
         this.initLaserTurrets();
@@ -25660,7 +25646,7 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // Magnetar 보스 스테이지 체크 (Stage 0)
+    // Magnetar 보스 스테이지 체크 (Stage 15)
     if (isMagnetarStage(this.currentStage)) {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
@@ -25777,9 +25763,7 @@ export default class SnakeGame extends Phaser.Scene {
     let count = 3;
 
     // 스테이지 표시
-    const stageLabel = this.currentStage <= 0
-      ? `TEST ${this.currentStage}`
-      : `STAGE ${this.currentStage}`;
+    const stageLabel = `STAGE ${this.currentStage}`;
 
     const world = getWorldByStage(this.currentStage);
     const worldName = world && world.name ? ` - ${world.name}` : '';
@@ -25841,6 +25825,8 @@ export default class SnakeGame extends Phaser.Scene {
     });
     this.devModeElements = [];
     this.devStageButtons = [];
+    this.devListConfig = null;
+    this.devScrollOffset = 0;
 
     // 키보드 핸들러 제거
     if (this.devModeKeyHandler) {
@@ -25854,21 +25840,13 @@ export default class SnakeGame extends Phaser.Scene {
     }
   }
 
-  // 게임 시작 스테이지 결정 (테스트 스테이지 포함)
+  // 게임 시작 스테이지 결정
   determineStartStage() {
-    // 테스트 스테이지 -2가 활성화되어 있으면 -2에서 시작
-    if (this.testStagesEnabled['-2']) {
-      this.isTestMode = true;
-      return -2;
-    }
     return 1;
   }
 
   // 월드 정보 가져오기 (UI 표시용)
   getWorldDisplayInfo(stage) {
-    if (stage <= 0) {
-      return { name: 'Test', nameKo: '테스트', color: '#ff6600' };
-    }
     const world = getWorldByStage(stage);
     return {
       name: world.name || 'Unknown',
@@ -25887,4 +25865,6 @@ export default class SnakeGame extends Phaser.Scene {
     }
   }
 }
+
+
 
