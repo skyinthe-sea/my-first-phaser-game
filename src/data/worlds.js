@@ -50,7 +50,7 @@ export const WORLD_CONFIG = {
     nameKo: '사이버월드',
     range: [13, 15],
     bossStage: 15,
-    bossType: 'magnetar',
+    bossType: 'nexus',
     features: {
       gasZone: true          // 독가스 자기장
     }
@@ -184,12 +184,22 @@ export function shouldHaveFloatingMines(stage) {
 }
 
 /**
- * Check if this is the Magnetar boss stage
+ * Check if this is the Magnetar boss stage (레거시 - NEXUS로 대체됨)
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ * @deprecated Use isNexusStage instead
+ */
+export function isMagnetarStage(stage) {
+  return stage === 15; // Stage 15 (이제 NEXUS Boss)
+}
+
+/**
+ * Check if this is the NEXUS boss stage
  * @param {number} stage - Stage number
  * @returns {boolean}
  */
-export function isMagnetarStage(stage) {
-  return stage === 15; // Stage 15 (Magnetar Boss)
+export function isNexusStage(stage) {
+  return stage === 15; // Stage 15 (NEXUS Boss)
 }
 
 /**

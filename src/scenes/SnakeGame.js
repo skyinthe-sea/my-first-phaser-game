@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
-import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage } from '../data/worlds.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -147,7 +147,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.gasZoneRadius = 0; // 현재 안전 영역 반경 (타일 단위)
     this.gasZoneMinRadius = 4; // 최소 반경 (게임 가능 영역)
     this.gasZoneTimer = null; // 확장 타이머
-    this.gasZoneExpandInterval = 2000; // 2초마다 확장
+    this.gasZoneExpandInterval = 10000; // 10초마다 확장 (NEXUS v2 - 더 여유있게)
     this.gasZoneGraphics = this.add.graphics();
     this.gasZoneGraphics.setDepth(50); // 뱀보다 아래, 그리드보다 위
     this.gasZoneParticles = []; // EMP 파티클들
@@ -199,22 +199,45 @@ export default class SnakeGame extends Phaser.Scene {
     this.mineSpawnTimer = null; // 기뢰 생성 타이머
     this.mineSpawnInterval = 7500; // 생성 간격 완화
 
-    // ===== Magnetar Boss (Stage 15) =====
+    // ===== NEXUS Boss (Stage 15) =====
+    this.nexusMode = false;
+    this.nexusPhase = 'none'; // 'none' | 'intro' | 'phase1' | 'phase2' | 'phase3' | 'vulnerable' | 'victory'
+    this.nexusPosition = null; // 보스 위치
+    this.nexusElement = null; // 보스 그래픽 컨테이너
+    this.nexusHitCount = 0; // 보스 HIT 횟수 (4회 클리어)
+    this.nexusVulnerable = false; // 코어 오픈 상태
+    this.nexusHPBar = null; // HP 바 UI
+    this.nexusPhaseText = null; // Phase 표시 UI
+
+    // NEXUS 대시 시스템
+    this.nexusDashCharging = false; // 차지 중 여부
+    this.nexusDashChargeStart = 0; // 차지 시작 시간
+    this.nexusDashCooldown = 2000; // 쿨다운 2초
+    this.nexusLastDashTime = 0; // 마지막 대시 시간
+    this.nexusDashInvincible = false; // 대시 중 무적
+    this.nexusDashUI = null; // 대시 쿨다운 UI
+
+    // NEXUS 공격 패턴
+    this.nexusScanBeams = []; // 스캔 빔 배열
+    this.nexusDataBlocks = []; // 데이터 블록 배열
+    this.nexusTrackers = []; // 추적탄 배열
+    this.nexusEMPWaves = []; // EMP 서지 배열
+    this.nexusMines = []; // 지뢰 배열
+    this.nexusAttackTimer = null; // 공격 패턴 타이머
+    this.nexusAnimTimer = null; // 애니메이션 타이머
+
+    // NEXUS v2: 고스트 뱀 + 라운드 시스템
+    this.nexusGhostSnakes = []; // 스캔에 맞아 생성된 빨간 고스트 뱀 (데드존)
+    this.nexusRound = 0; // 현재 라운드 (1-4)
+    this.nexusBinaryNodes = []; // 바이너리 노드 배열 [{x, y, value, element}]
+    this.nexusBinarySequence = []; // 목표 시퀀스 [0, 1, 1, 0...]
+    this.nexusBinaryCollected = []; // 수집한 시퀀스
+    this.nexusTotalNodesCollected = 0; // 총 수집한 노드 수 (10개 = 클리어)
+    this.nexusSequenceUI = null; // 시퀀스 UI
+
+    // 레거시 호환 (isMagnetarStage 체크용)
     this.magnetarMode = false;
-    this.magnetarPhase = 'none'; // 'none' | 'intro' | 'battle' | 'vulnerable' | 'victory'
-    this.magnetarPosition = null; // 보스 위치 (맵 중앙)
-    this.magnetarElement = null; // 보스 그래픽 컨테이너
-    this.magnetarCore = null; // 보스 코어 그래픽
-    this.magnetarShield = null; // 보호막 그래픽
-    this.magnetarHitCount = 0; // 보스 HIT 횟수 (4회 클리어)
-    this.magnetarVulnerable = false; // 코어 오픈 상태
-    this.magnetarControlsReversed = false; // (신규 패턴에서 미사용 기본값)
-    this.magnetarBeams = []; // 회전 빔 정보
-    this.magnetarBeamTimer = null; // 빔 업데이트 타이머
-    this.magnetarShockwaves = []; // 확산 충격파
-    this.magnetarShockwaveTimer = null; // 충격파 업데이트 타이머
-    this.magnetarShockwaveTickEvent = null; // 충격파 확장 타이머
-    this.magnetarCycleTimer = null; // 코어 오픈 사이클 타이머
+    this.magnetarControlsReversed = false;
 
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
@@ -585,6 +608,11 @@ export default class SnakeGame extends Phaser.Scene {
       // 튜토리얼 중에는 닷지 비활성화 (스킵만 됨)
       if (this.tutorialOpen) return;
 
+      // NEXUS v2: 대시 시스템 제거됨 - 바이너리 시퀀스로 대체
+      // if (this.nexusMode && this.nexusPhase !== 'intro' && this.nexusPhase !== 'victory') {
+      //   this.startNexusDashCharge();
+      // }
+
       // 탄막 보스 모드에서 회피 가능
       if (this.bulletBossMode && this.bulletBossPhase !== 'intro' && this.bulletBossPhase !== 'victory') {
         this.handleDodge();
@@ -594,6 +622,13 @@ export default class SnakeGame extends Phaser.Scene {
         this.handleDodge();
       }
     });
+
+    // NEXUS v2: 대시 시스템 제거됨 - 바이너리 시퀀스로 대체
+    // this.input.keyboard.on('keyup-SPACE', () => {
+    //   if (this.nexusMode && this.nexusDashCharging) {
+    //     this.executeNexusDash();
+    //   }
+    // });
 
     // K 키 (개발자 모드 - 더블 프레스)
     this.input.keyboard.on('keydown-K', () => {
@@ -756,6 +791,11 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   generateFood() {
+    // NEXUS 보스 모드에서는 먹이 생성 안함
+    if (this.nexusMode) {
+      return null;
+    }
+
     let foodPos;
     let validPosition = false;
 
@@ -1311,11 +1351,8 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
-    // EMP 레이저 충돌 체크 (Magnetar Phase 2)
-    if (this.isOnEMPBeam(newHead.x, newHead.y)) {
-      this.endGame();
-      return;
-    }
+    // EMP 레이저 충돌 체크 (Magnetar Phase 2) - 레거시, NEXUS로 대체됨
+    // NEXUS 충돌 체크는 아래 별도 블록에서 처리
 
     // 자기 몸 충돌 체크
     if (this.snake.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
@@ -1352,16 +1389,16 @@ export default class SnakeGame extends Phaser.Scene {
       }
     }
 
-    // Magnetar 보스 관련 충돌 체크
+    // Magnetar 보스 관련 충돌 체크 (레거시 - 사용 안함)
     if (this.magnetarMode) {
       // Phase 3: 보호막 생성기 충돌 체크
-      if (this.checkGeneratorCollision(newHead.x, newHead.y)) {
+      if (this.checkGeneratorCollision && this.checkGeneratorCollision(newHead.x, newHead.y)) {
         this.draw();
         return;
       }
 
       // Magnetar hazard check
-      if (this.checkMagnetarHazardCollision(newHead.x, newHead.y)) {
+      if (this.checkMagnetarHazardCollision && this.checkMagnetarHazardCollision(newHead.x, newHead.y)) {
         this.endGame();
         return;
       }
@@ -1376,6 +1413,18 @@ export default class SnakeGame extends Phaser.Scene {
           this.endGame();
           return;
         }
+      }
+    }
+
+    // NEXUS 보스 관련 충돌 체크
+    if (this.nexusMode && this.nexusPhase !== 'intro' && this.nexusPhase !== 'victory') {
+      // NEXUS v2: 바이너리 노드 충돌 체크
+      this.checkBinaryNodeCollision();
+
+      // NEXUS 위험 요소 충돌 체크 (고스트 뱀, 블록, 추적탄, EMP 서지, 지뢰)
+      if (this.checkNexusHazardCollision(newHead.x, newHead.y)) {
+        this.endGame();
+        return;
       }
     }
 
@@ -1417,8 +1466,8 @@ export default class SnakeGame extends Phaser.Scene {
       }
     }
 
-    // 먹이를 먹었는지 체크
-    if (newHead.x === this.food.x && newHead.y === this.food.y) {
+    // 먹이를 먹었는지 체크 (NEXUS 모드에서는 food가 null일 수 있음)
+    if (this.food && newHead.x === this.food.x && newHead.y === this.food.y) {
       this.triggerFogFlash();
 
       // 먹이 먹는 효과음 재생
@@ -7420,8 +7469,8 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 스피드 부스트 궤도는 별도 타이머에서 업데이트 (60fps 부드러운 애니메이션)
 
-    // 먹이 그리기 (보스 요소가 있으면 건너뛰기)
-    if (!this.bossElement && !this.fogBossMode) {
+    // 먹이 그리기 (보스 요소가 있거나 NEXUS 모드면 건너뛰기)
+    if (!this.bossElement && !this.fogBossMode && !this.nexusMode && this.food) {
       const isFinalFood = this.foodCount === 19; // 다음 먹이가 20번째 (마지막)
       this.graphics.fillStyle(isFinalFood ? 0x00ff00 : 0xff0000);
       this.graphics.fillCircle(
@@ -8598,8 +8647,10 @@ export default class SnakeGame extends Phaser.Scene {
     this.cleanupLaserTurrets();
     this.cleanupFloatingMines();
 
-    // Magnetar 보스 정리
-    this.cleanupMagnetar();
+    // NEXUS 보스 정리
+    if (this.nexusMode) {
+      this.cleanupNexus();
+    }
 
     // 뱀 초기화
     this.snake = [
@@ -8658,8 +8709,9 @@ export default class SnakeGame extends Phaser.Scene {
     // 스테이지 7에서 처음 진입 시 안개 인트로 실행
     this.startFogIntroIfNeeded();
 
-    // World 4 (Stage 13-15): 원형 독가스 자기장 시스템 활성화
-    if (shouldHaveGasZone(this.currentStage)) {
+    // World 4 (Stage 13-14): 원형 독가스 자기장 시스템 활성화
+    // Stage 15 (NEXUS 보스)는 인트로 연출 후 시작
+    if (shouldHaveGasZone(this.currentStage) && !isMagnetarStage(this.currentStage)) {
       this.time.delayedCall(1000, () => {
         this.startGasZone();
       });
@@ -8692,14 +8744,14 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // Magnetar 보스 스테이지 체크 (Stage 15)
+    // NEXUS 보스 스테이지 체크 (Stage 15)
     if (isMagnetarStage(this.currentStage)) {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
       this.moveTimer.paused = true;
       this.hideFoodGraphics();
       this.time.delayedCall(500, () => {
-        this.startMagnetar();
+        this.startNexusBoss();
       });
     }
   }
@@ -15915,333 +15967,2014 @@ export default class SnakeGame extends Phaser.Scene {
     return this.floatingMines.some(m => m.x === x && m.y === y);
   }
 
-  // ========== Magnetar 보스 시스템 (Stage 15) ==========
+  // ========== NEXUS 보스 시스템 (Stage 15) ==========
 
-  startMagnetar() {
-    console.log('[Magnetar] Starting boss battle');
-    this.magnetarMode = true;
-    this.magnetarPhase = 'intro';
-    this.magnetarHitCount = 0;
-    this.magnetarControlsReversed = false;
-    this.magnetarPosition = {
+  startNexusBoss() {
+    console.log('[NEXUS] Starting boss battle');
+    this.nexusMode = true;
+    this.nexusPhase = 'intro';
+    this.nexusHitCount = 0;
+    this.nexusVulnerable = false;
+    this.nexusPosition = {
       x: Math.floor(this.cols / 2),
       y: Math.floor(this.rows / 2)
     };
 
-    // 보스 이미지 생성
-    this.createMagnetarBoss();
-
-    // 인트로 시퀀스
-    this.showMagnetarIntro();
-  }
-
-  createMagnetarBoss() {
-    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
-    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-
-    // 보스 컨테이너
-    this.magnetarElement = this.add.container(centerX, centerY);
-
-    // 중앙 코어 (자석 모양)
-    const core = this.add.graphics();
-    core.fillStyle(0x444466, 1);
-    core.fillCircle(0, 0, 25);
-    core.fillStyle(0x6666aa, 1);
-    core.fillCircle(0, 0, 18);
-    this.magnetarElement.add(core);
-
-    // N극 (파란색 위)
-    const northPole = this.add.graphics();
-    northPole.fillStyle(0x00aaff, 1);
-    northPole.fillRect(-12, -30, 24, 12);
-    northPole.fillStyle(0x00ddff, 1);
-    northPole.fillRect(-8, -28, 16, 8);
-    this.magnetarElement.add(northPole);
-
-    // S극 (빨간색 아래)
-    const southPole = this.add.graphics();
-    southPole.fillStyle(0xff4400, 1);
-    southPole.fillRect(-12, 18, 24, 12);
-    southPole.fillStyle(0xff6644, 1);
-    southPole.fillRect(-8, 20, 16, 8);
-    this.magnetarElement.add(southPole);
-
-    // N/S 라벨
-    const nLabel = this.add.text(0, -24, 'N', {
-      fontSize: '10px',
-      fontFamily: 'monospace',
-      color: '#ffffff'
-    }).setOrigin(0.5);
-    this.magnetarElement.add(nLabel);
-
-    const sLabel = this.add.text(0, 24, 'S', {
-      fontSize: '10px',
-      fontFamily: 'monospace',
-      color: '#ffffff'
-    }).setOrigin(0.5);
-    this.magnetarElement.add(sLabel);
-
-    // 자기장 링 효과
-    this.magnetarRings = [];
-    for (let i = 0; i < 3; i++) {
-      const ring = this.add.graphics();
-      ring.lineStyle(2, i === 0 ? 0x00aaff : (i === 1 ? 0xff4400 : 0xaa44ff), 0.5);
-      ring.strokeCircle(0, 0, 35 + i * 15);
-      this.magnetarElement.add(ring);
-      this.magnetarRings.push(ring);
+    // 가스존 일시 정지
+    if (this.gasZoneTimer) {
+      this.gasZoneTimer.paused = true;
     }
 
-    // 펄스 애니메이션
+    // 인트로 시퀀스 시작
+    this.showNexusIntro();
+  }
+
+  createNexusBoss() {
+    const centerX = this.nexusPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.nexusPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 보스 컨테이너
+    this.nexusElement = this.add.container(centerX, centerY);
+    this.nexusElement.setDepth(100);
+
+    // 외곽 육각형 (회전)
+    this.nexusHexagon = this.add.graphics();
+    this.nexusHexagon.lineStyle(3, 0x00ffff, 0.8);
+    const hexPoints = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2 - Math.PI / 2;
+      hexPoints.push({ x: Math.cos(angle) * 45, y: Math.sin(angle) * 45 });
+    }
+    this.nexusHexagon.beginPath();
+    this.nexusHexagon.moveTo(hexPoints[0].x, hexPoints[0].y);
+    for (let i = 1; i < 6; i++) {
+      this.nexusHexagon.lineTo(hexPoints[i].x, hexPoints[i].y);
+    }
+    this.nexusHexagon.closePath();
+    this.nexusHexagon.strokePath();
+    this.nexusElement.add(this.nexusHexagon);
+
+    // 내부 육각형 (반대로 회전)
+    this.nexusInnerHex = this.add.graphics();
+    this.nexusInnerHex.lineStyle(2, 0xff00ff, 0.6);
+    this.nexusInnerHex.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const x = Math.cos(angle) * 30;
+      const y = Math.sin(angle) * 30;
+      if (i === 0) this.nexusInnerHex.moveTo(x, y);
+      else this.nexusInnerHex.lineTo(x, y);
+    }
+    this.nexusInnerHex.closePath();
+    this.nexusInnerHex.strokePath();
+    this.nexusElement.add(this.nexusInnerHex);
+
+    // 중앙 코어
+    this.nexusCore = this.add.graphics();
+    this.nexusCore.fillStyle(0x4400aa, 1);
+    this.nexusCore.fillCircle(0, 0, 20);
+    this.nexusCore.fillStyle(0x00ffff, 0.8);
+    this.nexusCore.fillCircle(0, 0, 12);
+    this.nexusCore.fillStyle(0xffffff, 0.9);
+    this.nexusCore.fillCircle(0, 0, 5);
+    this.nexusElement.add(this.nexusCore);
+
+    // 데이터 링 3개
+    this.nexusRings = [];
+    const ringColors = [0x00ffff, 0xff00ff, 0x00ff88];
+    for (let i = 0; i < 3; i++) {
+      const ring = this.add.graphics();
+      ring.lineStyle(1.5, ringColors[i], 0.4);
+      ring.strokeCircle(0, 0, 55 + i * 12);
+      this.nexusElement.add(ring);
+      this.nexusRings.push({ graphics: ring, angle: i * 0.5 });
+    }
+
+    // 코어 펄스 애니메이션
     this.tweens.add({
-      targets: this.magnetarElement,
-      scaleX: 1.1,
-      scaleY: 1.1,
+      targets: this.nexusElement,
+      scaleX: 1.15,
+      scaleY: 1.15,
       duration: 1000,
       yoyo: true,
       repeat: -1,
       ease: 'Sine.easeInOut'
     });
 
-    // 회전 애니메이션 (링)
-    this.magnetarRingTimer = this.time.addEvent({
-      delay: 50,
-      callback: () => {
-        this.magnetarRings.forEach((ring, i) => {
-          ring.rotation += (i % 2 === 0 ? 0.02 : -0.02);
-        });
-      },
+    // 회전 애니메이션 타이머
+    this.nexusAnimTimer = this.time.addEvent({
+      delay: 30,
+      callback: () => this.updateNexusAnimation(),
       loop: true
     });
 
-    this.magnetarElement.setDepth(100);
-    this.magnetarElement.setAlpha(0);
+    this.nexusElement.setAlpha(0);
+
+    // 글리치 효과 타이머
+    this.nexusGlitchTimer = this.time.addEvent({
+      delay: 2000 + Math.random() * 3000,
+      callback: () => this.showNexusGlitch(),
+      loop: true
+    });
   }
 
-  showMagnetarIntro() {
-    const { width, height } = this.cameras.main;
+  updateNexusAnimation() {
+    if (!this.nexusElement || !this.nexusElement.active) return;
 
-    // 화면 어둡게
-    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7);
-    overlay.setDepth(90);
+    // 외곽 육각형 회전
+    if (this.nexusHexagon) {
+      this.nexusHexagon.rotation += 0.005;
+    }
+    // 내부 육각형 반대 회전
+    if (this.nexusInnerHex) {
+      this.nexusInnerHex.rotation -= 0.008;
+    }
+    // 데이터 링 회전
+    if (this.nexusRings) {
+      this.nexusRings.forEach((ring, i) => {
+        ring.angle += 0.01 * (i % 2 === 0 ? 1 : -1);
+        if (ring.graphics) {
+          ring.graphics.rotation = ring.angle;
+        }
+      });
+    }
+  }
 
-    // WARNING 텍스트
-    const warningText = this.add.text(width / 2, height / 2 - 80, '⚡ WARNING ⚡', {
-      fontSize: '36px',
-      fontFamily: 'monospace',
-      color: '#ff4400'
-    }).setOrigin(0.5).setDepth(95);
+  showNexusGlitch() {
+    if (!this.nexusElement || !this.nexusElement.active || this.nexusPhase === 'victory') return;
+
+    // 글리치 효과: 위치 떨림
+    const originalX = this.nexusElement.x;
+    const originalY = this.nexusElement.y;
 
     this.tweens.add({
-      targets: warningText,
-      alpha: 0.3,
-      duration: 300,
+      targets: this.nexusElement,
+      x: originalX + Phaser.Math.Between(-5, 5),
+      y: originalY + Phaser.Math.Between(-5, 5),
+      duration: 50,
       yoyo: true,
-      repeat: 4
+      repeat: 2,
+      onComplete: () => {
+        if (this.nexusElement && this.nexusElement.active) {
+          this.nexusElement.setPosition(originalX, originalY);
+        }
+      }
     });
+  }
 
-    // 카메라 쉐이크
-    this.cameras.main.shake(500, 0.01);
+  showNexusIntro() {
+    const { width, height } = this.cameras.main;
+    this.nexusIntroElements = [];
 
-    // 보스 등장
-    this.time.delayedCall(1500, () => {
+    // 화면 어둡게
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.85);
+    overlay.setDepth(90);
+    this.nexusIntroElements.push(overlay);
+
+    // 1단계: 경고 + 글리치 (0s)
+    const alertText = this.add.text(width / 2, height / 2 - 80, '[ SYSTEM ALERT ]', {
+      fontSize: '32px',
+      fontFamily: 'monospace',
+      color: '#ff0000'
+    }).setOrigin(0.5).setDepth(95);
+    this.nexusIntroElements.push(alertText);
+
+    this.tweens.add({
+      targets: alertText,
+      alpha: 0.2,
+      duration: 150,
+      yoyo: true,
+      repeat: 3
+    });
+    this.cameras.main.shake(300, 0.01);
+
+    // 2단계: 플래시 + 보스 등장 (1s)
+    this.time.delayedCall(1000, () => {
+      this.cameras.main.flash(200, 0, 255, 255);
+      this.createNexusBoss();
+
       // 보스 페이드인
       this.tweens.add({
-        targets: this.magnetarElement,
+        targets: this.nexusElement,
         alpha: 1,
         duration: 500,
         ease: 'Power2'
       });
 
-      // 자기장 플래시 효과
-      const flash = this.add.graphics();
-      flash.fillStyle(0x00aaff, 0.5);
-      flash.fillCircle(width / 2, height / 2 + 30, 200);
-      flash.setDepth(91);
+      // 등장 파티클
+      const centerX = width / 2;
+      const centerY = height / 2 + 30;
+      for (let i = 0; i < 8; i++) {
+        const particle = this.add.circle(centerX, centerY, 3, 0x00ffff);
+        particle.setDepth(92);
+        const angle = (i / 8) * Math.PI * 2;
+        this.tweens.add({
+          targets: particle,
+          x: centerX + Math.cos(angle) * 80,
+          y: centerY + Math.sin(angle) * 80,
+          alpha: 0,
+          duration: 400,
+          onComplete: () => particle.destroy()
+        });
+      }
+    });
+
+    // 3단계: 타이틀 표시 (2s)
+    this.time.delayedCall(2000, () => {
+      alertText.destroy();
+
+      // "NEXUS ONLINE" 타이틀
+      const titleText = this.add.text(width / 2, height / 2 - 50, 'NEXUS ONLINE', {
+        fontSize: '48px',
+        fontFamily: 'monospace',
+        color: '#00ffff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(96);
+      titleText.setScale(0.5);
+      titleText.setAlpha(0);
 
       this.tweens.add({
-        targets: flash,
+        targets: titleText,
+        scaleX: 1,
+        scaleY: 1,
+        alpha: 1,
+        duration: 400,
+        ease: 'Back.easeOut'
+      });
+
+      // HP 바 생성
+      this.createNexusHPBar();
+
+      // 4단계: 인트로 종료 + 튜토리얼 (3.5s)
+      this.time.delayedCall(1500, () => {
+        overlay.destroy();
+        titleText.destroy();
+        this.nexusIntroElements = [];
+
+        // 게임 시작
+        this.nexusPhase = 'phase1';
+        this.moveTimer.paused = false;
+
+        // 자기장 시작
+        this.startGasZone();
+
+        // 튜토리얼 표시
+        this.showNexusTutorial();
+      });
+    });
+  }
+
+  showNexusGlitchOverlay() {
+    const { width, height } = this.cameras.main;
+
+    // 스캔라인 효과
+    for (let i = 0; i < 5; i++) {
+      const line = this.add.rectangle(width / 2, Math.random() * height, width, 2, 0x00ffff, 0.3);
+      line.setDepth(89);
+      this.tweens.add({
+        targets: line,
+        y: line.y + 50,
         alpha: 0,
         duration: 500,
-        onComplete: () => flash.destroy()
+        delay: i * 100,
+        onComplete: () => line.destroy()
       });
+    }
+  }
+
+  showNexusDialogue(text, x, y, callback) {
+    const dialogueText = this.add.text(x, y, '', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(95);
+    this.nexusIntroElements.push(dialogueText);
+
+    // 타자기 효과
+    let charIndex = 0;
+    const typeTimer = this.time.addEvent({
+      delay: 40,
+      callback: () => {
+        charIndex++;
+        dialogueText.setText('> ' + text.substring(0, charIndex) + '_');
+        if (charIndex >= text.length) {
+          typeTimer.destroy();
+          // 커서 깜빡임
+          this.tweens.add({
+            targets: dialogueText,
+            alpha: 0.7,
+            duration: 300,
+            yoyo: true,
+            repeat: 2,
+            onComplete: () => {
+              dialogueText.setText('> ' + text);
+              if (callback) callback();
+            }
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  // NEXUS v2: 튜토리얼 표시
+  showNexusTutorial() {
+    const { width, height } = this.cameras.main;
+
+    // 반투명 배경
+    const tutorialBg = this.add.rectangle(width / 2, height / 2, width - 100, 280, 0x000000, 0.85);
+    tutorialBg.setStrokeStyle(3, 0x00ffff);
+    tutorialBg.setDepth(300);
+
+    // 타이틀
+    const title = this.add.text(width / 2, height / 2 - 100, '🎯 HOW TO DEFEAT NEXUS 🎯', {
+      fontSize: '24px',
+      fontFamily: 'monospace',
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(301);
+
+    // 설명 텍스트
+    const instructions = [
+      '1️⃣ 맵에 나타나는 숫자 노드(0/1)를 순서대로 수집하세요',
+      '2️⃣ 노드 위의 [1], [2]... 순서를 따라가세요',
+      '3️⃣ 스캔 빔(보라색)에 맞으면 해당 위치에 🔥 생성!',
+      '4️⃣ 🔥 에 닿으면 사망! 자기장(가장자리)도 주의!',
+      '',
+      '📋 4라운드 클리어 = 승리! (1→2→3→4개 노드 수집)'
+    ];
+
+    const instructionTexts = [];
+    instructions.forEach((text, idx) => {
+      const t = this.add.text(width / 2, height / 2 - 50 + idx * 28, text, {
+        fontSize: '14px',
+        fontFamily: 'monospace',
+        color: '#ffffff'
+      }).setOrigin(0.5).setDepth(301);
+      instructionTexts.push(t);
     });
 
-    // 보스 대사
-    this.time.delayedCall(2500, () => {
-      const dialogue1 = this.add.text(width / 2, height / 2 + 100, '"I am MAGNETAR..."', {
-        fontSize: '20px',
+    // 시작 버튼
+    const startBtn = this.add.text(width / 2, height / 2 + 100, '[ SPACE 또는 ENTER로 시작 ]', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#00ff00'
+    }).setOrigin(0.5).setDepth(301);
+
+    // 깜빡임 효과
+    this.tweens.add({
+      targets: startBtn,
+      alpha: 0.5,
+      duration: 500,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 입력 대기
+    const startGame = () => {
+      // 정리
+      tutorialBg.destroy();
+      title.destroy();
+      instructionTexts.forEach(t => t.destroy());
+      startBtn.destroy();
+
+      // 게임 시작
+      this.moveTimer.paused = false;
+      this.startNexusRound(1);
+    };
+
+    this.input.keyboard.once('keydown-SPACE', startGame);
+    this.input.keyboard.once('keydown-ENTER', startGame);
+  }
+
+  createNexusHPBar() {
+    const { width } = this.cameras.main;
+
+    // HP 바 컨테이너
+    this.nexusHPBar = this.add.container(width / 2, 25);
+    this.nexusHPBar.setDepth(150);
+
+    // 배경
+    const bgBar = this.add.rectangle(0, 0, 200, 16, 0x222222, 0.8);
+    bgBar.setStrokeStyle(2, 0x00ffff);
+    this.nexusHPBar.add(bgBar);
+
+    // HP 바 (4칸)
+    this.nexusHPSegments = [];
+    for (let i = 0; i < 4; i++) {
+      const segment = this.add.rectangle(-75 + i * 50, 0, 45, 10, 0x00ffff, 1);
+      this.nexusHPBar.add(segment);
+      this.nexusHPSegments.push(segment);
+    }
+
+    // 라벨
+    const label = this.add.text(0, -20, 'NEXUS', {
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      color: '#00ffff'
+    }).setOrigin(0.5);
+    this.nexusHPBar.add(label);
+
+    // NEXUS v2: 라운드 표시
+    this.nexusRoundLabel = this.add.text(0, 20, 'ROUND 1/4', {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      color: '#ff00ff'
+    }).setOrigin(0.5);
+    this.nexusHPBar.add(this.nexusRoundLabel);
+  }
+
+  // NEXUS v2: 라운드 UI 업데이트
+  updateNexusRoundUI() {
+    if (this.nexusRoundLabel) {
+      this.nexusRoundLabel.setText(`ROUND ${this.nexusRound}/4`);
+
+      // 라운드 변경 애니메이션
+      this.tweens.add({
+        targets: this.nexusRoundLabel,
+        scaleX: 1.2,
+        scaleY: 1.2,
+        duration: 200,
+        yoyo: true
+      });
+    }
+  }
+
+  createNexusDashUI() {
+    const { width, height } = this.cameras.main;
+
+    // 대시 게이지 컨테이너
+    this.nexusDashUI = this.add.container(width / 2, height - 30);
+    this.nexusDashUI.setDepth(150);
+
+    // 배경 원
+    const bgCircle = this.add.circle(0, 0, 20, 0x222222, 0.6);
+    bgCircle.setStrokeStyle(2, 0x00ffff);
+    this.nexusDashUI.add(bgCircle);
+
+    // 차지 게이지 (아크)
+    this.nexusDashGauge = this.add.graphics();
+    this.nexusDashUI.add(this.nexusDashGauge);
+
+    // "DASH" 텍스트
+    this.nexusDashText = this.add.text(0, 0, 'DASH', {
+      fontSize: '8px',
+      fontFamily: 'monospace',
+      color: '#00ffff'
+    }).setOrigin(0.5);
+    this.nexusDashUI.add(this.nexusDashText);
+  }
+
+  // ========== NEXUS Phase 시스템 ==========
+
+  startNexusPhase1() {
+    console.log('[NEXUS] Phase 1: Scan Protocol');
+    this.nexusPhase = 'phase1';
+
+    // Phase 표시 업데이트
+    if (this.nexusPhaseLabel) {
+      this.nexusPhaseLabel.setText('PHASE 1: SCAN PROTOCOL');
+    }
+    this.showNexusPhaseText('PHASE 1: SCAN PROTOCOL');
+
+    // 가스존 재개 (느린 속도)
+    if (this.gasZoneTimer) {
+      this.gasZoneTimer.paused = false;
+    }
+
+    // 스캔 빔 사이클 시작
+    this.time.delayedCall(2000, () => {
+      this.startScanBeamCycle();
+    });
+
+    // 스캔 3회 후 vulnerable
+    this.nexusScanCount = 0;
+  }
+
+  startScanBeamCycle() {
+    if (this.nexusPhase !== 'phase1' || !this.nexusMode) return;
+
+    this.nexusScanCount++;
+
+    // 스캔 방향 결정 (수직/수평 번갈아)
+    const isVertical = this.nexusScanCount % 2 === 1;
+
+    // 경고 표시
+    this.showScanWarning(isVertical);
+
+    // 1초 후 레이저 발사
+    this.time.delayedCall(1000, () => {
+      if (!this.nexusMode) return;
+      this.fireScanBeam(isVertical);
+
+      // NEXUS v2: 스캔이 계속 반복됨 (6초 간격)
+      this.time.delayedCall(6000, () => {
+        if (this.nexusMode && this.nexusPhase !== 'victory') {
+          this.startScanBeamCycle();
+        }
+      });
+    });
+  }
+
+  showScanWarning(isVertical) {
+    const { width, height } = this.cameras.main;
+    const centerX = this.nexusPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.nexusPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 경고 텍스트
+    const warnText = this.add.text(width / 2, 90, '⚠ SCAN INCOMING ⚠', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#ff0000'
+    }).setOrigin(0.5).setDepth(200);
+
+    this.tweens.add({
+      targets: warnText,
+      alpha: 0.3,
+      duration: 150,
+      yoyo: true,
+      repeat: 3,
+      onComplete: () => warnText.destroy()
+    });
+
+    // 경고선
+    this.nexusScanWarning = this.add.graphics();
+    this.nexusScanWarning.setDepth(150);
+
+    if (isVertical) {
+      // 수직 경고선 (좌에서 우로 이동)
+      this.nexusScanWarning.lineStyle(3, 0xff0000, 0.5);
+      this.nexusScanWarning.lineBetween(0, this.gameAreaY, 0, height);
+    } else {
+      // 수평 경고선 (위에서 아래로 이동)
+      this.nexusScanWarning.lineStyle(3, 0xff0000, 0.5);
+      this.nexusScanWarning.lineBetween(0, this.gameAreaY, width, this.gameAreaY);
+    }
+
+    // 경고선 깜빡임
+    this.tweens.add({
+      targets: this.nexusScanWarning,
+      alpha: 0.2,
+      duration: 100,
+      yoyo: true,
+      repeat: 4,
+      onComplete: () => {
+        if (this.nexusScanWarning) {
+          this.nexusScanWarning.destroy();
+          this.nexusScanWarning = null;
+        }
+      }
+    });
+  }
+
+  fireScanBeam(isVertical) {
+    const { width, height } = this.cameras.main;
+
+    // 플래시 효과
+    this.cameras.main.flash(100, 255, 0, 255);
+
+    // 레이저 그래픽
+    const laser = this.add.graphics();
+    laser.setDepth(160);
+
+    // 고스트 뱀 생성 여부 추적 (한 번의 스캔에 한 번만 생성)
+    let ghostCreated = false;
+
+    if (isVertical) {
+      // 수직 레이저 (좌에서 우로 스캔)
+      laser.fillStyle(0xff00ff, 0.9);
+      laser.fillRect(0, this.gameAreaY, 16, height - this.gameAreaY);
+
+      this.nexusActiveLaser = { graphics: laser, type: 'vertical', x: 0 };
+
+      // 이동 애니메이션
+      this.tweens.add({
+        targets: this.nexusActiveLaser,
+        x: width,
+        duration: 2000,
+        ease: 'Linear',
+        onUpdate: () => {
+          if (this.nexusActiveLaser && this.nexusActiveLaser.graphics) {
+            this.nexusActiveLaser.graphics.clear();
+            this.nexusActiveLaser.graphics.fillStyle(0xff00ff, 0.9);
+            this.nexusActiveLaser.graphics.fillRect(this.nexusActiveLaser.x - 8, this.gameAreaY, 16, height - this.gameAreaY);
+
+            // NEXUS v2: 스캔 빔이 뱀 머리 위를 지나가면 고스트 뱀 생성
+            if (!ghostCreated && this.snake && this.snake.length > 0) {
+              const head = this.snake[0];
+              const headPixelX = head.x * this.gridSize + this.gridSize / 2;
+              if (Math.abs(this.nexusActiveLaser.x - headPixelX) < 16) {
+                this.createGhostSnake();
+                ghostCreated = true;
+              }
+            }
+          }
+        },
+        onComplete: () => {
+          if (this.nexusActiveLaser && this.nexusActiveLaser.graphics) {
+            this.nexusActiveLaser.graphics.destroy();
+            this.nexusActiveLaser = null;
+          }
+        }
+      });
+    } else {
+      // 수평 레이저 (위에서 아래로 스캔)
+      laser.fillStyle(0xff00ff, 0.9);
+      laser.fillRect(0, this.gameAreaY, width, 16);
+
+      this.nexusActiveLaser = { graphics: laser, type: 'horizontal', y: this.gameAreaY };
+
+      // 이동 애니메이션
+      this.tweens.add({
+        targets: this.nexusActiveLaser,
+        y: height,
+        duration: 2000,
+        ease: 'Linear',
+        onUpdate: () => {
+          if (this.nexusActiveLaser && this.nexusActiveLaser.graphics) {
+            this.nexusActiveLaser.graphics.clear();
+            this.nexusActiveLaser.graphics.fillStyle(0xff00ff, 0.9);
+            this.nexusActiveLaser.graphics.fillRect(0, this.nexusActiveLaser.y - 8, width, 16);
+
+            // NEXUS v2: 스캔 빔이 뱀 머리 위를 지나가면 고스트 뱀 생성
+            if (!ghostCreated && this.snake && this.snake.length > 0) {
+              const head = this.snake[0];
+              const headPixelY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+              if (Math.abs(this.nexusActiveLaser.y - headPixelY) < 16) {
+                this.createGhostSnake();
+                ghostCreated = true;
+              }
+            }
+          }
+        },
+        onComplete: () => {
+          if (this.nexusActiveLaser && this.nexusActiveLaser.graphics) {
+            this.nexusActiveLaser.graphics.destroy();
+            this.nexusActiveLaser = null;
+          }
+        }
+      });
+    }
+  }
+
+  // NEXUS v2: 불타는 타일 생성 (스캔 시 뱀의 현재 위치에 불 효과)
+  createGhostSnake() {
+    if (!this.snake || this.snake.length === 0) return;
+
+    console.log('[NEXUS] Burning tiles created!');
+
+    // 뱀의 현재 위치에 불타는 타일 생성
+    this.snake.forEach((seg, idx) => {
+      this.createBurningTile(seg.x, seg.y);
+    });
+
+    // 생성 효과음 및 시각적 피드백
+    const { width } = this.cameras.main;
+    const scanText = this.add.text(width / 2, 100, '🔥 SCANNED! 🔥', {
+      fontSize: '20px',
+      fontFamily: 'monospace',
+      color: '#ff6600'
+    }).setOrigin(0.5).setDepth(250);
+
+    this.tweens.add({
+      targets: scanText,
+      alpha: 0,
+      y: 80,
+      duration: 1500,
+      onComplete: () => scanText.destroy()
+    });
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(200, 0.01);
+  }
+
+  // 개별 불타는 타일 생성
+  createBurningTile(tileX, tileY) {
+    const px = tileX * this.gridSize + this.gridSize / 2;
+    const py = tileY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 불꽃 컨테이너
+    const container = this.add.container(px, py).setDepth(75);
+
+    // 바깥쪽 불꽃 (주황색)
+    const outerFlame = this.add.graphics();
+    outerFlame.fillStyle(0xff6600, 0.7);
+    outerFlame.fillCircle(0, 0, this.gridSize / 2 + 2);
+    container.add(outerFlame);
+
+    // 안쪽 불꽃 (빨간색)
+    const innerFlame = this.add.graphics();
+    innerFlame.fillStyle(0xff0000, 0.8);
+    innerFlame.fillCircle(0, 0, this.gridSize / 2 - 2);
+    container.add(innerFlame);
+
+    // 중심 불꽃 (노란색)
+    const coreFlame = this.add.graphics();
+    coreFlame.fillStyle(0xffff00, 0.9);
+    coreFlame.fillCircle(0, 0, this.gridSize / 4);
+    container.add(coreFlame);
+
+    // 불타는 타일 데이터
+    const burningTile = {
+      x: tileX,
+      y: tileY,
+      container: container,
+      outerFlame: outerFlame,
+      innerFlame: innerFlame,
+      coreFlame: coreFlame,
+      flickerPhase: Math.random() * Math.PI * 2
+    };
+
+    // 고스트 뱀 배열에 추가 (호환성 유지)
+    if (!this.nexusGhostSnakes) this.nexusGhostSnakes = [];
+    this.nexusGhostSnakes.push({ body: [{ x: tileX, y: tileY }], container: container });
+
+    // 불꽃 흔들림 애니메이션
+    this.tweens.add({
+      targets: container,
+      scaleX: { from: 0.9, to: 1.1 },
+      scaleY: { from: 1.1, to: 0.9 },
+      duration: 200 + Math.random() * 100,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    // 불꽃 깜빡임
+    this.tweens.add({
+      targets: [outerFlame, innerFlame],
+      alpha: { from: 0.5, to: 0.9 },
+      duration: 150 + Math.random() * 100,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // 초기 불꽃 폭발 효과
+    container.setScale(0);
+    this.tweens.add({
+      targets: container,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 300,
+      ease: 'Back.easeOut'
+    });
+
+    return burningTile;
+  }
+
+  // ========== NEXUS v2: 라운드 시스템 ==========
+
+  startNexusRound(roundNum) {
+    if (!this.nexusMode) return;
+
+    console.log(`[NEXUS] Starting Round ${roundNum}`);
+    this.nexusRound = roundNum;
+    this.nexusBinaryCollected = [];
+
+    const { width, height } = this.cameras.main;
+
+    // 라운드 시작 텍스트
+    const roundText = this.add.text(width / 2, height / 2, `ROUND ${roundNum}/4`, {
+      fontSize: '36px',
+      fontFamily: 'monospace',
+      color: '#00ffff',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(250);
+
+    this.tweens.add({
+      targets: roundText,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      alpha: 0,
+      duration: 1500,
+      onComplete: () => roundText.destroy()
+    });
+
+    // 시퀀스 UI 생성/업데이트
+    this.createNexusSequenceUI(roundNum);
+
+    // 라운드 UI 업데이트
+    this.updateNexusRoundUI();
+
+    // 라운드별 공격 패턴 시작 (2초 후)
+    this.time.delayedCall(2000, () => {
+      this.startNexusRoundAttacks(roundNum);
+    });
+
+    // 바이너리 노드 스폰 (4초 후)
+    this.time.delayedCall(4000, () => {
+      this.spawnBinaryNodes(roundNum);
+    });
+  }
+
+  createNexusSequenceUI(nodeCount) {
+    const { width } = this.cameras.main;
+
+    // 기존 UI 제거
+    if (this.nexusSequenceUI) {
+      if (this.nexusSequenceUI.container) {
+        this.nexusSequenceUI.container.destroy();
+      }
+    }
+
+    // 목표 시퀀스 생성 (랜덤 0/1)
+    this.nexusBinarySequence = [];
+    for (let i = 0; i < nodeCount; i++) {
+      this.nexusBinarySequence.push(Math.random() < 0.5 ? 0 : 1);
+    }
+
+    // UI 컨테이너
+    const container = this.add.container(width / 2, 50).setDepth(200);
+
+    // 배경
+    const bgWidth = 180 + nodeCount * 40;
+    const bg = this.add.rectangle(0, 0, bgWidth, 36, 0x000000, 0.7);
+    bg.setStrokeStyle(2, 0x00ffff);
+    container.add(bg);
+
+    // "DECRYPT:" 라벨
+    const label = this.add.text(-bgWidth / 2 + 10, 0, 'DECRYPT:', {
+      fontSize: '14px',
+      fontFamily: 'monospace',
+      color: '#00ffff'
+    }).setOrigin(0, 0.5);
+    container.add(label);
+
+    // 시퀀스 슬롯들
+    const slots = [];
+    const startX = -bgWidth / 2 + 90;
+    for (let i = 0; i < nodeCount; i++) {
+      const slotBg = this.add.rectangle(startX + i * 35, 0, 28, 24, 0x333333, 0.8);
+      slotBg.setStrokeStyle(1, 0x666666);
+      container.add(slotBg);
+
+      const slotText = this.add.text(startX + i * 35, 0, '?', {
+        fontSize: '16px',
         fontFamily: 'monospace',
-        color: '#00ffff'
-      }).setOrigin(0.5).setDepth(95);
+        color: '#888888'
+      }).setOrigin(0.5);
+      container.add(slotText);
 
-      this.time.delayedCall(1500, () => {
-        dialogue1.setText('"Feel my magnetic force!"');
+      slots.push({ bg: slotBg, text: slotText, collected: false });
+    }
 
-        this.time.delayedCall(1500, () => {
-          // 인트로 종료, 게임 시작
-          overlay.destroy();
-          warningText.destroy();
-          dialogue1.destroy();
+    this.nexusSequenceUI = {
+      container: container,
+      slots: slots,
+      targetSequence: [...this.nexusBinarySequence]
+    };
+  }
 
-          this.magnetarPhase = 'phase1';
-          this.moveTimer.paused = false;
+  updateNexusSequenceUI() {
+    if (!this.nexusSequenceUI || !this.nexusSequenceUI.slots) return;
 
-          // Phase 1 시작
-          this.startMagnetarPhase1();
+    const slots = this.nexusSequenceUI.slots;
+
+    for (let i = 0; i < slots.length; i++) {
+      if (i < this.nexusBinaryCollected.length) {
+        const collected = this.nexusBinaryCollected[i];
+        const expected = this.nexusBinarySequence[i];
+        const isCorrect = collected === expected;
+
+        slots[i].text.setText(collected.toString());
+        slots[i].text.setColor(isCorrect ? '#00ff00' : '#ff0000');
+        slots[i].bg.setFillStyle(isCorrect ? 0x004400 : 0x440000, 0.8);
+        slots[i].bg.setStrokeStyle(2, isCorrect ? 0x00ff00 : 0xff0000);
+      }
+    }
+  }
+
+  spawnBinaryNodes(count) {
+    if (!this.nexusMode) return;
+
+    console.log(`[NEXUS] Spawning ${count} binary nodes`);
+
+    // 기존 노드 제거
+    if (this.nexusBinaryNodes) {
+      this.nexusBinaryNodes.forEach(node => {
+        if (node.element) node.element.destroy();
+      });
+      this.nexusBinaryNodes = [];
+    }
+
+    const safePositions = this.getSafePositionsForNodes(count);
+
+    for (let i = 0; i < count; i++) {
+      const pos = safePositions[i];
+      const value = this.nexusBinarySequence[i];
+
+      const node = this.createBinaryNode(pos.x, pos.y, value, i);
+      this.nexusBinaryNodes.push(node);
+    }
+  }
+
+  getSafePositionsForNodes(count) {
+    const positions = [];
+    const usedPositions = new Set();
+
+    // 뱀 위치 제외
+    this.snake.forEach(seg => usedPositions.add(`${seg.x},${seg.y}`));
+
+    // 고스트 뱀 위치 제외
+    if (this.nexusGhostSnakes) {
+      this.nexusGhostSnakes.forEach(ghost => {
+        ghost.body.forEach(seg => usedPositions.add(`${seg.x},${seg.y}`));
+      });
+    }
+
+    // 먹이 위치 제외
+    if (this.food) {
+      usedPositions.add(`${this.food.x},${this.food.y}`);
+    }
+
+    // 가스존 밖 영역만 사용
+    const centerX = this.gasZoneCenterX || this.cols / 2;
+    const centerY = this.gasZoneCenterY || this.rows / 2;
+    const radius = this.gasZoneRadius || 15;
+
+    for (let attempt = 0; attempt < 100 && positions.length < count; attempt++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.random() * (radius - 3) + 2;
+      const x = Math.floor(centerX + Math.cos(angle) * dist);
+      const y = Math.floor(centerY + Math.sin(angle) * dist);
+
+      if (x >= 1 && x < this.cols - 1 && y >= 1 && y < this.rows - 1) {
+        const key = `${x},${y}`;
+        if (!usedPositions.has(key)) {
+          usedPositions.add(key);
+          positions.push({ x, y });
+        }
+      }
+    }
+
+    return positions;
+  }
+
+  createBinaryNode(x, y, value, index) {
+    const px = x * this.gridSize + this.gridSize / 2;
+    const py = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const container = this.add.container(px, py).setDepth(100);
+
+    // 배경 원
+    const bg = this.add.circle(0, 0, 12, value === 1 ? 0x00ff00 : 0xff00ff, 0.8);
+    bg.setStrokeStyle(2, 0xffffff);
+    container.add(bg);
+
+    // 숫자 텍스트
+    const text = this.add.text(0, 0, value.toString(), {
+      fontSize: '16px',
+      fontFamily: 'monospace',
+      color: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(text);
+
+    // 순서 표시
+    const orderText = this.add.text(0, -20, `[${index + 1}]`, {
+      fontSize: '10px',
+      fontFamily: 'monospace',
+      color: '#ffff00'
+    }).setOrigin(0.5);
+    container.add(orderText);
+
+    // 펄스 애니메이션
+    this.tweens.add({
+      targets: container,
+      scaleX: 1.1,
+      scaleY: 1.1,
+      duration: 500,
+      yoyo: true,
+      repeat: -1
+    });
+
+    return {
+      x: x,
+      y: y,
+      value: value,
+      index: index,
+      element: container,
+      collected: false
+    };
+  }
+
+  checkBinaryNodeCollision() {
+    if (!this.nexusMode || !this.nexusBinaryNodes || this.nexusBinaryNodes.length === 0) return;
+
+    const head = this.snake[0];
+
+    for (const node of this.nexusBinaryNodes) {
+      if (node.collected) continue;
+      if (node.x === head.x && node.y === head.y) {
+        this.collectBinaryNode(node);
+        break;
+      }
+    }
+  }
+
+  collectBinaryNode(node) {
+    console.log(`[NEXUS] Collected node: ${node.value} (expected: ${this.nexusBinarySequence[this.nexusBinaryCollected.length]})`);
+
+    node.collected = true;
+
+    // 수집 효과
+    if (node.element) {
+      this.tweens.add({
+        targets: node.element,
+        scaleX: 1.5,
+        scaleY: 1.5,
+        alpha: 0,
+        duration: 300,
+        onComplete: () => {
+          if (node.element) node.element.destroy();
+        }
+      });
+    }
+
+    // 순서대로 수집했는지 확인
+    const expectedIndex = this.nexusBinaryCollected.length;
+    const expectedValue = this.nexusBinarySequence[expectedIndex];
+
+    this.nexusBinaryCollected.push(node.value);
+    this.updateNexusSequenceUI();
+
+    if (node.value !== expectedValue || node.index !== expectedIndex) {
+      // 잘못된 순서로 수집
+      this.handleWrongSequence();
+    } else {
+      // 올바른 순서
+      this.showCorrectFeedback();
+
+      // 모든 노드 수집 완료 체크
+      if (this.nexusBinaryCollected.length === this.nexusRound) {
+        this.handleRoundComplete();
+      }
+    }
+  }
+
+  handleWrongSequence() {
+    console.log('[NEXUS] Wrong sequence!');
+
+    const { width, height } = this.cameras.main;
+
+    // 경고 텍스트
+    const wrongText = this.add.text(width / 2, height / 2, 'SEQUENCE ERROR!', {
+      fontSize: '28px',
+      fontFamily: 'monospace',
+      color: '#ff0000',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(250);
+
+    this.cameras.main.shake(300, 0.02);
+
+    this.tweens.add({
+      targets: wrongText,
+      alpha: 0,
+      y: height / 2 - 30,
+      duration: 1500,
+      onComplete: () => wrongText.destroy()
+    });
+
+    // 시퀀스 리셋
+    this.nexusBinaryCollected = [];
+    this.time.delayedCall(1000, () => {
+      // 노드 재스폰
+      this.spawnBinaryNodes(this.nexusRound);
+      this.createNexusSequenceUI(this.nexusRound);
+    });
+  }
+
+  showCorrectFeedback() {
+    const { width } = this.cameras.main;
+
+    const correctText = this.add.text(width / 2, 80, '+1', {
+      fontSize: '20px',
+      fontFamily: 'monospace',
+      color: '#00ff00'
+    }).setOrigin(0.5).setDepth(250);
+
+    this.tweens.add({
+      targets: correctText,
+      y: 60,
+      alpha: 0,
+      duration: 800,
+      onComplete: () => correctText.destroy()
+    });
+  }
+
+  handleRoundComplete() {
+    console.log(`[NEXUS] Round ${this.nexusRound} complete!`);
+
+    const { width, height } = this.cameras.main;
+
+    this.nexusTotalNodesCollected += this.nexusRound;
+
+    // 라운드 클리어 텍스트
+    const clearText = this.add.text(width / 2, height / 2, 'DECRYPTED!', {
+      fontSize: '32px',
+      fontFamily: 'monospace',
+      color: '#00ff00',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(250);
+
+    this.cameras.main.flash(200, 0, 255, 0);
+
+    this.tweens.add({
+      targets: clearText,
+      scaleX: 1.3,
+      scaleY: 1.3,
+      alpha: 0,
+      duration: 1500,
+      onComplete: () => clearText.destroy()
+    });
+
+    // 보스 HIT 처리
+    this.handleNexusHit();
+
+    // 다음 라운드 또는 승리
+    this.time.delayedCall(2000, () => {
+      if (this.nexusTotalNodesCollected >= 10) {
+        // 10개 모두 수집 = 클리어!
+        this.showNexusVictory();
+      } else if (this.nexusRound < 4) {
+        // 다음 라운드
+        this.startNexusRound(this.nexusRound + 1);
+      }
+    });
+  }
+
+  startNexusRoundAttacks(roundNum) {
+    if (!this.nexusMode) return;
+
+    // NEXUS v2: 스캔 빔만 사용 (단순화)
+    // 라운드가 올라갈수록 가스존이 더 빨리 축소
+    this.startScanBeamCycle();
+
+    // 라운드 4에서 가스존 가속
+    if (roundNum === 4) {
+      this.gasZoneExpandInterval = 5000; // 10초 → 5초
+    }
+
+  }
+
+  // NEXUS v2: 데이터 블록 비 시작 (기존 spawnDataBlocks 래퍼)
+  startDataBlockRain() {
+    if (!this.nexusMode) return;
+
+    // 반복 타이머로 데이터 블록 스폰
+    this.nexusDataStormTimer = this.time.addEvent({
+      delay: 3000,
+      callback: () => {
+        if (this.nexusMode && this.nexusPhase !== 'victory') {
+          this.spawnDataBlocks();
+        }
+      },
+      loop: true
+    });
+
+    // 즉시 한 번 스폰
+    this.spawnDataBlocks();
+  }
+
+  // NEXUS v2: 추적탄 시작 (기존 fireTrackers 래퍼)
+  startTrackerMissiles() {
+    if (!this.nexusMode) return;
+
+    // 반복 타이머로 추적탄 발사
+    this.nexusTrackerFireTimer = this.time.addEvent({
+      delay: 5000,
+      callback: () => {
+        if (this.nexusMode && this.nexusPhase !== 'victory') {
+          this.fireTrackers();
+        }
+      },
+      loop: true
+    });
+
+    // 즉시 한 번 발사
+    this.fireTrackers();
+  }
+
+  handleNexusHit() {
+    this.nexusHitCount++;
+    console.log(`[NEXUS] HIT ${this.nexusHitCount}/4`);
+
+    const { width, height } = this.cameras.main;
+
+    // HIT 텍스트
+    const hitText = this.add.text(width / 2, height / 2 + 50, `HIT ${this.nexusHitCount}/4!`, {
+      fontSize: '28px',
+      fontFamily: 'monospace',
+      color: '#ffff00',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(250);
+
+    this.tweens.add({
+      targets: hitText,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      alpha: 0,
+      duration: 1500,
+      onComplete: () => hitText.destroy()
+    });
+
+    // HP 바 업데이트
+    this.updateNexusHPBar();
+
+    // 보스 피격 효과
+    if (this.nexusElement) {
+      this.tweens.add({
+        targets: this.nexusElement,
+        alpha: 0.3,
+        duration: 100,
+        yoyo: true,
+        repeat: 3
+      });
+    }
+
+    this.cameras.main.shake(300, 0.02);
+  }
+
+  updateNexusHPBar() {
+    if (!this.nexusHPSegments) return;
+
+    const remaining = 4 - this.nexusHitCount;
+    for (let i = 0; i < 4; i++) {
+      if (i < remaining) {
+        this.nexusHPSegments[i].setFillStyle(0x00ffff, 1);
+      } else {
+        this.nexusHPSegments[i].setFillStyle(0x333333, 0.5);
+      }
+    }
+  }
+
+  setNexusVulnerable() {
+    if (!this.nexusMode || this.nexusPhase === 'victory') return;
+
+    console.log('[NEXUS] Vulnerable!');
+    this.nexusVulnerable = true;
+
+    // 코어 색상 변경 (시안 → 초록)
+    if (this.nexusCore) {
+      this.nexusCore.clear();
+      this.nexusCore.fillStyle(0x00ff00, 1);
+      this.nexusCore.fillCircle(0, 0, 20);
+      this.nexusCore.fillStyle(0x88ff88, 0.8);
+      this.nexusCore.fillCircle(0, 0, 12);
+      this.nexusCore.fillStyle(0xffffff, 0.9);
+      this.nexusCore.fillCircle(0, 0, 5);
+    }
+
+    // "CORE EXPOSED!" 텍스트
+    const { width, height } = this.cameras.main;
+    const exposedText = this.add.text(width / 2, height / 2 + 80, 'CORE EXPOSED!', {
+      fontSize: '24px',
+      fontFamily: 'monospace',
+      color: '#00ff00'
+    }).setOrigin(0.5).setDepth(200);
+
+    this.tweens.add({
+      targets: exposedText,
+      scaleX: 1.1,
+      scaleY: 1.1,
+      duration: 300,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // 2초 후 vulnerable 종료
+    this.time.delayedCall(2000, () => {
+      exposedText.destroy();
+      this.nexusVulnerable = false;
+      this.restoreNexusCore();
+
+      // 다음 사이클 또는 Phase 전환
+      if (this.nexusPhase === 'phase1') {
+        this.nexusScanCount = 0;
+        this.startScanBeamCycle();
+      } else if (this.nexusPhase === 'phase2') {
+        this.nexusPhase2AttackCount = 0;
+        this.startDataStormCycle();
+      }
+    });
+  }
+
+  restoreNexusCore() {
+    if (this.nexusCore) {
+      this.nexusCore.clear();
+      this.nexusCore.fillStyle(0x4400aa, 1);
+      this.nexusCore.fillCircle(0, 0, 20);
+      this.nexusCore.fillStyle(0x00ffff, 0.8);
+      this.nexusCore.fillCircle(0, 0, 12);
+      this.nexusCore.fillStyle(0xffffff, 0.9);
+      this.nexusCore.fillCircle(0, 0, 5);
+    }
+  }
+
+  // ========== NEXUS Phase 2: Data Storm ==========
+
+  startNexusPhase2() {
+    console.log('[NEXUS] Phase 2: Data Storm');
+    this.nexusPhase = 'phase2';
+    this.nexusPhase2AttackCount = 0;
+
+    // Phase 표시 업데이트
+    if (this.nexusPhaseLabel) {
+      this.nexusPhaseLabel.setText('PHASE 2: DATA STORM');
+    }
+    this.showNexusPhaseText('PHASE 2: DATA STORM');
+
+    // 데이터 스톰 사이클 시작
+    this.time.delayedCall(2000, () => {
+      this.startDataStormCycle();
+    });
+  }
+
+  startDataStormCycle() {
+    if (this.nexusPhase !== 'phase2' || !this.nexusMode) return;
+
+    this.nexusPhase2AttackCount++;
+
+    // 공격 패턴 선택 (번갈아가며)
+    const attackType = this.nexusPhase2AttackCount % 3;
+
+    if (attackType === 1) {
+      this.spawnDataBlocks();
+    } else if (attackType === 2) {
+      this.fireTrackers();
+    } else {
+      this.fireEMPSurge();
+    }
+
+    // 3회 공격 후 vulnerable
+    if (this.nexusPhase2AttackCount >= 3) {
+      this.time.delayedCall(2000, () => {
+        this.setNexusVulnerable();
+      });
+    } else {
+      // 다음 공격 (2.5초 후)
+      this.time.delayedCall(2500, () => {
+        this.startDataStormCycle();
+      });
+    }
+  }
+
+  spawnDataBlocks() {
+    const { width, height } = this.cameras.main;
+
+    // 경고
+    const warnText = this.add.text(width / 2, 90, '⚠ DATA INCOMING ⚠', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#ff00ff'
+    }).setOrigin(0.5).setDepth(200);
+
+    this.time.delayedCall(800, () => warnText.destroy());
+
+    // 5~7개 데이터 블록 생성
+    const count = Phaser.Math.Between(5, 7);
+    for (let i = 0; i < count; i++) {
+      const targetX = Phaser.Math.Between(2, this.cols - 3);
+      const targetY = Phaser.Math.Between(2, this.rows - 3);
+
+      // 그림자 (경고)
+      const shadowX = targetX * this.gridSize + this.gridSize / 2;
+      const shadowY = targetY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      const shadow = this.add.rectangle(shadowX, shadowY, this.gridSize - 4, this.gridSize - 4, 0xff00ff, 0.3);
+      shadow.setDepth(80);
+
+      this.tweens.add({
+        targets: shadow,
+        alpha: 0.1,
+        duration: 150,
+        yoyo: true,
+        repeat: 2
+      });
+
+      // 0.8초 후 블록 낙하
+      this.time.delayedCall(800, () => {
+        shadow.destroy();
+
+        const block = this.add.rectangle(shadowX, -20, this.gridSize - 4, this.gridSize - 4, 0xff00ff, 1);
+        block.setStrokeStyle(2, 0xffffff);
+        block.setDepth(90);
+
+        this.nexusDataBlocks.push({ element: block, targetX, targetY, active: true });
+
+        // 낙하 애니메이션
+        this.tweens.add({
+          targets: block,
+          y: shadowY,
+          duration: 400,
+          ease: 'Bounce.easeOut',
+          onComplete: () => {
+            // 착지 효과
+            this.cameras.main.shake(100, 0.005);
+
+            // 1.5초 후 사라짐
+            this.time.delayedCall(1500, () => {
+              const idx = this.nexusDataBlocks.findIndex(b => b.element === block);
+              if (idx >= 0) {
+                this.nexusDataBlocks.splice(idx, 1);
+              }
+              this.tweens.add({
+                targets: block,
+                alpha: 0,
+                duration: 300,
+                onComplete: () => block.destroy()
+              });
+            });
+          }
         });
       });
+    }
+  }
+
+  fireTrackers() {
+    const { width, height } = this.cameras.main;
+    const centerX = this.nexusPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.nexusPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 경고
+    const warnText = this.add.text(width / 2, 90, '⚠ TRACKERS LOCKED ⚠', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#ff0000'
+    }).setOrigin(0.5).setDepth(200);
+
+    this.time.delayedCall(800, () => warnText.destroy());
+
+    // 3발 발사
+    this.time.delayedCall(800, () => {
+      for (let i = 0; i < 3; i++) {
+        this.time.delayedCall(i * 300, () => {
+          this.spawnTracker(centerX, centerY);
+        });
+      }
     });
   }
 
-  startMagnetarPhase1() {
-    console.log('[Magnetar] Phase 1: Reverse Field');
-    this.magnetarPhase = 'phase1';
+  spawnTracker(startX, startY) {
+    const tracker = this.add.circle(startX, startY, 6, 0xff0000);
+    tracker.setStrokeStyle(2, 0xffff00);
+    tracker.setDepth(90);
 
-    // Phase 1 안내
-    this.showMagnetarPhaseText('PHASE 1: REVERSE FIELD');
+    const trackerObj = {
+      element: tracker,
+      x: startX,
+      y: startY,
+      speed: 2, // 픽셀/프레임
+      lifespan: 180 // 3초 (60fps)
+    };
 
-    // 조작 반전 시작
-    this.time.delayedCall(2000, () => {
-      this.startReverseFieldCycle();
+    this.nexusTrackers.push(trackerObj);
+
+    // 추적 업데이트 (60fps 타이머가 없으면 생성)
+    if (!this.nexusTrackerTimer) {
+      this.nexusTrackerTimer = this.time.addEvent({
+        delay: 16,
+        callback: () => this.updateTrackers(),
+        loop: true
+      });
+    }
+  }
+
+  updateTrackers() {
+    if (!this.nexusMode) return;
+
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    for (let i = this.nexusTrackers.length - 1; i >= 0; i--) {
+      const t = this.nexusTrackers[i];
+      t.lifespan--;
+
+      // 수명 종료
+      if (t.lifespan <= 0) {
+        t.element.destroy();
+        this.nexusTrackers.splice(i, 1);
+        continue;
+      }
+
+      // 뱀 방향으로 이동
+      const dx = headX - t.x;
+      const dy = headY - t.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > 0) {
+        t.x += (dx / dist) * t.speed;
+        t.y += (dy / dist) * t.speed;
+        t.element.setPosition(t.x, t.y);
+      }
+
+      // 벽 충돌 체크
+      if (t.x < 0 || t.x > this.cameras.main.width || t.y < this.gameAreaY || t.y > this.cameras.main.height) {
+        t.element.destroy();
+        this.nexusTrackers.splice(i, 1);
+      }
+    }
+  }
+
+  fireEMPSurge() {
+    const { width, height } = this.cameras.main;
+    const centerX = this.nexusPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.nexusPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 경고
+    const warnText = this.add.text(width / 2, 90, '⚠ EMP SURGE ⚠', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(200);
+
+    this.time.delayedCall(800, () => warnText.destroy());
+
+    // 충격파 생성
+    this.time.delayedCall(800, () => {
+      const wave = this.add.graphics();
+      wave.setDepth(85);
+
+      const waveObj = { graphics: wave, radius: 0, maxRadius: 300 };
+      this.nexusEMPWaves.push(waveObj);
+
+      // 확장 애니메이션
+      this.tweens.add({
+        targets: waveObj,
+        radius: waveObj.maxRadius,
+        duration: 1500,
+        ease: 'Linear',
+        onUpdate: () => {
+          wave.clear();
+          wave.lineStyle(8, 0x00ffff, 1 - waveObj.radius / waveObj.maxRadius);
+          wave.strokeCircle(centerX, centerY, waveObj.radius);
+        },
+        onComplete: () => {
+          const idx = this.nexusEMPWaves.indexOf(waveObj);
+          if (idx >= 0) this.nexusEMPWaves.splice(idx, 1);
+          wave.destroy();
+        }
+      });
+
+      // 중앙 플래시
+      this.cameras.main.flash(100, 0, 255, 255);
     });
   }
 
-  startReverseFieldCycle() {
-    if (this.magnetarPhase !== 'phase1' || !this.magnetarMode) return;
+  // ========== NEXUS Phase 3: Firewall Surge ==========
 
-    // 조작 반전 경고
-    this.showReverseFieldWarning();
+  startNexusPhase3() {
+    console.log('[NEXUS] Phase 3: Firewall Surge');
+    this.nexusPhase = 'phase3';
 
+    // Phase 표시 업데이트
+    if (this.nexusPhaseLabel) {
+      this.nexusPhaseLabel.setText('PHASE 3: FIREWALL SURGE');
+    }
+    this.showNexusPhaseText('PHASE 3: FIREWALL SURGE');
+
+    // 가스존 가속 (1초 간격)
+    if (this.gasZoneTimer) {
+      this.gasZoneTimer.remove();
+    }
+    this.gasZoneTimer = this.time.addEvent({
+      delay: 1000,
+      callback: () => this.expandGasZone(),
+      loop: true
+    });
+
+    // 코어 텔레포트 시작
+    this.nexusTeleportCount = 0;
     this.time.delayedCall(2000, () => {
-      if (this.magnetarPhase !== 'phase1' || !this.magnetarMode) return;
+      this.startNexusTeleportCycle();
+    });
+  }
 
-      // 조작 반전 활성화
-      this.activateReverseField();
+  startNexusTeleportCycle() {
+    if (this.nexusPhase !== 'phase3' || !this.nexusMode) return;
 
-      // 5초 후 반전 해제
-      this.time.delayedCall(5000, () => {
-        this.deactivateReverseField();
+    this.nexusTeleportCount++;
 
-        // 3초 후 다시 반전 (사이클)
-        this.time.delayedCall(3000, () => {
-          if (this.magnetarPhase === 'phase1' && this.magnetarMode) {
-            this.startReverseFieldCycle();
+    // 텔레포트 전 글리치
+    this.showNexusTeleportWarning();
+
+    this.time.delayedCall(500, () => {
+      // 이전 위치에 지뢰 생성
+      this.spawnNexusMine(this.nexusPosition.x, this.nexusPosition.y);
+
+      // 새 위치로 텔레포트
+      this.teleportNexus();
+
+      // vulnerable 상태 (1.5초)
+      this.time.delayedCall(500, () => {
+        this.setNexusVulnerable();
+
+        // 2초 후 다음 텔레포트
+        this.time.delayedCall(2000, () => {
+          if (this.nexusPhase === 'phase3' && this.nexusMode) {
+            this.startNexusTeleportCycle();
           }
         });
       });
     });
   }
 
-  showReverseFieldWarning() {
-    const { width, height } = this.cameras.main;
+  showNexusTeleportWarning() {
+    if (!this.nexusElement) return;
 
-    // 경고 테두리
-    const warningBorder = this.add.graphics();
-    warningBorder.lineStyle(8, 0xaa00ff, 1);
-    warningBorder.strokeRect(5, 5, width - 10, height - 10);
-    warningBorder.setDepth(200);
-
+    // 글리치 효과
     this.tweens.add({
-      targets: warningBorder,
-      alpha: 0,
-      duration: 200,
+      targets: this.nexusElement,
+      alpha: 0.3,
+      duration: 50,
       yoyo: true,
-      repeat: 4,
-      onComplete: () => warningBorder.destroy()
-    });
-
-    // 경고 텍스트
-    const warningText = this.add.text(width / 2, height / 2 - 100, '⚠ MAGNETIC REVERSAL ⚠', {
-      fontSize: '24px',
-      fontFamily: 'monospace',
-      color: '#ff00ff'
-    }).setOrigin(0.5).setDepth(201);
-
-    this.tweens.add({
-      targets: warningText,
-      alpha: 0,
-      y: height / 2 - 120,
-      duration: 1500,
-      onComplete: () => warningText.destroy()
+      repeat: 4
     });
   }
 
-  activateReverseField() {
-    this.magnetarControlsReversed = true;
-    console.log('[Magnetar] Controls REVERSED!');
+  teleportNexus() {
+    // 안전한 위치 찾기 (가스존 밖, 뱀 위치 아님)
+    let newX, newY;
+    let attempts = 0;
 
-    const { width, height } = this.cameras.main;
+    do {
+      newX = Phaser.Math.Between(3, this.cols - 4);
+      newY = Phaser.Math.Between(3, this.rows - 4);
+      attempts++;
+    } while (
+      (this.isInGasZone && this.isInGasZone(newX, newY)) ||
+      this.snake.some(s => s.x === newX && s.y === newY) ||
+      attempts < 20
+    );
 
-    // 반전 활성 UI
-    this.reverseFieldOverlay = this.add.graphics();
-    this.reverseFieldOverlay.lineStyle(4, 0xaa00ff, 0.8);
-    this.reverseFieldOverlay.strokeRect(10, 10, width - 20, height - 20);
-    this.reverseFieldOverlay.setDepth(199);
+    // 위치 업데이트
+    this.nexusPosition.x = newX;
+    this.nexusPosition.y = newY;
 
-    // 펄스 효과
-    this.tweens.add({
-      targets: this.reverseFieldOverlay,
-      alpha: 0.3,
-      duration: 500,
-      yoyo: true,
-      repeat: -1
-    });
+    // 시각적 위치 업데이트
+    if (this.nexusElement) {
+      const pixelX = newX * this.gridSize + this.gridSize / 2;
+      const pixelY = newY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
 
-    // "CONTROLS REVERSED!" 텍스트
-    this.reverseFieldText = this.add.text(width / 2, 90, 'CONTROLS REVERSED!', {
-      fontSize: '18px',
+      // 텔레포트 이펙트
+      this.cameras.main.flash(100, 0, 255, 255);
+      this.nexusElement.setPosition(pixelX, pixelY);
+    }
+  }
+
+  spawnNexusMine(x, y) {
+    const pixelX = x * this.gridSize + this.gridSize / 2;
+    const pixelY = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 지뢰 그래픽
+    const mine = this.add.container(pixelX, pixelY);
+    mine.setDepth(85);
+
+    const mineBody = this.add.circle(0, 0, 8, 0xff0000);
+    mineBody.setStrokeStyle(2, 0xffff00);
+    mine.add(mineBody);
+
+    // 카운트다운 텍스트
+    const countText = this.add.text(0, 0, '5', {
+      fontSize: '10px',
       fontFamily: 'monospace',
-      color: '#ff00ff',
-      backgroundColor: '#000000',
-      padding: { x: 10, y: 5 }
-    }).setOrigin(0.5).setDepth(200);
+      color: '#ffffff'
+    }).setOrigin(0.5);
+    mine.add(countText);
 
+    const mineObj = {
+      element: mine,
+      x: x,
+      y: y,
+      countdown: 5
+    };
+    this.nexusMines.push(mineObj);
+
+    // 펄스 애니메이션
     this.tweens.add({
-      targets: this.reverseFieldText,
-      scaleX: 1.05,
-      scaleY: 1.05,
+      targets: mine,
+      scaleX: 1.2,
+      scaleY: 1.2,
       duration: 300,
       yoyo: true,
       repeat: -1
     });
-  }
 
-  deactivateReverseField() {
-    this.magnetarControlsReversed = false;
-    console.log('[Magnetar] Controls restored');
+    // 카운트다운
+    const countdownTimer = this.time.addEvent({
+      delay: 1000,
+      callback: () => {
+        mineObj.countdown--;
+        countText.setText(mineObj.countdown.toString());
 
-    // UI 정리
-    if (this.reverseFieldOverlay) {
-      this.tweens.killTweensOf(this.reverseFieldOverlay);
-      this.reverseFieldOverlay.destroy();
-      this.reverseFieldOverlay = null;
-    }
-    if (this.reverseFieldText) {
-      this.tweens.killTweensOf(this.reverseFieldText);
-      this.reverseFieldText.destroy();
-      this.reverseFieldText = null;
-    }
-
-    // 복원 피드백
-    const { width, height } = this.cameras.main;
-    const restoreText = this.add.text(width / 2, 90, 'CONTROLS RESTORED', {
-      fontSize: '18px',
-      fontFamily: 'monospace',
-      color: '#00ff00',
-      backgroundColor: '#000000',
-      padding: { x: 10, y: 5 }
-    }).setOrigin(0.5).setDepth(200);
-
-    this.tweens.add({
-      targets: restoreText,
-      alpha: 0,
-      y: 70,
-      duration: 1000,
-      onComplete: () => restoreText.destroy()
+        if (mineObj.countdown <= 0) {
+          // 폭발
+          this.explodeNexusMine(mineObj);
+          countdownTimer.destroy();
+        }
+      },
+      loop: true
     });
   }
 
-  showMagnetarPhaseText(text) {
+  explodeNexusMine(mineObj) {
+    const pixelX = mineObj.x * this.gridSize + this.gridSize / 2;
+    const pixelY = mineObj.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 폭발 이펙트
+    for (let i = 0; i < 8; i++) {
+      const particle = this.add.circle(pixelX, pixelY, 4, 0xff0000);
+      const angle = (i / 8) * Math.PI * 2;
+      this.tweens.add({
+        targets: particle,
+        x: pixelX + Math.cos(angle) * 40,
+        y: pixelY + Math.sin(angle) * 40,
+        alpha: 0,
+        duration: 400,
+        onComplete: () => particle.destroy()
+      });
+    }
+
+    this.cameras.main.shake(100, 0.01);
+
+    // 지뢰 제거
+    const idx = this.nexusMines.indexOf(mineObj);
+    if (idx >= 0) this.nexusMines.splice(idx, 1);
+
+    if (mineObj.element) {
+      this.tweens.killTweensOf(mineObj.element);
+      mineObj.element.destroy();
+    }
+  }
+
+  // ========== NEXUS 대시 시스템 ==========
+
+  startNexusDashCharge() {
+    // 쿨다운 체크
+    const now = Date.now();
+    if (!this.nexusDashReady || now - this.nexusLastDashTime < this.nexusDashCooldown) {
+      // 쿨다운 중 피드백
+      if (this.nexusDashUI && this.nexusDashUI.container) {
+        this.tweens.add({
+          targets: this.nexusDashUI.container,
+          x: { from: this.nexusDashUI.container.x - 5, to: this.nexusDashUI.container.x + 5 },
+          duration: 50,
+          yoyo: true,
+          repeat: 2
+        });
+      }
+      return;
+    }
+
+    this.nexusDashCharging = true;
+    this.nexusDashChargeStart = now;
+
+    // 차지 시작 효과
+    if (this.nexusDashUI && this.nexusDashUI.gauge) {
+      this.nexusDashUI.gauge.clear();
+      this.nexusDashUI.gauge.fillStyle(0x00ffff, 0.8);
+      this.nexusDashUI.gauge.fillRect(-25, -8, 1, 16);
+    }
+
+    // 차지 업데이트 타이머
+    if (this.nexusDashChargeTimer) {
+      this.nexusDashChargeTimer.destroy();
+    }
+    this.nexusDashChargeTimer = this.time.addEvent({
+      delay: 50,
+      callback: () => this.updateNexusDashCharge(),
+      loop: true
+    });
+  }
+
+  updateNexusDashCharge() {
+    if (!this.nexusDashCharging) {
+      if (this.nexusDashChargeTimer) {
+        this.nexusDashChargeTimer.destroy();
+        this.nexusDashChargeTimer = null;
+      }
+      return;
+    }
+
+    const now = Date.now();
+    const chargeTime = now - this.nexusDashChargeStart;
+    const chargeRatio = Math.min(chargeTime / this.nexusMaxChargeTime, 1);
+
+    // 게이지 업데이트
+    if (this.nexusDashUI && this.nexusDashUI.gauge) {
+      this.nexusDashUI.gauge.clear();
+      this.nexusDashUI.gauge.fillStyle(0x00ffff, 0.8);
+      this.nexusDashUI.gauge.fillRect(-25, -8, 50 * chargeRatio, 16);
+    }
+
+    // 뱀 머리 글로우 효과
+    if (this.snakeHeadGlow && chargeRatio > 0.3) {
+      const glowIntensity = 0.3 + chargeRatio * 0.5;
+      this.snakeHeadGlow.setAlpha(glowIntensity);
+    }
+  }
+
+  executeNexusDash() {
+    if (!this.nexusDashCharging) return;
+
+    this.nexusDashCharging = false;
+    if (this.nexusDashChargeTimer) {
+      this.nexusDashChargeTimer.destroy();
+      this.nexusDashChargeTimer = null;
+    }
+
+    const now = Date.now();
+    const chargeTime = now - this.nexusDashChargeStart;
+
+    // 최소 차지 시간 (0.2초)
+    if (chargeTime < 200) {
+      // 게이지 리셋
+      if (this.nexusDashUI && this.nexusDashUI.gauge) {
+        this.nexusDashUI.gauge.clear();
+        this.nexusDashUI.gauge.fillStyle(0x00ffff, 0.8);
+        this.nexusDashUI.gauge.fillRect(-25, -8, 50, 16);
+      }
+      return;
+    }
+
+    // 대시 거리 계산 (2~6칸)
+    const chargeRatio = Math.min(chargeTime / this.nexusMaxChargeTime, 1);
+    const dashDistance = Math.floor(2 + chargeRatio * 4);
+
+    // 대시 실행
+    this.performNexusDash(dashDistance);
+  }
+
+  performNexusDash(distance) {
+    this.nexusDashing = true;
+    this.nexusDashReady = false;
+    this.nexusLastDashTime = Date.now();
+
+    const head = this.snake[0];
+    let dx = 0, dy = 0;
+
+    // 현재 방향에 따른 이동
+    switch (this.direction) {
+      case 'UP': dy = -1; break;
+      case 'DOWN': dy = 1; break;
+      case 'LEFT': dx = -1; break;
+      case 'RIGHT': dx = 1; break;
+    }
+
+    // 목표 위치 계산 (벽 충돌 방지)
+    let targetX = head.x + dx * distance;
+    let targetY = head.y + dy * distance;
+
+    // 벽 경계 체크
+    targetX = Math.max(0, Math.min(this.cols - 1, targetX));
+    targetY = Math.max(0, Math.min(this.rows - 1, targetY));
+
+    // 잔상 효과 생성
+    const startX = head.x * this.gridSize + this.gridSize / 2;
+    const startY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const endX = targetX * this.gridSize + this.gridSize / 2;
+    const endY = targetY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 4개의 잔상
+    for (let i = 0; i < 4; i++) {
+      const ratio = i / 4;
+      const ghostX = startX + (endX - startX) * ratio;
+      const ghostY = startY + (endY - startY) * ratio;
+
+      const ghost = this.add.circle(ghostX, ghostY, this.gridSize / 2 - 2, 0x00ffff, 0.6);
+      ghost.setDepth(80);
+
+      this.tweens.add({
+        targets: ghost,
+        alpha: 0,
+        scaleX: 0.3,
+        scaleY: 0.3,
+        duration: 400,
+        delay: i * 50,
+        onComplete: () => ghost.destroy()
+      });
+    }
+
+    // 시안색 트레일
+    const trail = this.add.graphics();
+    trail.lineStyle(4, 0x00ffff, 0.8);
+    trail.lineBetween(startX, startY, endX, endY);
+    trail.setDepth(75);
+
+    this.tweens.add({
+      targets: trail,
+      alpha: 0,
+      duration: 500,
+      onComplete: () => trail.destroy()
+    });
+
+    // 뱀 위치 순간이동
+    const actualDistance = Math.abs(targetX - head.x) + Math.abs(targetY - head.y);
+    for (let i = 0; i < actualDistance && i < this.snake.length; i++) {
+      if (i === 0) {
+        this.snake[0].x = targetX;
+        this.snake[0].y = targetY;
+      } else {
+        // 꼬리 부분도 대시 방향으로 이동
+        const segDist = Math.min(i, actualDistance);
+        this.snake[i].x = targetX - dx * segDist;
+        this.snake[i].y = targetY - dy * segDist;
+      }
+    }
+
+    // "DASH!" 텍스트
+    const dashText = this.add.text(endX, endY - 30, 'DASH!', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(300);
+
+    this.tweens.add({
+      targets: dashText,
+      y: endY - 60,
+      alpha: 0,
+      duration: 600,
+      onComplete: () => dashText.destroy()
+    });
+
+    // 렌더링 업데이트
+    this.draw();
+
+    // 대시 상태 해제 및 쿨다운 시작
+    this.time.delayedCall(200, () => {
+      this.nexusDashing = false;
+    });
+
+    // 쿨다운 후 대시 준비
+    this.time.delayedCall(this.nexusDashCooldown, () => {
+      this.nexusDashReady = true;
+      // 대시 게이지 리셋
+      if (this.nexusDashUI && this.nexusDashUI.gauge) {
+        this.nexusDashUI.gauge.clear();
+        this.nexusDashUI.gauge.fillStyle(0x00ffff, 0.8);
+        this.nexusDashUI.gauge.fillRect(-25, -8, 50, 16);
+      }
+      // "READY!" 표시
+      if (this.nexusDashUI && this.nexusDashUI.text) {
+        this.nexusDashUI.text.setText('DASH READY');
+        this.tweens.add({
+          targets: this.nexusDashUI.text,
+          scaleX: 1.2,
+          scaleY: 1.2,
+          duration: 200,
+          yoyo: true
+        });
+      }
+    });
+
+    // 쿨다운 UI 업데이트
+    this.updateNexusDashCooldownUI();
+  }
+
+  updateNexusDashCooldownUI() {
+    if (!this.nexusDashUI) return;
+
+    const startTime = Date.now();
+    const updateCooldown = () => {
+      const elapsed = Date.now() - startTime;
+      const remaining = this.nexusDashCooldown - elapsed;
+
+      if (remaining <= 0 || this.nexusDashReady) {
+        if (this.nexusDashUI && this.nexusDashUI.text) {
+          this.nexusDashUI.text.setText('DASH READY');
+        }
+        return;
+      }
+
+      if (this.nexusDashUI && this.nexusDashUI.text) {
+        this.nexusDashUI.text.setText(`COOLDOWN ${(remaining / 1000).toFixed(1)}s`);
+      }
+
+      // 게이지 회색으로
+      if (this.nexusDashUI && this.nexusDashUI.gauge) {
+        const ratio = elapsed / this.nexusDashCooldown;
+        this.nexusDashUI.gauge.clear();
+        this.nexusDashUI.gauge.fillStyle(0x666666, 0.5);
+        this.nexusDashUI.gauge.fillRect(-25, -8, 50, 16);
+        this.nexusDashUI.gauge.fillStyle(0x00ffff, 0.8);
+        this.nexusDashUI.gauge.fillRect(-25, -8, 50 * ratio, 16);
+      }
+
+      this.time.delayedCall(100, updateCooldown);
+    };
+
+    updateCooldown();
+  }
+
+  showNexusPhaseText(text) {
     const { width, height } = this.cameras.main;
 
     const phaseText = this.add.text(width / 2, height / 2, text, {
@@ -16261,17 +17994,31 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
-  handleMagnetarHit() {
-    this.magnetarHitCount++;
-    console.log(`[Magnetar] HIT ${this.magnetarHitCount}/6`);
+  // ========== NEXUS HIT 시스템 ==========
+
+  handleNexusHit() {
+    this.nexusHitCount++;
+    this.nexusVulnerable = false;
+    console.log(`[NEXUS] HIT ${this.nexusHitCount}/4`);
 
     const { width, height } = this.cameras.main;
 
+    // HP 바 업데이트
+    if (this.nexusHPSegments && this.nexusHPSegments[4 - this.nexusHitCount]) {
+      const segment = this.nexusHPSegments[4 - this.nexusHitCount];
+      this.tweens.add({
+        targets: segment,
+        fillColor: 0x444444,
+        alpha: 0.3,
+        duration: 300
+      });
+    }
+
     // HIT 표시
-    const hitText = this.add.text(width / 2, height / 2 - 50, `HIT ${this.magnetarHitCount}/6!`, {
-      fontSize: '36px',
+    const hitText = this.add.text(width / 2, height / 2 - 50, `HIT ${this.nexusHitCount}/4!`, {
+      fontSize: '42px',
       fontFamily: 'monospace',
-      color: '#ffff00'
+      color: '#00ff00'
     }).setOrigin(0.5).setDepth(300);
 
     this.tweens.add({
@@ -16284,558 +18031,453 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     // 보스 피격 효과
-    this.cameras.main.shake(300, 0.02);
-    this.tweens.add({
-      targets: this.magnetarElement,
-      alpha: 0.3,
-      duration: 100,
-      yoyo: true,
-      repeat: 3
-    });
+    this.cameras.main.shake(400, 0.025);
+    this.cameras.main.flash(200, 0, 255, 255);
 
-    // Phase 전환
-    if (this.magnetarHitCount === 1 && this.magnetarPhase === 'phase1') {
-      this.deactivateReverseField();
-      this.time.delayedCall(1000, () => {
-        this.startMagnetarPhase2();
-      });
-    } else if (this.magnetarHitCount === 2 && this.magnetarPhase === 'phase2') {
-      this.stopEMPBeams();
-      this.time.delayedCall(1000, () => {
-        this.startMagnetarPhase3();
-      });
-    } else if (this.magnetarHitCount >= 6) {
-      // 승리!
-      this.showMagnetarVictory();
-    }
-  }
-
-  // Magnetar 빔/충격파 충돌 체크 (새 시스템 및 구 시스템 모두 안전하게 처리)
-  checkMagnetarHazardCollision(tileX, tileY) {
-    if (!this.magnetarMode) return false;
-
-    const px = tileX * this.gridSize + this.gridSize / 2;
-    const py = tileY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-    const cx = this.magnetarPosition ? this.magnetarPosition.x * this.gridSize + this.gridSize / 2 : 0;
-    const cy = this.magnetarPosition ? this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY : 0;
-
-    // 회전 빔 (신규 패턴)
-    if (this.magnetarBeams && this.magnetarBeams.length > 0) {
-      const beamThickness = 18;
-      const maxLen = Math.max(this.cameras.main.width, this.cameras.main.height);
-      for (const beam of this.magnetarBeams) {
-        if (!beam.active) continue;
-        const dirX = Math.cos(beam.angle);
-        const dirY = Math.sin(beam.angle);
-        const proj = ((px - cx) * dirX + (py - cy) * dirY);
-        if (proj < 0 || proj > maxLen) continue;
-        const dist = Math.abs((px - cx) * dirY - (py - cy) * dirX);
-        if (dist <= beamThickness) return true;
-      }
-    }
-
-    // 확산 충격파 (신규 패턴)
-    if (this.magnetarShockwaves && this.magnetarShockwaves.length > 0) {
-      for (const wave of this.magnetarShockwaves) {
-        const dist = Phaser.Math.Distance.Between(px, py, cx, cy);
-        if (Math.abs(dist - wave.radius) < 12) return true;
-      }
-    }
-
-    // 구 EMP 빔 패턴 호환
-    if (typeof this.isOnEMPBeam === 'function' && this.isOnEMPBeam(tileX, tileY)) {
-      return true;
-    }
-
-    return false;
-  }
-
-  // Phase 2: EMP Beam
-  startMagnetarPhase2() {
-    console.log('[Magnetar] Phase 2: EMP Beam');
-    this.magnetarPhase = 'phase2';
-
-    this.showMagnetarPhaseText('PHASE 2: EMP BEAM');
-
-    // EMP 레이저 공격 시작
-    this.time.delayedCall(2000, () => {
-      this.startEMPBeamCycle();
-    });
-  }
-
-  startEMPBeamCycle() {
-    if (this.magnetarPhase !== 'phase2' || !this.magnetarMode) return;
-
-    // 랜덤 패턴 선택 (십자 또는 X자)
-    const pattern = Phaser.Math.Between(0, 1) === 0 ? 'cross' : 'x';
-    this.showEMPBeamWarning(pattern);
-
-    this.time.delayedCall(1000, () => {
-      if (this.magnetarPhase !== 'phase2' || !this.magnetarMode) return;
-
-      this.fireEMPBeam(pattern);
-
-      // 3초 후 다음 빔
-      this.time.delayedCall(3000, () => {
-        if (this.magnetarPhase === 'phase2' && this.magnetarMode) {
-          this.startEMPBeamCycle();
-        }
-      });
-    });
-  }
-
-  showEMPBeamWarning(pattern) {
-    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
-    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-    const { width, height } = this.cameras.main;
-
-    this.empWarningLines = [];
-
-    if (pattern === 'cross') {
-      // 십자 경고선
-      const hLine = this.add.graphics();
-      hLine.lineStyle(3, 0xffff00, 0.5);
-      hLine.lineBetween(0, centerY, width, centerY);
-      hLine.setDepth(150);
-      this.empWarningLines.push(hLine);
-
-      const vLine = this.add.graphics();
-      vLine.lineStyle(3, 0xffff00, 0.5);
-      vLine.lineBetween(centerX, this.gameAreaY, centerX, height);
-      vLine.setDepth(150);
-      this.empWarningLines.push(vLine);
-    } else {
-      // X자 경고선
-      const line1 = this.add.graphics();
-      line1.lineStyle(3, 0xffff00, 0.5);
-      line1.lineBetween(0, this.gameAreaY, width, height);
-      line1.setDepth(150);
-      this.empWarningLines.push(line1);
-
-      const line2 = this.add.graphics();
-      line2.lineStyle(3, 0xffff00, 0.5);
-      line2.lineBetween(width, this.gameAreaY, 0, height);
-      line2.setDepth(150);
-      this.empWarningLines.push(line2);
-    }
-
-    // 경고선 깜빡임
-    this.empWarningLines.forEach(line => {
+    if (this.nexusElement) {
       this.tweens.add({
-        targets: line,
+        targets: this.nexusElement,
         alpha: 0.2,
-        duration: 150,
+        duration: 80,
         yoyo: true,
-        repeat: 3
-      });
-    });
-  }
-
-  fireEMPBeam(pattern) {
-    // 경고선 제거
-    this.empWarningLines.forEach(line => line.destroy());
-    this.empWarningLines = [];
-
-    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
-    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-    const { width, height } = this.cameras.main;
-
-    this.empBeamLines = [];
-    this.empBeamPattern = pattern;
-
-    if (pattern === 'cross') {
-      // 십자 레이저
-      const hBeam = this.add.graphics();
-      hBeam.fillStyle(0xff00ff, 0.9);
-      hBeam.fillRect(0, centerY - 8, width, 16);
-      hBeam.setDepth(160);
-      this.empBeamLines.push(hBeam);
-
-      const vBeam = this.add.graphics();
-      vBeam.fillStyle(0xff00ff, 0.9);
-      vBeam.fillRect(centerX - 8, this.gameAreaY, 16, height - this.gameAreaY);
-      vBeam.setDepth(160);
-      this.empBeamLines.push(vBeam);
-    } else {
-      // X자 레이저 (대각선은 그래픽으로 표현이 복잡하므로 단순화)
-      const diag1 = this.add.graphics();
-      diag1.lineStyle(16, 0xff00ff, 0.9);
-      diag1.lineBetween(0, this.gameAreaY, width, height);
-      diag1.setDepth(160);
-      this.empBeamLines.push(diag1);
-
-      const diag2 = this.add.graphics();
-      diag2.lineStyle(16, 0xff00ff, 0.9);
-      diag2.lineBetween(width, this.gameAreaY, 0, height);
-      diag2.setDepth(160);
-      this.empBeamLines.push(diag2);
-    }
-
-    // 레이저 발사 효과음 + 화면 플래시
-    this.cameras.main.flash(100, 255, 0, 255);
-
-    // 레이저 활성 시간 (0.5초)
-    this.empBeamActive = true;
-
-    this.time.delayedCall(500, () => {
-      this.empBeamActive = false;
-      this.empBeamLines.forEach(beam => beam.destroy());
-      this.empBeamLines = [];
-    });
-  }
-
-  stopEMPBeams() {
-    this.empBeamActive = false;
-    if (this.empWarningLines) {
-      this.empWarningLines.forEach(line => line.destroy());
-      this.empWarningLines = [];
-    }
-    if (this.empBeamLines) {
-      this.empBeamLines.forEach(beam => beam.destroy());
-      this.empBeamLines = [];
-    }
-  }
-
-  isOnEMPBeam(x, y) {
-    if (!this.empBeamActive || !this.magnetarMode) return false;
-
-    const tileX = x * this.gridSize + this.gridSize / 2;
-    const tileY = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
-    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-
-    if (this.empBeamPattern === 'cross') {
-      // 십자 레이저: 중심 X나 Y와 겹치면 피격
-      const onHorizontal = Math.abs(tileY - centerY) < 20;
-      const onVertical = Math.abs(tileX - centerX) < 20;
-      return onHorizontal || onVertical;
-    } else {
-      // X자 레이저: 대각선상에 있으면 피격 (근사치)
-      const { width, height } = this.cameras.main;
-      const ratio1 = (tileX) / width;
-      const ratio2 = 1 - ratio1;
-      const expectedY1 = this.gameAreaY + ratio1 * (height - this.gameAreaY);
-      const expectedY2 = this.gameAreaY + ratio2 * (height - this.gameAreaY);
-      return Math.abs(tileY - expectedY1) < 25 || Math.abs(tileY - expectedY2) < 25;
-    }
-  }
-
-  // Phase 3: Event Horizon
-  startMagnetarPhase3() {
-    console.log('[Magnetar] Phase 3: Event Horizon');
-    this.magnetarPhase = 'phase3';
-
-    this.showMagnetarPhaseText('PHASE 3: EVENT HORIZON');
-
-    // 가스 자기장 가속
-    if (this.gasZoneTimer) {
-      this.gasZoneTimer.remove();
-    }
-    this.gasZoneTimer = this.time.addEvent({
-      delay: this.magnetarPhase3GasInterval, // 800ms
-      callback: () => this.expandGasZone(),
-      loop: true
-    });
-
-    // 4개 보호막 생성기 생성
-    this.time.delayedCall(2000, () => {
-      this.createShieldGenerators();
-    });
-  }
-
-  createShieldGenerators() {
-    this.shieldGenerators = [];
-    const centerX = this.magnetarPosition.x;
-    const centerY = this.magnetarPosition.y;
-    const orbitRadius = 6; // 타일 단위
-
-    // 4개 생성기를 원형으로 배치
-    for (let i = 0; i < 4; i++) {
-      const angle = (i * Math.PI / 2) + Math.PI / 4; // 45도부터 시작
-      const gx = Math.round(centerX + Math.cos(angle) * orbitRadius);
-      const gy = Math.round(centerY + Math.sin(angle) * orbitRadius);
-
-      const generator = {
-        x: gx,
-        y: gy,
-        angle: angle,
-        alive: true,
-        element: null
-      };
-
-      // 생성기 시각화
-      const pixelX = gx * this.gridSize + this.gridSize / 2;
-      const pixelY = gy * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-
-      const container = this.add.container(pixelX, pixelY);
-
-      // 크리스탈 모양
-      const crystal = this.add.graphics();
-      crystal.fillStyle(0x00ffff, 1);
-      crystal.fillTriangle(0, -12, -8, 8, 8, 8);
-      crystal.fillStyle(0x00aaff, 0.8);
-      crystal.fillTriangle(0, -8, -5, 5, 5, 5);
-      container.add(crystal);
-
-      // 에너지 빔 (보스로 연결)
-      const beam = this.add.graphics();
-      beam.lineStyle(2, 0x00ffff, 0.5);
-      const bossPixelX = centerX * this.gridSize + this.gridSize / 2;
-      const bossPixelY = centerY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-      beam.lineBetween(0, 0, bossPixelX - pixelX, bossPixelY - pixelY);
-      container.add(beam);
-
-      container.setDepth(95);
-      generator.element = container;
-
-      // 펄스 애니메이션
-      this.tweens.add({
-        targets: container,
-        scaleX: 1.2,
-        scaleY: 1.2,
-        duration: 500,
-        yoyo: true,
-        repeat: -1
-      });
-
-      this.shieldGenerators.push(generator);
-    }
-
-    // 공전 타이머
-    this.generatorOrbitTimer = this.time.addEvent({
-      delay: 100,
-      callback: () => this.updateGeneratorOrbits(),
-      loop: true
-    });
-
-    console.log('[Magnetar] Shield generators created');
-  }
-
-  updateGeneratorOrbits() {
-    if (!this.shieldGenerators || !this.magnetarMode) return;
-
-    const centerX = this.magnetarPosition.x;
-    const centerY = this.magnetarPosition.y;
-    const orbitRadius = 6;
-
-    this.shieldGenerators.forEach(gen => {
-      if (!gen.alive) return;
-
-      // 공전 (시계 방향)
-      gen.angle += 0.02;
-      gen.x = Math.round(centerX + Math.cos(gen.angle) * orbitRadius);
-      gen.y = Math.round(centerY + Math.sin(gen.angle) * orbitRadius);
-
-      // 위치 업데이트
-      if (gen.element) {
-        const pixelX = gen.x * this.gridSize + this.gridSize / 2;
-        const pixelY = gen.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-        gen.element.setPosition(pixelX, pixelY);
-      }
-    });
-  }
-
-  checkGeneratorCollision(x, y) {
-    if (!this.shieldGenerators || this.magnetarPhase !== 'phase3') return false;
-
-    for (const gen of this.shieldGenerators) {
-      if (gen.alive && gen.x === x && gen.y === y) {
-        this.destroyGenerator(gen);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  destroyGenerator(gen) {
-    gen.alive = false;
-
-    // 폭발 효과
-    const pixelX = gen.x * this.gridSize + this.gridSize / 2;
-    const pixelY = gen.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
-
-    // 파티클
-    for (let i = 0; i < 8; i++) {
-      const particle = this.add.circle(pixelX, pixelY, 4, 0x00ffff);
-      const angle = (i / 8) * Math.PI * 2;
-      this.tweens.add({
-        targets: particle,
-        x: pixelX + Math.cos(angle) * 50,
-        y: pixelY + Math.sin(angle) * 50,
-        alpha: 0,
-        duration: 500,
-        onComplete: () => particle.destroy()
+        repeat: 4
       });
     }
 
-    // 요소 제거
-    if (gen.element) {
-      this.tweens.killTweensOf(gen.element);
-      gen.element.destroy();
-      gen.element = null;
-    }
+    // 코어 복원
+    this.restoreNexusCore();
 
-    // HIT 카운트 증가
-    this.magnetarHitCount++;
-    console.log(`[Magnetar] Generator destroyed! HIT ${this.magnetarHitCount}/6`);
-
-    // 승리 체크
-    const aliveCount = this.shieldGenerators.filter(g => g.alive).length;
-    if (aliveCount === 0) {
-      this.showMagnetarVictory();
-    } else {
-      // HIT 표시
-      const { width, height } = this.cameras.main;
-      const hitText = this.add.text(width / 2, height / 2 - 50, `GENERATOR ${4 - aliveCount}/4!`, {
-        fontSize: '24px',
-        fontFamily: 'monospace',
-        color: '#00ffff'
-      }).setOrigin(0.5).setDepth(300);
-
-      this.tweens.add({
-        targets: hitText,
-        alpha: 0,
-        y: height / 2 - 80,
-        duration: 1000,
-        onComplete: () => hitText.destroy()
+    // Phase 전환 또는 승리
+    if (this.nexusHitCount === 1 && this.nexusPhase === 'phase1') {
+      this.time.delayedCall(1500, () => {
+        this.startNexusPhase2();
       });
+    } else if (this.nexusHitCount === 3 && this.nexusPhase === 'phase2') {
+      this.time.delayedCall(1500, () => {
+        this.startNexusPhase3();
+      });
+    } else if (this.nexusHitCount >= 4) {
+      this.showNexusVictory();
     }
   }
 
-  showMagnetarVictory() {
-    console.log('[Magnetar] Victory!');
-    this.magnetarPhase = 'victory';
+  // ========== NEXUS 승리 연출 ==========
+  showNexusVictory() {
+    console.log('[NEXUS] Victory!');
+    this.nexusPhase = 'victory';
     this.moveTimer.paused = true;
 
     const { width, height } = this.cameras.main;
+    const centerX = this.nexusPosition.x * this.gridSize + this.gridSize / 2;
+    const centerY = this.nexusPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
 
-    // 보스 폭발
-    this.cameras.main.shake(1000, 0.03);
-    this.cameras.main.flash(500, 255, 255, 255);
+    // 슬로우모션
+    this.tweens.timeScale = 0.3;
 
-    // 보스 사라짐
-    if (this.magnetarElement) {
-      this.tweens.add({
-        targets: this.magnetarElement,
-        scaleX: 2,
-        scaleY: 2,
-        alpha: 0,
-        duration: 1000,
-        onComplete: () => {
-          this.magnetarElement.destroy();
-          this.magnetarElement = null;
+    // 보스 대사: "SYSTEM... FAILURE..."
+    const failureText = this.add.text(centerX, centerY - 60, 'SYSTEM... FAILURE...', {
+      fontSize: '20px',
+      fontFamily: 'monospace',
+      color: '#ff0000'
+    }).setOrigin(0.5).setDepth(350);
+
+    // 텍스트 떨림 효과
+    this.tweens.add({
+      targets: failureText,
+      x: { from: centerX - 3, to: centerX + 3 },
+      duration: 50,
+      yoyo: true,
+      repeat: 20
+    });
+
+    // 1초 후 글리치 폭발
+    this.time.delayedCall(1000 / 0.3, () => {
+      failureText.destroy();
+
+      // 글리치 파편 폭발 (50개)
+      for (let i = 0; i < 50; i++) {
+        const size = Phaser.Math.Between(4, 12);
+        const color = [0x00ffff, 0xff00ff, 0x00ff00, 0xffff00][i % 4];
+        const fragment = this.add.rectangle(centerX, centerY, size, size, color);
+        fragment.setDepth(300);
+
+        const angle = (i / 50) * Math.PI * 2 + Math.random() * 0.5;
+        const dist = Phaser.Math.Between(100, 250);
+        const duration = Phaser.Math.Between(800, 1500);
+
+        this.tweens.add({
+          targets: fragment,
+          x: centerX + Math.cos(angle) * dist,
+          y: centerY + Math.sin(angle) * dist,
+          rotation: Math.random() * Math.PI * 4,
+          alpha: 0,
+          scaleX: 0.1,
+          scaleY: 0.1,
+          duration: duration,
+          ease: 'Power2',
+          onComplete: () => fragment.destroy()
+        });
+      }
+
+      // 카메라 쉐이크
+      this.cameras.main.shake(1000, 0.05);
+
+      // 가스존 소멸 (역방향 확장)
+      if (this.gasZoneEnabled) {
+        this.gasZoneEnabled = false;
+        if (this.gasZoneTimer) {
+          this.gasZoneTimer.destroy();
+          this.gasZoneTimer = null;
         }
-      });
-    }
+        if (this.gasZoneGraphics) {
+          this.tweens.add({
+            targets: this.gasZoneGraphics,
+            alpha: 0,
+            duration: 500,
+            onComplete: () => {
+              this.gasZoneGraphics.clear();
+            }
+          });
+        }
+      }
 
-    // 폭발 파티클
-    const centerX = this.magnetarPosition.x * this.gridSize + this.gridSize / 2;
-    const centerY = this.magnetarPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+      // 보스 대폭발
+      this.time.delayedCall(500, () => {
+        // EMP 링 3회
+        for (let r = 0; r < 3; r++) {
+          this.time.delayedCall(r * 200, () => {
+            const ring = this.add.graphics();
+            ring.lineStyle(4, 0x00ffff, 1);
+            ring.strokeCircle(centerX, centerY, 10);
+            ring.setDepth(280);
 
-    for (let i = 0; i < 20; i++) {
-      const color = [0x00ffff, 0xff00ff, 0xffff00][i % 3];
-      const particle = this.add.circle(centerX, centerY, 8, color);
-      const angle = (i / 20) * Math.PI * 2;
-      const dist = Phaser.Math.Between(80, 150);
-      this.tweens.add({
-        targets: particle,
-        x: centerX + Math.cos(angle) * dist,
-        y: centerY + Math.sin(angle) * dist,
-        alpha: 0,
-        scaleX: 0.2,
-        scaleY: 0.2,
-        duration: 1500,
-        ease: 'Power2',
-        onComplete: () => particle.destroy()
-      });
-    }
+            this.tweens.add({
+              targets: ring,
+              scaleX: 15,
+              scaleY: 15,
+              alpha: 0,
+              duration: 600,
+              onComplete: () => ring.destroy()
+            });
+          });
+        }
 
-    // 승리 텍스트
-    this.time.delayedCall(1500, () => {
-      const victoryText = this.add.text(width / 2, height / 2 - 30, 'BOSS CLEAR!', {
-        fontSize: '48px',
-        fontFamily: 'monospace',
-        color: '#00ff00'
-      }).setOrigin(0.5).setDepth(300);
+        // 보스 요소 폭발
+        if (this.nexusElement) {
+          this.tweens.add({
+            targets: this.nexusElement,
+            scaleX: 3,
+            scaleY: 3,
+            alpha: 0,
+            duration: 800,
+            onComplete: () => {
+              if (this.nexusElement) {
+                this.nexusElement.destroy();
+                this.nexusElement = null;
+              }
+            }
+          });
+        }
 
-      this.tweens.add({
-        targets: victoryText,
-        scaleX: 1.2,
-        scaleY: 1.2,
-        duration: 500,
-        yoyo: true,
-        repeat: 2
-      });
+        // 화면 화이트아웃
+        this.time.delayedCall(500, () => {
+          this.cameras.main.flash(800, 255, 255, 255);
 
-      // 보너스 점수
-      this.time.delayedCall(1000, () => {
-        const bonusText = this.add.text(width / 2, height / 2 + 30, '+1000 BONUS!', {
-          fontSize: '32px',
-          fontFamily: 'monospace',
-          color: '#ffff00'
-        }).setOrigin(0.5).setDepth(300);
+          // 슬로우모션 해제
+          this.tweens.timeScale = 1;
 
-        this.score += 1000;
-        this.scoreText.setText(this.score.toString());
+          // "NEXUS TERMINATED" 텍스트
+          this.time.delayedCall(500, () => {
+            const terminatedText = this.add.text(width / 2, height / 2 - 60, 'NEXUS TERMINATED', {
+              fontSize: '36px',
+              fontFamily: 'monospace',
+              color: '#00ff00'
+            }).setOrigin(0.5).setDepth(350);
+            terminatedText.setAlpha(0);
 
-        // 정리 및 다음 단계
-        this.time.delayedCall(2000, () => {
-          victoryText.destroy();
-          bonusText.destroy();
-          this.cleanupMagnetar();
+            this.tweens.add({
+              targets: terminatedText,
+              alpha: 1,
+              duration: 500
+            });
 
-          // 스테이지 클리어 처리
-          this.magnetarMode = false;
-          this.stageClear();
+            // "FIREWALL DISABLED"
+            this.time.delayedCall(1000, () => {
+              const firewallText = this.add.text(width / 2, height / 2 - 20, 'FIREWALL DISABLED', {
+                fontSize: '24px',
+                fontFamily: 'monospace',
+                color: '#00ffff'
+              }).setOrigin(0.5).setDepth(350);
+              firewallText.setAlpha(0);
+
+              this.tweens.add({
+                targets: firewallText,
+                alpha: 1,
+                duration: 500
+              });
+
+              // "+1000 BONUS!"
+              this.time.delayedCall(1000, () => {
+                const bonusText = this.add.text(width / 2, height / 2 + 30, '+1000 BONUS!', {
+                  fontSize: '32px',
+                  fontFamily: 'monospace',
+                  color: '#ffff00'
+                }).setOrigin(0.5).setDepth(350);
+
+                this.score += 1000;
+                this.scoreText.setText(this.score.toString());
+
+                // 펄스 애니메이션
+                this.tweens.add({
+                  targets: bonusText,
+                  scaleX: 1.3,
+                  scaleY: 1.3,
+                  duration: 300,
+                  yoyo: true,
+                  repeat: 2
+                });
+
+                // 정리 및 상점 오픈
+                this.time.delayedCall(2000, () => {
+                  terminatedText.destroy();
+                  firewallText.destroy();
+                  bonusText.destroy();
+
+                  this.cleanupNexus();
+                  this.nexusMode = false;
+                  this.stageClear();
+                });
+              });
+            });
+          });
         });
       });
     });
   }
 
-  cleanupMagnetar() {
-    console.log('[Magnetar] Cleanup');
+  // NEXUS 정리
+  cleanupNexus() {
+    console.log('[NEXUS] Cleanup');
 
-    // 조작 반전 해제
-    this.deactivateReverseField();
+    // 모든 NEXUS 타이머 정리
+    if (this.nexusAnimTimer) {
+      this.nexusAnimTimer.destroy();
+      this.nexusAnimTimer = null;
+    }
+
+    if (this.nexusScanTimer) {
+      this.nexusScanTimer.destroy();
+      this.nexusScanTimer = null;
+    }
+
+    if (this.nexusDataStormTimer) {
+      this.nexusDataStormTimer.destroy();
+      this.nexusDataStormTimer = null;
+    }
+
+    if (this.nexusTeleportTimer) {
+      this.nexusTeleportTimer.destroy();
+      this.nexusTeleportTimer = null;
+    }
+
+    if (this.nexusTrackerTimer) {
+      this.nexusTrackerTimer.destroy();
+      this.nexusTrackerTimer = null;
+    }
+
+    // NEXUS v2: 추가 타이머 정리
+    if (this.nexusTrackerFireTimer) {
+      this.nexusTrackerFireTimer.destroy();
+      this.nexusTrackerFireTimer = null;
+    }
 
     // 보스 요소 정리
-    if (this.magnetarElement) {
-      this.tweens.killTweensOf(this.magnetarElement);
-      this.magnetarElement.destroy();
-      this.magnetarElement = null;
+    if (this.nexusElement) {
+      this.tweens.killTweensOf(this.nexusElement);
+      this.nexusElement.destroy();
+      this.nexusElement = null;
     }
 
-    // 링 타이머 정리
-    if (this.magnetarRingTimer) {
-      this.magnetarRingTimer.destroy();
-      this.magnetarRingTimer = null;
+    // HP 바 정리
+    if (this.nexusHPBar) {
+      if (this.nexusHPBar.container) {
+        this.nexusHPBar.container.destroy();
+      }
+      this.nexusHPBar = null;
     }
 
-    // EMP 빔 정리
-    this.stopEMPBeams();
+    // Phase 텍스트 정리
+    if (this.nexusPhaseText) {
+      this.nexusPhaseText.destroy();
+      this.nexusPhaseText = null;
+    }
 
-    // 생성기 정리
-    if (this.shieldGenerators) {
-      this.shieldGenerators.forEach(gen => {
-        if (gen.element) {
-          this.tweens.killTweensOf(gen.element);
-          gen.element.destroy();
+    // 대시 UI 정리
+    if (this.nexusDashUI) {
+      if (this.nexusDashUI.container) {
+        this.nexusDashUI.container.destroy();
+      }
+      this.nexusDashUI = null;
+    }
+
+    // 스캔 빔 정리
+    if (this.nexusScanBeams) {
+      this.nexusScanBeams.forEach(beam => {
+        if (beam.warning) beam.warning.destroy();
+        if (beam.laser) beam.laser.destroy();
+      });
+      this.nexusScanBeams = [];
+    }
+
+    // 데이터 블록 정리
+    if (this.nexusDataBlocks) {
+      this.nexusDataBlocks.forEach(block => {
+        if (block.shadow) block.shadow.destroy();
+        if (block.element) block.element.destroy();
+      });
+      this.nexusDataBlocks = [];
+    }
+
+    // 추적탄 정리
+    if (this.nexusTrackers) {
+      this.nexusTrackers.forEach(tracker => {
+        if (tracker.element) tracker.element.destroy();
+      });
+      this.nexusTrackers = [];
+    }
+
+    // 지뢰 정리
+    if (this.nexusMines) {
+      this.nexusMines.forEach(mine => {
+        if (mine.element) mine.element.destroy();
+        if (mine.timer) mine.timer.destroy();
+      });
+      this.nexusMines = [];
+    }
+
+    // EMP 서지 정리
+    if (this.nexusEMPSurge) {
+      if (this.nexusEMPSurge.element) {
+        this.nexusEMPSurge.element.destroy();
+      }
+      this.nexusEMPSurge = null;
+    }
+
+    // NEXUS v2: 고스트 뱀 정리
+    if (this.nexusGhostSnakes) {
+      this.nexusGhostSnakes.forEach(ghost => {
+        if (ghost.container) {
+          this.tweens.killTweensOf(ghost);
+          ghost.container.destroy();
         }
       });
-      this.shieldGenerators = [];
+      this.nexusGhostSnakes = [];
     }
 
-    if (this.generatorOrbitTimer) {
-      this.generatorOrbitTimer.destroy();
-      this.generatorOrbitTimer = null;
+    // NEXUS v2: 바이너리 노드 정리
+    if (this.nexusBinaryNodes) {
+      this.nexusBinaryNodes.forEach(node => {
+        if (node.element) node.element.destroy();
+      });
+      this.nexusBinaryNodes = [];
+    }
+
+    // NEXUS v2: 시퀀스 UI 정리
+    if (this.nexusSequenceUI) {
+      if (this.nexusSequenceUI.container) {
+        this.nexusSequenceUI.container.destroy();
+      }
+      this.nexusSequenceUI = null;
     }
 
     // 상태 초기화
-    this.magnetarMode = false;
-    this.magnetarPhase = 'none';
-    this.magnetarHitCount = 0;
-    this.magnetarControlsReversed = false;
-    this.empBeamActive = false;
+    this.nexusMode = false;
+    this.nexusPhase = 'none';
+    this.nexusHitCount = 0;
+    this.nexusVulnerable = false;
+    this.nexusDashCharging = false;
+    this.nexusDashReady = true;
+    this.nexusPhase2AttackCount = 0;
+
+    // NEXUS v2 상태 초기화
+    this.nexusRound = 0;
+    this.nexusBinarySequence = [];
+    this.nexusBinaryCollected = [];
+    this.nexusTotalNodesCollected = 0;
+  }
+
+  // NEXUS 충돌 체크
+  checkNexusHazardCollision(tileX, tileY) {
+    if (!this.nexusMode) return false;
+
+    const px = tileX * this.gridSize + this.gridSize / 2;
+    const py = tileY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // NEXUS v2: 고스트 뱀 충돌 (스캔으로 생성된 데드존)
+    if (this.nexusGhostSnakes && this.nexusGhostSnakes.length > 0) {
+      for (const ghost of this.nexusGhostSnakes) {
+        for (const seg of ghost.body) {
+          if (seg.x === tileX && seg.y === tileY) {
+            return true;
+          }
+        }
+      }
+    }
+
+    // 데이터 블록 충돌
+    if (this.nexusDataBlocks && this.nexusDataBlocks.length > 0) {
+      for (const block of this.nexusDataBlocks) {
+        if (block.landed && block.x === tileX && block.y === tileY) {
+          return true;
+        }
+      }
+    }
+
+    // 추적탄 충돌
+    if (this.nexusTrackers && this.nexusTrackers.length > 0) {
+      for (const tracker of this.nexusTrackers) {
+        const dist = Math.sqrt(Math.pow(tileX - tracker.x, 2) + Math.pow(tileY - tracker.y, 2));
+        if (dist < 1) return true;
+      }
+    }
+
+    // EMP 서지 충돌 (대시 중이면 무시)
+    if (this.nexusEMPSurge && this.nexusEMPSurge.active && !this.nexusDashing) {
+      const centerX = this.nexusPosition.x;
+      const centerY = this.nexusPosition.y;
+      const dist = Math.sqrt(Math.pow(tileX - centerX, 2) + Math.pow(tileY - centerY, 2));
+      const surgeRadius = this.nexusEMPSurge.radius;
+      if (Math.abs(dist - surgeRadius) < 1.5) return true;
+    }
+
+    // 지뢰 충돌
+    if (this.nexusMines && this.nexusMines.length > 0) {
+      for (const mine of this.nexusMines) {
+        if (mine.x === tileX && mine.y === tileY) {
+          this.explodeNexusMine(mine);
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // NEXUS 보스 충돌 체크 (HIT 판정용)
+  checkNexusBossCollision(tileX, tileY) {
+    if (!this.nexusMode || !this.nexusVulnerable || !this.nexusPosition) return false;
+
+    // 보스 위치와 비교 (2x2 영역)
+    const bx = this.nexusPosition.x;
+    const by = this.nexusPosition.y;
+
+    if (tileX >= bx - 1 && tileX <= bx + 1 &&
+        tileY >= by - 1 && tileY <= by + 1) {
+      this.handleNexusHit();
+      return true;
+    }
+
+    return false;
   }
 
   // ========== 탄막 슈팅 보스 시스템 (Bullet Hell Boss) ==========
@@ -25593,8 +27235,8 @@ export default class SnakeGame extends Phaser.Scene {
       this.startFogIntroIfNeeded();
     }
 
-    // 독가스 자기장 (World 4)
-    if (shouldHaveGasZone(this.currentStage)) {
+    // 독가스 자기장 (World 4) - Stage 15는 NEXUS 인트로 후 시작
+    if (shouldHaveGasZone(this.currentStage) && !isMagnetarStage(this.currentStage)) {
       this.time.delayedCall(1000, () => {
         this.startGasZone();
       });
@@ -25646,14 +27288,14 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // Magnetar 보스 스테이지 체크 (Stage 15)
+    // NEXUS 보스 스테이지 체크 (Stage 15)
     if (isMagnetarStage(this.currentStage)) {
       this.bossPhase = 'intro';
       this.food = { x: -100, y: -100 };
       this.moveTimer.paused = true;
       this.hideFoodGraphics();
       this.time.delayedCall(500, () => {
-        this.startMagnetar();
+        this.startNexusBoss();
       });
     }
   }
@@ -25672,8 +27314,10 @@ export default class SnakeGame extends Phaser.Scene {
     this.cleanupLaserTurrets();
     this.cleanupFloatingMines();
 
-    // Magnetar 보스 정리
-    this.cleanupMagnetar();
+    // NEXUS 보스 정리
+    if (this.nexusMode) {
+      this.cleanupNexus();
+    }
 
     // 안개 보스 정리
     if (this.fogBossMode) {
@@ -25747,8 +27391,12 @@ export default class SnakeGame extends Phaser.Scene {
     }
     this.speedText.setText(startSpeed + 'ms');
 
-    // 먹이 생성
-    this.food = this.generateFood();
+    // 먹이 생성 (Stage 15 NEXUS 보스에서는 먹이 없음)
+    if (isNexusStage(this.currentStage)) {
+      this.food = null;
+    } else {
+      this.food = this.generateFood();
+    }
 
     // 그래픽 업데이트
     this.draw();
