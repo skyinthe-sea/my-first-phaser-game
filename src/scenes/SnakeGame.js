@@ -15997,65 +15997,104 @@ export default class SnakeGame extends Phaser.Scene {
     this.nexusElement = this.add.container(centerX, centerY);
     this.nexusElement.setDepth(100);
 
-    // 외곽 육각형 (회전)
-    this.nexusHexagon = this.add.graphics();
-    this.nexusHexagon.lineStyle(3, 0x00ffff, 0.8);
-    const hexPoints = [];
-    for (let i = 0; i < 6; i++) {
-      const angle = (i / 6) * Math.PI * 2 - Math.PI / 2;
-      hexPoints.push({ x: Math.cos(angle) * 45, y: Math.sin(angle) * 45 });
-    }
-    this.nexusHexagon.beginPath();
-    this.nexusHexagon.moveTo(hexPoints[0].x, hexPoints[0].y);
-    for (let i = 1; i < 6; i++) {
-      this.nexusHexagon.lineTo(hexPoints[i].x, hexPoints[i].y);
-    }
-    this.nexusHexagon.closePath();
-    this.nexusHexagon.strokePath();
-    this.nexusElement.add(this.nexusHexagon);
+    // === 바이러스 스타일 디자인 ===
 
-    // 내부 육각형 (반대로 회전)
-    this.nexusInnerHex = this.add.graphics();
-    this.nexusInnerHex.lineStyle(2, 0xff00ff, 0.6);
-    this.nexusInnerHex.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const angle = (i / 6) * Math.PI * 2;
-      const x = Math.cos(angle) * 30;
-      const y = Math.sin(angle) * 30;
-      if (i === 0) this.nexusInnerHex.moveTo(x, y);
-      else this.nexusInnerHex.lineTo(x, y);
-    }
-    this.nexusInnerHex.closePath();
-    this.nexusInnerHex.strokePath();
-    this.nexusElement.add(this.nexusInnerHex);
+    // 1. 독성 오라 (외곽 글로우)
+    this.nexusAura = this.add.graphics();
+    this.nexusAura.fillStyle(0x00ff00, 0.15);
+    this.nexusAura.fillCircle(0, 0, 70);
+    this.nexusAura.fillStyle(0xff0000, 0.1);
+    this.nexusAura.fillCircle(0, 0, 55);
+    this.nexusElement.add(this.nexusAura);
 
-    // 중앙 코어
+    // 2. 스파이크 (바이러스 돌기) - 12개
+    this.nexusSpikes = [];
+    const spikeCount = 12;
+    for (let i = 0; i < spikeCount; i++) {
+      const angle = (i / spikeCount) * Math.PI * 2;
+      const spike = this.add.graphics();
+
+      // 스파이크 삼각형 그리기
+      spike.fillStyle(0xff3300, 0.9);
+      spike.beginPath();
+      spike.moveTo(0, -8);  // 끝점
+      spike.lineTo(-4, 8);   // 좌하
+      spike.lineTo(4, 8);    // 우하
+      spike.closePath();
+      spike.fillPath();
+
+      // 스파이크 위치 및 회전
+      spike.x = Math.cos(angle) * 40;
+      spike.y = Math.sin(angle) * 40;
+      spike.rotation = angle + Math.PI / 2;
+
+      this.nexusElement.add(spike);
+      this.nexusSpikes.push({ graphics: spike, baseAngle: angle, phase: i * 0.3 });
+    }
+
+    // 3. 외막 (바이러스 캡시드) - 불규칙한 원
+    this.nexusMembrane = this.add.graphics();
+    this.nexusMembrane.lineStyle(4, 0xcc0000, 0.8);
+    this.nexusMembrane.fillStyle(0x330000, 0.6);
+    this.nexusMembrane.beginPath();
+    for (let i = 0; i < 20; i++) {
+      const angle = (i / 20) * Math.PI * 2;
+      const wobble = 28 + Math.sin(i * 1.5) * 5;
+      const x = Math.cos(angle) * wobble;
+      const y = Math.sin(angle) * wobble;
+      if (i === 0) this.nexusMembrane.moveTo(x, y);
+      else this.nexusMembrane.lineTo(x, y);
+    }
+    this.nexusMembrane.closePath();
+    this.nexusMembrane.fillPath();
+    this.nexusMembrane.strokePath();
+    this.nexusElement.add(this.nexusMembrane);
+
+    // 4. 내부 핵 (녹색 독성 코어)
     this.nexusCore = this.add.graphics();
-    this.nexusCore.fillStyle(0x4400aa, 1);
-    this.nexusCore.fillCircle(0, 0, 20);
-    this.nexusCore.fillStyle(0x00ffff, 0.8);
+    this.nexusCore.fillStyle(0x003300, 1);
+    this.nexusCore.fillCircle(0, 0, 18);
+    this.nexusCore.fillStyle(0x00ff00, 0.8);
     this.nexusCore.fillCircle(0, 0, 12);
-    this.nexusCore.fillStyle(0xffffff, 0.9);
-    this.nexusCore.fillCircle(0, 0, 5);
+    this.nexusCore.fillStyle(0xccff00, 0.9);
+    this.nexusCore.fillCircle(0, 0, 6);
     this.nexusElement.add(this.nexusCore);
 
-    // 데이터 링 3개
-    this.nexusRings = [];
-    const ringColors = [0x00ffff, 0xff00ff, 0x00ff88];
-    for (let i = 0; i < 3; i++) {
-      const ring = this.add.graphics();
-      ring.lineStyle(1.5, ringColors[i], 0.4);
-      ring.strokeCircle(0, 0, 55 + i * 12);
-      this.nexusElement.add(ring);
-      this.nexusRings.push({ graphics: ring, angle: i * 0.5 });
+    // 5. 눈 (사악한 느낌)
+    const eyeGraphics = this.add.graphics();
+    eyeGraphics.fillStyle(0x000000, 1);
+    eyeGraphics.fillEllipse(0, 0, 16, 10);
+    eyeGraphics.fillStyle(0xff0000, 1);
+    eyeGraphics.fillCircle(0, 0, 4);
+    eyeGraphics.fillStyle(0xffffff, 1);
+    eyeGraphics.fillCircle(-1, -1, 1.5);
+    this.nexusElement.add(eyeGraphics);
+
+    // 6. 떠다니는 독성 입자들
+    this.nexusParticles = [];
+    for (let i = 0; i < 8; i++) {
+      const particle = this.add.circle(
+        (Math.random() - 0.5) * 100,
+        (Math.random() - 0.5) * 100,
+        2 + Math.random() * 3,
+        0x00ff00,
+        0.6
+      );
+      this.nexusElement.add(particle);
+      this.nexusParticles.push({
+        obj: particle,
+        orbitRadius: 50 + Math.random() * 30,
+        orbitSpeed: 0.02 + Math.random() * 0.02,
+        angle: Math.random() * Math.PI * 2
+      });
     }
 
-    // 코어 펄스 애니메이션
+    // 코어 펄스 애니메이션 (더 불안정하게)
     this.tweens.add({
       targets: this.nexusElement,
-      scaleX: 1.15,
+      scaleX: 1.1,
       scaleY: 1.15,
-      duration: 1000,
+      duration: 800,
       yoyo: true,
       repeat: -1,
       ease: 'Sine.easeInOut'
@@ -16081,22 +16120,33 @@ export default class SnakeGame extends Phaser.Scene {
   updateNexusAnimation() {
     if (!this.nexusElement || !this.nexusElement.active) return;
 
-    // 외곽 육각형 회전
-    if (this.nexusHexagon) {
-      this.nexusHexagon.rotation += 0.005;
-    }
-    // 내부 육각형 반대 회전
-    if (this.nexusInnerHex) {
-      this.nexusInnerHex.rotation -= 0.008;
-    }
-    // 데이터 링 회전
-    if (this.nexusRings) {
-      this.nexusRings.forEach((ring, i) => {
-        ring.angle += 0.01 * (i % 2 === 0 ? 1 : -1);
-        if (ring.graphics) {
-          ring.graphics.rotation = ring.angle;
-        }
+    const time = Date.now() * 0.001;
+
+    // 스파이크 움직임 (맥동 + 회전)
+    if (this.nexusSpikes) {
+      this.nexusSpikes.forEach((spike, i) => {
+        const pulseFactor = 1 + Math.sin(time * 3 + spike.phase) * 0.15;
+        const baseAngle = spike.baseAngle + time * 0.3;
+        spike.graphics.x = Math.cos(baseAngle) * 40 * pulseFactor;
+        spike.graphics.y = Math.sin(baseAngle) * 40 * pulseFactor;
+        spike.graphics.rotation = baseAngle + Math.PI / 2;
       });
+    }
+
+    // 독성 입자들 궤도 운동
+    if (this.nexusParticles) {
+      this.nexusParticles.forEach(p => {
+        p.angle += p.orbitSpeed;
+        p.obj.x = Math.cos(p.angle) * p.orbitRadius;
+        p.obj.y = Math.sin(p.angle) * p.orbitRadius;
+        p.obj.setAlpha(0.4 + Math.sin(time * 5 + p.angle) * 0.3);
+      });
+    }
+
+    // 오라 펄스
+    if (this.nexusAura) {
+      const auraScale = 1 + Math.sin(time * 2) * 0.1;
+      this.nexusAura.setScale(auraScale);
     }
   }
 
@@ -16131,8 +16181,26 @@ export default class SnakeGame extends Phaser.Scene {
     overlay.setDepth(90);
     this.nexusIntroElements.push(overlay);
 
-    // 1단계: 경고 + 글리치 (0s)
-    const alertText = this.add.text(width / 2, height / 2 - 80, '[ SYSTEM ALERT ]', {
+    // 대화 박스 헬퍼
+    const createDialogue = (speaker, text, color, y) => {
+      const prefix = speaker === 'NEXUS' ? '> NEXUS: ' : '> SNAKE: ';
+      const dialogue = this.add.text(width / 2, y, prefix + text, {
+        fontSize: '16px',
+        fontFamily: 'monospace',
+        color: color,
+        wordWrap: { width: width - 100 }
+      }).setOrigin(0.5).setDepth(96);
+      dialogue.setAlpha(0);
+      this.tweens.add({
+        targets: dialogue,
+        alpha: 1,
+        duration: 200
+      });
+      return dialogue;
+    };
+
+    // 1단계: 경고 (0s)
+    const alertText = this.add.text(width / 2, height / 2 - 100, '[ SYSTEM ALERT ]', {
       fontSize: '32px',
       fontFamily: 'monospace',
       color: '#ff0000'
@@ -16148,40 +16216,53 @@ export default class SnakeGame extends Phaser.Scene {
     });
     this.cameras.main.shake(300, 0.01);
 
-    // 2단계: 플래시 + 보스 등장 (1s)
-    this.time.delayedCall(1000, () => {
+    // 2단계: 플래시 + 보스 등장 (0.8s)
+    this.time.delayedCall(800, () => {
       this.cameras.main.flash(200, 0, 255, 255);
       this.createNexusBoss();
+      alertText.destroy();
 
       // 보스 페이드인
       this.tweens.add({
         targets: this.nexusElement,
         alpha: 1,
-        duration: 500,
+        duration: 400,
         ease: 'Power2'
       });
-
-      // 등장 파티클
-      const centerX = width / 2;
-      const centerY = height / 2 + 30;
-      for (let i = 0; i < 8; i++) {
-        const particle = this.add.circle(centerX, centerY, 3, 0x00ffff);
-        particle.setDepth(92);
-        const angle = (i / 8) * Math.PI * 2;
-        this.tweens.add({
-          targets: particle,
-          x: centerX + Math.cos(angle) * 80,
-          y: centerY + Math.sin(angle) * 80,
-          alpha: 0,
-          duration: 400,
-          onComplete: () => particle.destroy()
-        });
-      }
     });
 
-    // 3단계: 타이틀 표시 (2s)
-    this.time.delayedCall(2000, () => {
-      alertText.destroy();
+    // 3단계: 대화 시작 (1.5s)
+    let dialogues = [];
+
+    this.time.delayedCall(1500, () => {
+      // NEXUS 첫 대사
+      const d1 = createDialogue('NEXUS', 'VIRUS DETECTED... TARGET: SNAKE.EXE', '#ff0000', height / 2 - 40);
+      dialogues.push(d1);
+    });
+
+    this.time.delayedCall(2500, () => {
+      // 뱀 대사
+      const d2 = createDialogue('SNAKE', 'I am the antivirus. You are the infection!', '#00ff00', height / 2);
+      dialogues.push(d2);
+    });
+
+    this.time.delayedCall(3500, () => {
+      // NEXUS 대사
+      const d3 = createDialogue('NEXUS', 'INITIATING PURGE... DECRYPT IF YOU CAN!', '#ff00ff', height / 2 + 40);
+      dialogues.push(d3);
+    });
+
+    // 4단계: 타이틀 + 마무리 (4.5s)
+    this.time.delayedCall(4500, () => {
+      // 대화 정리
+      dialogues.forEach(d => {
+        this.tweens.add({
+          targets: d,
+          alpha: 0,
+          duration: 200,
+          onComplete: () => d.destroy()
+        });
+      });
 
       // "NEXUS ONLINE" 타이틀
       const titleText = this.add.text(width / 2, height / 2 - 50, 'NEXUS ONLINE', {
@@ -16205,7 +16286,7 @@ export default class SnakeGame extends Phaser.Scene {
       // HP 바 생성
       this.createNexusHPBar();
 
-      // 4단계: 인트로 종료 + 튜토리얼 (3.5s)
+      // 5단계: 인트로 종료 + 튜토리얼 (6s)
       this.time.delayedCall(1500, () => {
         overlay.destroy();
         titleText.destroy();
@@ -16294,14 +16375,14 @@ export default class SnakeGame extends Phaser.Scene {
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(301);
 
-    // 설명 텍스트
+    // 설명 텍스트 (영어) - 암기 게임 메카닉 설명
     const instructions = [
-      '1️⃣ 맵에 나타나는 숫자 노드(0/1)를 순서대로 수집하세요',
-      '2️⃣ 노드 위의 [1], [2]... 순서를 따라가세요',
-      '3️⃣ 스캔 빔(보라색)에 맞으면 해당 위치에 🔥 생성!',
-      '4️⃣ 🔥 에 닿으면 사망! 자기장(가장자리)도 주의!',
-      '',
-      '📋 4라운드 클리어 = 승리! (1→2→3→4개 노드 수집)'
+      '1. MEMORIZE the code sequence (e.g. "1 0 1 1")',
+      '2. After 2.5s, the code will be HIDDEN!',
+      '3. Collect matching nodes in ORDER from memory',
+      '4. All 0s are the same, all 1s are the same',
+      '5. Wrong order = RESET + extra SCAN penalty!',
+      'Survive 4 ROUNDS to WIN! (1→3→5→8 nodes)'
     ];
 
     const instructionTexts = [];
@@ -16315,7 +16396,7 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     // 시작 버튼
-    const startBtn = this.add.text(width / 2, height / 2 + 100, '[ SPACE 또는 ENTER로 시작 ]', {
+    const startBtn = this.add.text(width / 2, height / 2 + 100, '[ Press SPACE or ENTER to START ]', {
       fontSize: '18px',
       fontFamily: 'monospace',
       color: '#00ff00'
@@ -16470,8 +16551,8 @@ export default class SnakeGame extends Phaser.Scene {
       if (!this.nexusMode) return;
       this.fireScanBeam(isVertical);
 
-      // NEXUS v2: 스캔이 계속 반복됨 (6초 간격)
-      this.time.delayedCall(6000, () => {
+      // NEXUS v2: 스캔이 계속 반복됨 (3초 간격 - 더 빠르게!)
+      this.time.delayedCall(3000, () => {
         if (this.nexusMode && this.nexusPhase !== 'victory') {
           this.startScanBeamCycle();
         }
@@ -16532,6 +16613,12 @@ export default class SnakeGame extends Phaser.Scene {
 
   fireScanBeam(isVertical) {
     const { width, height } = this.cameras.main;
+
+    // 기존 레이저가 있으면 먼저 정리 (버그 방지)
+    if (this.nexusActiveLaser && this.nexusActiveLaser.graphics) {
+      this.nexusActiveLaser.graphics.destroy();
+      this.nexusActiveLaser = null;
+    }
 
     // 플래시 효과
     this.cameras.main.flash(100, 255, 0, 255);
@@ -16727,16 +16814,23 @@ export default class SnakeGame extends Phaser.Scene {
 
   // ========== NEXUS v2: 라운드 시스템 ==========
 
+  // 라운드별 노드 수: 1→1개, 2→3개, 3→5개, 4→8개
+  getNodeCountForRound(roundNum) {
+    const nodeCounts = { 1: 1, 2: 3, 3: 5, 4: 8 };
+    return nodeCounts[roundNum] || roundNum;
+  }
+
   startNexusRound(roundNum) {
     if (!this.nexusMode) return;
 
     console.log(`[NEXUS] Starting Round ${roundNum}`);
     this.nexusRound = roundNum;
     this.nexusBinaryCollected = [];
+    this.nexusCurrentNodeCount = this.getNodeCountForRound(roundNum);
 
     const { width, height } = this.cameras.main;
 
-    // 라운드 시작 텍스트
+    // 라운드 시작 텍스트 (노드 수 표시)
     const roundText = this.add.text(width / 2, height / 2, `ROUND ${roundNum}/4`, {
       fontSize: '36px',
       fontFamily: 'monospace',
@@ -16745,17 +16839,26 @@ export default class SnakeGame extends Phaser.Scene {
       strokeThickness: 4
     }).setOrigin(0.5).setDepth(250);
 
+    const nodeCountText = this.add.text(width / 2, height / 2 + 40, `(${this.nexusCurrentNodeCount} codes)`, {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#ffff00'
+    }).setOrigin(0.5).setDepth(250);
+
     this.tweens.add({
-      targets: roundText,
+      targets: [roundText, nodeCountText],
       scaleX: 1.2,
       scaleY: 1.2,
       alpha: 0,
       duration: 1500,
-      onComplete: () => roundText.destroy()
+      onComplete: () => {
+        roundText.destroy();
+        nodeCountText.destroy();
+      }
     });
 
-    // 시퀀스 UI 생성/업데이트
-    this.createNexusSequenceUI(roundNum);
+    // 시퀀스 UI 생성 (노드 수 기반)
+    this.createNexusSequenceUI(this.nexusCurrentNodeCount);
 
     // 라운드 UI 업데이트
     this.updateNexusRoundUI();
@@ -16765,13 +16868,13 @@ export default class SnakeGame extends Phaser.Scene {
       this.startNexusRoundAttacks(roundNum);
     });
 
-    // 바이너리 노드 스폰 (4초 후)
-    this.time.delayedCall(4000, () => {
-      this.spawnBinaryNodes(roundNum);
+    // 바이너리 노드 스폰 (시퀀스 숨긴 후 - 3초 후)
+    this.time.delayedCall(3000, () => {
+      this.spawnBinaryNodes(this.nexusCurrentNodeCount);
     });
   }
 
-  createNexusSequenceUI(nodeCount) {
+  createNexusSequenceUI(nodeCount, keepSequence = false) {
     const { width } = this.cameras.main;
 
     // 기존 UI 제거
@@ -16781,23 +16884,48 @@ export default class SnakeGame extends Phaser.Scene {
       }
     }
 
-    // 목표 시퀀스 생성 (랜덤 0/1)
-    this.nexusBinarySequence = [];
-    for (let i = 0; i < nodeCount; i++) {
-      this.nexusBinarySequence.push(Math.random() < 0.5 ? 0 : 1);
+    // 목표 시퀀스 생성 (랜덤 0/1) - keepSequence면 유지
+    // 반드시 0과 1이 모두 포함되도록 보장!
+    if (!keepSequence || !this.nexusBinarySequence || this.nexusBinarySequence.length !== nodeCount) {
+      this.nexusBinarySequence = [];
+
+      if (nodeCount === 1) {
+        // 1개일 때는 랜덤
+        this.nexusBinarySequence.push(Math.random() < 0.5 ? 0 : 1);
+      } else {
+        // 2개 이상: 반드시 0과 1 모두 포함
+        // 먼저 랜덤하게 생성
+        for (let i = 0; i < nodeCount; i++) {
+          this.nexusBinarySequence.push(Math.random() < 0.5 ? 0 : 1);
+        }
+
+        // 모두 같은 숫자인지 체크
+        const hasZero = this.nexusBinarySequence.includes(0);
+        const hasOne = this.nexusBinarySequence.includes(1);
+
+        if (!hasZero) {
+          // 모두 1이면, 랜덤 위치를 0으로
+          const randomIdx = Math.floor(Math.random() * nodeCount);
+          this.nexusBinarySequence[randomIdx] = 0;
+        } else if (!hasOne) {
+          // 모두 0이면, 랜덤 위치를 1로
+          const randomIdx = Math.floor(Math.random() * nodeCount);
+          this.nexusBinarySequence[randomIdx] = 1;
+        }
+      }
     }
 
-    // UI 컨테이너
-    const container = this.add.container(width / 2, 50).setDepth(200);
+    // UI 컨테이너 (게임영역 아래에 표시)
+    const container = this.add.container(width / 2, this.gameAreaY + 25).setDepth(200);
 
     // 배경
-    const bgWidth = 180 + nodeCount * 40;
-    const bg = this.add.rectangle(0, 0, bgWidth, 36, 0x000000, 0.7);
+    const bgWidth = 140 + nodeCount * 32;
+    const bg = this.add.rectangle(0, 0, bgWidth, 36, 0x000000, 0.85);
     bg.setStrokeStyle(2, 0x00ffff);
     container.add(bg);
 
-    // "DECRYPT:" 라벨
-    const label = this.add.text(-bgWidth / 2 + 10, 0, 'DECRYPT:', {
+    // "MEMORIZE:" 라벨
+    const label = this.add.text(-bgWidth / 2 + 10, 0, 'CODE:', {
       fontSize: '14px',
       fontFamily: 'monospace',
       color: '#00ffff'
@@ -16806,16 +16934,18 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 시퀀스 슬롯들
     const slots = [];
-    const startX = -bgWidth / 2 + 90;
+    const startX = -bgWidth / 2 + 70;
     for (let i = 0; i < nodeCount; i++) {
-      const slotBg = this.add.rectangle(startX + i * 35, 0, 28, 24, 0x333333, 0.8);
+      const slotBg = this.add.rectangle(startX + i * 30, 0, 26, 24, 0x333333, 0.8);
       slotBg.setStrokeStyle(1, 0x666666);
       container.add(slotBg);
 
-      const slotText = this.add.text(startX + i * 35, 0, '?', {
+      // 처음에는 실제 값을 보여줌 (미리보기)
+      const slotText = this.add.text(startX + i * 30, 0, this.nexusBinarySequence[i].toString(), {
         fontSize: '16px',
         fontFamily: 'monospace',
-        color: '#888888'
+        color: '#ffff00',
+        fontStyle: 'bold'
       }).setOrigin(0.5);
       container.add(slotText);
 
@@ -16827,6 +16957,39 @@ export default class SnakeGame extends Phaser.Scene {
       slots: slots,
       targetSequence: [...this.nexusBinarySequence]
     };
+
+    // "MEMORIZE!" 깜빡임 효과
+    const memorizeText = this.add.text(width / 2, this.gameAreaY + 55, 'MEMORIZE!', {
+      fontSize: '14px',
+      fontFamily: 'monospace',
+      color: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(201);
+
+    this.tweens.add({
+      targets: memorizeText,
+      alpha: 0.3,
+      duration: 200,
+      yoyo: true,
+      repeat: 5
+    });
+
+    // 2.5초 후 "?" 로 숨기기
+    this.time.delayedCall(2500, () => {
+      if (memorizeText && memorizeText.active) {
+        memorizeText.destroy();
+      }
+      // null 체크: 씬이 전환되었거나 UI가 파괴된 경우 대비
+      if (this.nexusSequenceUI && this.nexusSequenceUI.slots) {
+        this.nexusSequenceUI.slots.forEach((slot) => {
+          if (slot && slot.text && slot.text.active) {
+            slot.text.setText('?');
+            slot.text.setColor('#888888');
+            slot.text.setFontStyle('normal');
+          }
+        });
+      }
+    });
   }
 
   updateNexusSequenceUI() {
@@ -16934,13 +17097,7 @@ export default class SnakeGame extends Phaser.Scene {
     }).setOrigin(0.5);
     container.add(text);
 
-    // 순서 표시
-    const orderText = this.add.text(0, -20, `[${index + 1}]`, {
-      fontSize: '10px',
-      fontFamily: 'monospace',
-      color: '#ffff00'
-    }).setOrigin(0.5);
-    container.add(orderText);
+    // 순서 표시 제거 - 유저가 암기해야 함!
 
     // 펄스 애니메이션
     this.tweens.add({
@@ -16977,7 +17134,10 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   collectBinaryNode(node) {
-    console.log(`[NEXUS] Collected node: ${node.value} (expected: ${this.nexusBinarySequence[this.nexusBinaryCollected.length]})`);
+    const expectedIndex = this.nexusBinaryCollected.length;
+    const expectedValue = this.nexusBinarySequence[expectedIndex];
+
+    console.log(`[NEXUS] Collected node: ${node.value} (expected value: ${expectedValue})`);
 
     node.collected = true;
 
@@ -16995,57 +17155,70 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // 순서대로 수집했는지 확인
-    const expectedIndex = this.nexusBinaryCollected.length;
-    const expectedValue = this.nexusBinarySequence[expectedIndex];
-
+    // 값(value)만 확인! 같은 숫자는 모두 동등하게 취급
+    // 예: 시퀀스가 "1011"이고 첫 번째로 1을 먹어야 하면, 어떤 1 노드든 OK
     this.nexusBinaryCollected.push(node.value);
     this.updateNexusSequenceUI();
 
-    if (node.value !== expectedValue || node.index !== expectedIndex) {
-      // 잘못된 순서로 수집
+    if (node.value !== expectedValue) {
+      // 잘못된 값 수집 (예: 0을 먹어야 하는데 1을 먹음)
       this.handleWrongSequence();
     } else {
-      // 올바른 순서
+      // 올바른 값
       this.showCorrectFeedback();
 
-      // 모든 노드 수집 완료 체크
-      if (this.nexusBinaryCollected.length === this.nexusRound) {
+      // 모든 노드 수집 완료 체크 (라운드별 노드 수 기반)
+      if (this.nexusBinaryCollected.length === this.nexusCurrentNodeCount) {
         this.handleRoundComplete();
       }
     }
   }
 
   handleWrongSequence() {
-    console.log('[NEXUS] Wrong sequence!');
+    console.log('[NEXUS] Wrong sequence! Penalty: extra scan');
 
     const { width, height } = this.cameras.main;
 
     // 경고 텍스트
-    const wrongText = this.add.text(width / 2, height / 2, 'SEQUENCE ERROR!', {
-      fontSize: '28px',
+    const wrongText = this.add.text(width / 2, height / 2, 'WRONG CODE!', {
+      fontSize: '32px',
       fontFamily: 'monospace',
       color: '#ff0000',
       stroke: '#000000',
-      strokeThickness: 3
+      strokeThickness: 4
     }).setOrigin(0.5).setDepth(250);
 
-    this.cameras.main.shake(300, 0.02);
+    const penaltyText = this.add.text(width / 2, height / 2 + 40, 'EXTRA SCAN INCOMING...', {
+      fontSize: '16px',
+      fontFamily: 'monospace',
+      color: '#ff6600'
+    }).setOrigin(0.5).setDepth(250);
+
+    this.cameras.main.shake(400, 0.03);
 
     this.tweens.add({
-      targets: wrongText,
+      targets: [wrongText, penaltyText],
       alpha: 0,
-      y: height / 2 - 30,
-      duration: 1500,
-      onComplete: () => wrongText.destroy()
+      y: '-=30',
+      duration: 2000,
+      onComplete: () => {
+        wrongText.destroy();
+        penaltyText.destroy();
+      }
     });
 
-    // 시퀀스 리셋
+    // 시퀀스 리셋 (같은 시퀀스 유지!)
     this.nexusBinaryCollected = [];
-    this.time.delayedCall(1000, () => {
-      // 노드 재스폰
-      this.spawnBinaryNodes(this.nexusRound);
-      this.createNexusSequenceUI(this.nexusRound);
+
+    // 페널티: 추가 스캔 빔 발사!
+    this.time.delayedCall(500, () => {
+      this.fireScanBeam(Math.random() < 0.5);
+    });
+
+    // 노드 재스폰 (같은 시퀀스로 다시 보여주기)
+    this.time.delayedCall(2000, () => {
+      this.createNexusSequenceUI(this.nexusCurrentNodeCount, true); // keepSequence = true
+      this.spawnBinaryNodes(this.nexusCurrentNodeCount);
     });
   }
 
@@ -17116,9 +17289,9 @@ export default class SnakeGame extends Phaser.Scene {
     // 라운드가 올라갈수록 가스존이 더 빨리 축소
     this.startScanBeamCycle();
 
-    // 라운드 4에서 가스존 가속
+    // 라운드 4에서 가스존 가속 (더 완화된 속도)
     if (roundNum === 4) {
-      this.gasZoneExpandInterval = 5000; // 10초 → 5초
+      this.gasZoneExpandInterval = 7000; // 10초 → 7초 (완화)
     }
 
   }
@@ -17300,30 +17473,8 @@ export default class SnakeGame extends Phaser.Scene {
   startDataStormCycle() {
     if (this.nexusPhase !== 'phase2' || !this.nexusMode) return;
 
-    this.nexusPhase2AttackCount++;
-
-    // 공격 패턴 선택 (번갈아가며)
-    const attackType = this.nexusPhase2AttackCount % 3;
-
-    if (attackType === 1) {
-      this.spawnDataBlocks();
-    } else if (attackType === 2) {
-      this.fireTrackers();
-    } else {
-      this.fireEMPSurge();
-    }
-
-    // 3회 공격 후 vulnerable
-    if (this.nexusPhase2AttackCount >= 3) {
-      this.time.delayedCall(2000, () => {
-        this.setNexusVulnerable();
-      });
-    } else {
-      // 다음 공격 (2.5초 후)
-      this.time.delayedCall(2500, () => {
-        this.startDataStormCycle();
-      });
-    }
+    // NEXUS v2: Phase 2도 스캔 빔만 사용 (데이터 블록/추적탄 제거)
+    this.startScanBeamCycle();
   }
 
   spawnDataBlocks() {
@@ -17541,12 +17692,12 @@ export default class SnakeGame extends Phaser.Scene {
     }
     this.showNexusPhaseText('PHASE 3: FIREWALL SURGE');
 
-    // 가스존 가속 (1초 간격)
+    // 가스존 가속 (5초 간격 - 기존 10초에서 완화)
     if (this.gasZoneTimer) {
       this.gasZoneTimer.remove();
     }
     this.gasZoneTimer = this.time.addEvent({
-      delay: 1000,
+      delay: 5000,
       callback: () => this.expandGasZone(),
       loop: true
     });
@@ -17672,6 +17823,12 @@ export default class SnakeGame extends Phaser.Scene {
     const countdownTimer = this.time.addEvent({
       delay: 1000,
       callback: () => {
+        // 객체가 파괴되었는지 체크
+        if (!countText || !countText.active) {
+          countdownTimer.destroy();
+          return;
+        }
+
         mineObj.countdown--;
         countText.setText(mineObj.countdown.toString());
 
@@ -17683,6 +17840,9 @@ export default class SnakeGame extends Phaser.Scene {
       },
       loop: true
     });
+
+    // 타이머 참조 저장 (정리용)
+    mineObj.countdownTimer = countdownTimer;
   }
 
   explodeNexusMine(mineObj) {

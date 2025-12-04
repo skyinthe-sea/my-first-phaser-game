@@ -1,6 +1,6 @@
 # Snake Game - Phaser 3
 
-> Last updated: 2025-11-29
+> Last updated: 2025-12-04
 
 ## 프로젝트 개요
 Phaser 3 기반 Snake 게임. 월드/스테이지 시스템, 콤보, 아이템, 데드존, 상점, 대출 시스템 등 다양한 기능이 포함된 클래식 게임.
@@ -52,8 +52,8 @@ my-phaser-game/
 | 0 | Basic | 1-3 | 기본 스네이크 (십자가 후레쉬, 텔레포트) | 독개구리 (Poison Frog) |
 | 1 | Deadzone | 4-6 | 데드존 생성 | 총잡이 (Bullet Hell) |
 | 2 | Darkness | 7-9 | 안개 (Fog of War) | 녹턴 (Nocturne) |
-| 3 | Machine Kingdom | 10-12 | 움직이는 톱니 (Saws) | TBD |
-| 4 | Cyber World | 13-15 | 독가스 자기장 (Gas Zone) | TBD |
+| 3 | Machine Kingdom | 10-12 | 움직이는 톱니 (Saws) | 톱니 보스 (Gear Boss) |
+| 4 | Cyber World | 13-15 | 독가스 자기장 (Gas Zone) | NEXUS (바이러스 코어) |
 | 5+ | TBD | 16+ | 미정 | 매 3스테이지마다 |
 
 ### 기능 해금 시스템
@@ -704,6 +704,94 @@ checkGeneratorCollision(x, y)
 showMagnetarVictory()
 ```
 
+### 18. NEXUS 보스 시스템 (Stage 15)
+
+#### 개요
+Stage 15 "NEXUS"는 사이버월드의 최종 보스로, **바이러스 vs 백신** 컨셉의 암기 기반 보스전입니다.
+- **뱀 = 안티바이러스 프로그램**
+- **NEXUS = 감염된 코어 (치료 대상)**
+- **스캔 = 뱀의 위치를 캡처하여 불타는 타일 생성**
+
+#### 보스 디자인 (바이러스 스타일)
+- 독성 아우라 (녹색/빨간 글로우)
+- 12개 회전하는 가시
+- 불규칙한 세포막 (빨간 캡시드)
+- 녹색 독성 코어
+- 사악한 눈 (빨간 동공)
+- 8개 궤도 파티클
+
+#### 게임 흐름
+```
+INTRO (대화) → TUTORIAL → ROUND 1 → ROUND 2 → ROUND 3 → ROUND 4 → VICTORY
+```
+
+#### 인트로 대화
+```
+> NEXUS: VIRUS DETECTED... TARGET: SNAKE.EXE
+> SNAKE: I am the antivirus. You are the infection!
+> NEXUS: INITIATING PURGE... DECRYPT IF YOU CAN!
+```
+
+#### 4라운드 시스템 (암기 메카닉)
+| 라운드 | 노드 수 | 설명 |
+|--------|---------|------|
+| 1 | 1개 | 워밍업 |
+| 2 | 3개 | 본격 시작 |
+| 3 | 5개 | 난이도 상승 |
+| 4 | 8개 | 최종 라운드 |
+
+**총 17개 노드 수집 = 클리어!**
+
+#### 암기 메카닉
+1. **코드 표시**: 화면 상단에 바이너리 시퀀스 표시 (예: "1 0 1 1")
+2. **암기 시간**: 2.5초 동안 코드 표시
+3. **숨김**: 모든 숫자가 "?"로 변경
+4. **수집**: 맵에 뿌려진 노드를 올바른 순서로 수집
+5. **동등 처리**: 모든 0은 동일, 모든 1은 동일
+6. **실패 시**: 같은 시퀀스로 리셋 + 추가 스캔 페널티
+
+#### 공격 패턴
+- **스캔 빔**: 3초 간격, 수직/수평 랜덤
+- **불타는 타일**: 스캔에 맞으면 현재 뱀 위치에 생성
+- **가스존**: 맵 외곽에서 점점 축소 (라운드 4에서 가속)
+
+#### 주요 변수
+```javascript
+this.nexusMode = false
+this.nexusPhase = 'none'              // 'intro'|'phase1'|'phase2'|'phase3'|'victory'
+this.nexusRound = 0                   // 1-4
+this.nexusHitCount = 0                // 0-4
+this.nexusBinarySequence = []         // 목표 시퀀스 [0, 1, 1, 0...]
+this.nexusBinaryCollected = []        // 수집한 값들
+this.nexusBinaryNodes = []            // 맵에 뿌린 노드들
+this.nexusGhostSnakes = []            // 불타는 타일들
+```
+
+#### 주요 함수
+```javascript
+// 보스 시작/정리
+startNexus()
+cleanupNexus()
+createNexusBoss()
+
+// 라운드 시스템
+startNexusRound(roundNum)
+handleRoundComplete()
+
+// 암기 시스템
+createNexusSequenceUI(nodeCount, keepSequence)
+spawnBinaryNodes(count)
+collectBinaryNode(node)
+handleWrongSequence()
+
+// 공격 패턴
+fireScanBeam(isVertical)
+createBurningTile(x, y)
+
+// 승리
+showNexusVictory()
+```
+
 ---
 
 ## 주요 변수
@@ -969,14 +1057,14 @@ this.maxSaws = 5                       // 최대 톱니 개수
 |-------|----------|
 | 10 | **움직이는 톱니** 시작 (매 먹이마다 1개, 최대 5개) |
 | 11 | 톱니 지속 |
-| 12 | **보스: TBD** (보스 없이 일반 스테이지로 진행) |
+| 12 | **보스: 톱니 보스 (Gear Boss)** - TBD |
 
 ### World 4: Cyber World (Stage 13-15)
 | Stage | 특이사항 |
 |-------|----------|
 | 13 | **원형 독가스 자기장** - 배틀로얄 스타일 맵 축소 |
 | 14 | 자기장 지속 |
-| 15 | **보스: TBD** (보스 없이 일반 스테이지로 진행) |
+| 15 | **보스: NEXUS** - 암기 기반 바이러스 보스 (4라운드, 17노드) |
 
 ### World 5+ (Stage 16+)
 | Stage | 특이사항 |
