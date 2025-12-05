@@ -248,3 +248,12 @@ export function isMetaUniverseStage(stage) {
 export function shouldDisableCombo(stage) {
   return stage >= 16 && stage <= 18; // Meta Universe에서 콤보 비활성화
 }
+
+/**
+ * Check if this is the Quantum Split stage (Stage 17)
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ */
+export function isQuantumSplitStage(stage) {
+  return stage === 17;
+}

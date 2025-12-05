@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
-import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage, isMetaUniverseStage, shouldDisableCombo } from '../data/worlds.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage, isMetaUniverseStage, shouldDisableCombo, isQuantumSplitStage } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -262,6 +262,28 @@ export default class SnakeGame extends Phaser.Scene {
     this.multiverseElements = []; // 멀티버스 뷰 요소들
     this.isUniverseTransitioning = false; // 전환 중 여부
     this.transitionSnakeLength = null; // 전환 시 뱀 길이 저장
+
+    // ===== Quantum Split System (Stage 17) =====
+    this.quantumSplitMode = false;           // 모드 활성화
+    this.quantumViewports = [];              // 6개 RenderTexture [{rt, graphics, x, y, universeIndex}]
+    this.quantumFoods = [];                  // 6개 먹이 위치 [{x, y}]
+    this.quantumTotalFood = 0;               // 총 먹은 먹이 수 (6개 universe 합산)
+    this.quantumTargetFood = 20;             // 클리어 조건: 20개
+    this.quantumViewportSize = {
+      width: 266,                            // 800 / 3
+      height: 270                            // 540 / 2
+    };
+    this.quantumVisibleTiles = 5;            // 뱀 머리 기준 각 방향 5칸 (11x11)
+    this.quantumIntroShown = false;          // 인트로 표시 여부
+    this.quantumBorderGraphics = null;       // 뷰포트 테두리 그래픽
+    this.quantumBorderGlowLayers = [];       // 글로우 레이어들
+    this.quantumBorderPulseTimer = null;     // 펄스 애니메이션 타이머
+    this.quantumCornerNodes = [];            // 코너 빛나는 노드들
+    this.quantumEnergyParticles = [];        // 테두리 따라 흐르는 입자들
+    this.quantumBorderAnimTimer = null;      // 60fps 애니메이션 타이머
+    this.quantumFoodIndicators = [];         // 각 universe 먹이 표시 UI
+    this.quantumTotalFoodText = null;        // 총 먹이 카운터 텍스트
+    this.quantumFirstFoodSpawned = false;    // 첫 먹이 스폰 여부 (1번/6번 고정용)
 
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
@@ -1278,6 +1300,12 @@ export default class SnakeGame extends Phaser.Scene {
 
   moveSnake() {
     if (this.gameOver) return;
+
+    // Quantum Split 모드에서는 별도 이동 처리
+    if (this.quantumSplitMode) {
+      this.handleQuantumMovement();
+      return;
+    }
 
     // 보스 인트로 중 이동 카운트 체크 (3칸 이동 후 대사)
     if (this.bossMode && this.bossPhase === 'intro' && this.bossIntroMoveCount !== undefined) {
@@ -7459,6 +7487,12 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   draw() {
+    // Quantum Split 모드에서는 RenderTexture 기반 렌더링
+    if (this.quantumSplitMode) {
+      this.drawQuantumViewports();
+      return;
+    }
+
     // 이전 프레임 지우기
     if (this.graphics) {
       this.graphics.clear();
@@ -8846,6 +8880,15 @@ export default class SnakeGame extends Phaser.Scene {
       this.moveTimer.paused = true;
       this.time.delayedCall(500, () => {
         this.showMetaUniverseIntro();
+      });
+    }
+
+    // Quantum Split 스테이지 체크 (Stage 17)
+    if (isQuantumSplitStage(this.currentStage)) {
+      this.food = { x: -100, y: -100 }; // 기본 먹이 숨김
+      this.moveTimer.paused = true;
+      this.time.delayedCall(500, () => {
+        this.showQuantumSplitIntro();
       });
     }
   }
@@ -27561,6 +27604,15 @@ export default class SnakeGame extends Phaser.Scene {
         this.showMetaUniverseIntro();
       });
     }
+
+    // Quantum Split 스테이지 체크 (Stage 17)
+    if (isQuantumSplitStage(this.currentStage)) {
+      this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.time.delayedCall(500, () => {
+        this.showQuantumSplitIntro();
+      });
+    }
   }
 
   // 개발자 모드용 게임 완전 리셋
@@ -27585,6 +27637,11 @@ export default class SnakeGame extends Phaser.Scene {
     // Meta Universe 정리
     if (this.metaUniverseMode) {
       this.cleanupMetaUniverse();
+    }
+
+    // Quantum Split 정리
+    if (this.quantumSplitMode) {
+      this.cleanupQuantumSplit();
     }
 
     // 안개 보스 정리
@@ -28757,6 +28814,1268 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.universeTitle) {
       this.universeTitle.destroy();
       this.universeTitle = null;
+    }
+  }
+
+  // =====================================================
+  // Quantum Split System (Stage 17)
+  // =====================================================
+
+  /**
+   * Quantum Split 인트로 시퀀스
+   */
+  showQuantumSplitIntro() {
+    if (this.quantumIntroShown) return;
+    this.quantumIntroShown = true;
+
+    this.moveTimer.paused = true;
+
+    // Phase 1: 일반 맵에서 시작 (기본 draw 사용)
+    this.draw();
+
+    // Phase 2: 뱀 대사 "what..?"
+    this.time.delayedCall(500, () => {
+      this.showQuantumWhatDialogue(() => {
+        // Phase 3: 줌아웃 + 멀티버스 뷰
+        this.showQuantumZoomOut(() => {
+          // Phase 4: 나머지 뱀 등장
+          this.showQuantumSnakesAppear(() => {
+            // Phase 5: 6개 먹이 생성
+            this.generateQuantumFoods();
+            // Phase 6: "Nothing happened.." 말풍선
+            this.showQuantumAllSnakesDialogue(() => {
+              // Phase 7: 카운트다운 후 게임 시작
+              this.showQuantumCountdown(() => {
+                this.quantumSplitMode = true;
+                this.moveTimer.paused = false;
+              });
+            });
+          });
+        });
+      });
+    });
+  }
+
+  /**
+   * 뱀 대사 "what..?"
+   */
+  showQuantumWhatDialogue(callback) {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 말풍선 배경
+    const bubble = this.add.graphics().setDepth(7000);
+    bubble.fillStyle(0x000000, 0.8);
+    bubble.fillRoundedRect(headX + 15, headY - 35, 80, 30, 8);
+    bubble.lineStyle(2, 0x00ff00, 1);
+    bubble.strokeRoundedRect(headX + 15, headY - 35, 80, 30, 8);
+
+    // 대사 텍스트
+    const dialogue = this.add.text(headX + 55, headY - 20, '', {
+      fontSize: '16px',
+      fill: '#00ff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(7001);
+
+    const message = "what..?";
+    let charIndex = 0;
+
+    // 타이핑 효과
+    const typingTimer = this.time.addEvent({
+      delay: 80,
+      callback: () => {
+        charIndex++;
+        dialogue.setText(message.substring(0, charIndex));
+        if (charIndex >= message.length) {
+          typingTimer.destroy();
+        }
+      },
+      repeat: message.length - 1
+    });
+
+    // 대사 완료 후 정리
+    this.time.delayedCall(1500, () => {
+      this.tweens.add({
+        targets: [bubble, dialogue],
+        alpha: 0,
+        duration: 300,
+        onComplete: () => {
+          bubble.destroy();
+          dialogue.destroy();
+          if (callback) callback();
+        }
+      });
+    });
+  }
+
+  /**
+   * 줌아웃 + 멀티버스 뷰 표시 (격동적인 연출!)
+   */
+  showQuantumZoomOut(callback) {
+    const { width, height } = this.cameras.main;
+    const gameY = this.gameAreaY;
+    const gameH = height - this.uiHeight - this.bottomUIHeight;
+    const vpW = this.quantumViewportSize.width;
+    const vpH = this.quantumViewportSize.height;
+    const centerX = width / 2;
+    const centerY = gameY + gameH / 2;
+
+    // === Phase 1: 화면 떨림 + 글리치 효과 ===
+    this.cameras.main.shake(400, 0.015);
+
+    // 글리치 오버레이
+    const glitchOverlay = this.add.graphics().setDepth(6999);
+    let glitchFrame = 0;
+    const glitchTimer = this.time.addEvent({
+      delay: 50,
+      callback: () => {
+        glitchFrame++;
+        glitchOverlay.clear();
+        // 랜덤 글리치 라인
+        for (let i = 0; i < 5; i++) {
+          const y = Phaser.Math.Between(gameY, gameY + gameH);
+          const h = Phaser.Math.Between(2, 8);
+          glitchOverlay.fillStyle(Phaser.Math.Between(0, 1) ? 0xff00ff : 0x00ffff, 0.3);
+          glitchOverlay.fillRect(0, y, width, h);
+        }
+        if (glitchFrame >= 8) {
+          glitchTimer.destroy();
+          glitchOverlay.destroy();
+        }
+      },
+      repeat: 7
+    });
+
+    // === Phase 2: 플래시 + 기존 그래픽 숨기기 ===
+    this.time.delayedCall(400, () => {
+      // 강렬한 플래시
+      this.cameras.main.flash(150, 255, 255, 255);
+
+      // 기존 그래픽 숨기기
+      if (this.graphics) {
+        this.graphics.setVisible(false);
+      }
+
+      // === Phase 3: 6개 뷰포트 초기화 ===
+      this.initQuantumViewports();
+      this.createQuantumBorders();
+
+      // U1만 뱀 보이게
+      this.quantumSnakeVisible = [true, false, false, false, false, false];
+
+      // 뷰포트들을 화면 밖 랜덤 위치에 배치
+      const startPositions = [
+        { x: centerX - vpW/2, y: -vpH },           // U1: 위에서
+        { x: width + vpW, y: gameY },              // U2: 오른쪽에서
+        { x: -vpW, y: gameY },                     // U3: 왼쪽에서
+        { x: width + vpW, y: gameY + gameH },      // U4: 오른쪽 아래에서
+        { x: centerX - vpW/2, y: height + vpH },   // U5: 아래에서
+        { x: -vpW, y: gameY + gameH }              // U6: 왼쪽 아래에서
+      ];
+
+      this.quantumViewports.forEach((vp, i) => {
+        vp.rt.setPosition(startPositions[i].x, startPositions[i].y);
+        vp.rt.setScale(0.5);
+        vp.rt.setAlpha(0);
+        vp.rt.setRotation(Phaser.Math.DegToRad(Phaser.Math.Between(-15, 15)));
+      });
+      this.drawQuantumViewports();
+
+      // 테두리 숨김 (모든 효과 포함)
+      if (this.quantumBorderGraphics) {
+        this.quantumBorderGraphics.setAlpha(0);
+      }
+      this.quantumBorderGlowLayers.forEach(g => g.setAlpha(0));
+      this.quantumCornerNodes.forEach(n => {
+        n.outer.setAlpha(0);
+        n.mid.setAlpha(0);
+        n.core.setAlpha(0);
+      });
+      this.quantumEnergyParticles.forEach(p => {
+        p.particle.setAlpha(0);
+        p.trail.setAlpha(0);
+      });
+
+      // === Phase 4: 격동적인 뷰포트 등장! ===
+      this.time.delayedCall(100, () => {
+        // 각 뷰포트가 빠르게 자기 위치로 날아옴
+        this.quantumViewports.forEach((vp, i) => {
+          const col = i % 3;
+          const row = Math.floor(i / 3);
+          const targetX = col * vpW;
+          const targetY = gameY + row * vpH;
+
+          // 등장 사운드 효과처럼 카메라 살짝 흔들기
+          this.time.delayedCall(i * 80, () => {
+            this.cameras.main.shake(80, 0.005);
+          });
+
+          this.tweens.add({
+            targets: vp.rt,
+            x: targetX,
+            y: targetY,
+            scaleX: 1,
+            scaleY: 1,
+            alpha: 1,
+            rotation: 0,
+            duration: 400,
+            ease: 'Back.easeOut',
+            delay: i * 80,
+            onComplete: () => {
+              // 착지 효과 - 테두리 펄스
+              if (i < 6) {
+                const flashBorder = this.add.graphics().setDepth(160);
+                flashBorder.lineStyle(4, this.universeColors[i], 1);
+                flashBorder.strokeRect(targetX, targetY, vpW, vpH);
+                this.tweens.add({
+                  targets: flashBorder,
+                  alpha: 0,
+                  duration: 200,
+                  onComplete: () => flashBorder.destroy()
+                });
+              }
+            }
+          });
+        });
+
+        // 테두리 등장 (모든 효과 화려하게 페이드인)
+        this.time.delayedCall(400, () => {
+          // 메인 테두리
+          if (this.quantumBorderGraphics) {
+            this.tweens.add({
+              targets: this.quantumBorderGraphics,
+              alpha: 1,
+              duration: 500,
+              ease: 'Cubic.easeOut'
+            });
+          }
+
+          // 글로우 레이어 (바깥 → 안쪽 순차)
+          const baseAlphas = [0.03, 0.06, 0.1, 0.2, 0.4, 0.8];
+          this.quantumBorderGlowLayers.forEach((g, idx) => {
+            this.tweens.add({
+              targets: g,
+              alpha: baseAlphas[idx] || 0.3,
+              duration: 400,
+              delay: idx * 50,
+              ease: 'Cubic.easeOut'
+            });
+          });
+
+          // 코너 노드 (펑! 하고 등장)
+          this.quantumCornerNodes.forEach((n, idx) => {
+            this.time.delayedCall(200 + idx * 20, () => {
+              n.outer.setScale(2);
+              n.mid.setScale(2);
+              n.core.setScale(2);
+
+              this.tweens.add({
+                targets: [n.outer, n.mid, n.core],
+                alpha: 1,
+                scale: 1,
+                duration: 300,
+                ease: 'Back.easeOut'
+              });
+            });
+          });
+
+          // 에너지 입자 (순차 등장)
+          this.quantumEnergyParticles.forEach((p, idx) => {
+            this.time.delayedCall(400 + idx * 30, () => {
+              this.tweens.add({
+                targets: [p.particle, p.trail],
+                alpha: 1,
+                duration: 200,
+                ease: 'Cubic.easeOut'
+              });
+            });
+          });
+        });
+
+        // 애니메이션 완료 후 콜백
+        this.time.delayedCall(700, () => {
+          this.createQuantumUI();
+          if (callback) callback();
+        });
+      });
+    });
+  }
+
+  /**
+   * 나머지 뱀들 순차 등장 (깜빡이며)
+   */
+  showQuantumSnakesAppear(callback) {
+    // U1은 이미 보임, 나머지 순차 등장
+    let universeIdx = 1;
+    let completedCount = 0;
+
+    const spawnNextSnake = () => {
+      if (universeIdx >= 6) {
+        // 모든 뱀 등장 완료
+        this.time.delayedCall(300, () => {
+          this.quantumSnakeVisible = null; // 이제 모두 보임
+          this.drawQuantumViewports();
+          if (callback) callback();
+        });
+        return;
+      }
+
+      const currentIdx = universeIdx;
+      let blinkCount = 0;
+
+      // 등장 시 해당 뷰포트 테두리 강조
+      const vp = this.quantumViewports[currentIdx];
+      const col = currentIdx % 3;
+      const row = Math.floor(currentIdx / 3);
+      const vpW = this.quantumViewportSize.width;
+      const vpH = this.quantumViewportSize.height;
+
+      const highlight = this.add.graphics().setDepth(170);
+      highlight.lineStyle(3, this.universeColors[currentIdx], 1);
+      highlight.strokeRect(col * vpW, this.gameAreaY + row * vpH, vpW, vpH);
+
+      // 깜빡임 효과
+      const blinkTimer = this.time.addEvent({
+        delay: 60,
+        callback: () => {
+          blinkCount++;
+          if (this.quantumSnakeVisible) {
+            this.quantumSnakeVisible[currentIdx] = blinkCount % 2 === 1;
+            this.drawQuantumViewports();
+          }
+          if (blinkCount >= 6) {
+            blinkTimer.destroy();
+            if (this.quantumSnakeVisible) {
+              this.quantumSnakeVisible[currentIdx] = true;
+              this.drawQuantumViewports();
+            }
+            // 하이라이트 제거
+            this.tweens.add({
+              targets: highlight,
+              alpha: 0,
+              duration: 150,
+              onComplete: () => highlight.destroy()
+            });
+          }
+        },
+        repeat: 5
+      });
+
+      universeIdx++;
+      // 다음 뱀 스폰
+      this.time.delayedCall(200, spawnNextSnake);
+    };
+
+    spawnNextSnake();
+  }
+
+  /**
+   * 모든 뱀이 동시에 말풍선 "Nothing happened.."
+   */
+  showQuantumAllSnakesDialogue(callback) {
+    const bubbles = [];
+    const texts = [];
+    const message = "Nothing happened..";
+
+    // 6개 뷰포트 각각에 말풍선 표시
+    for (let i = 0; i < 6; i++) {
+      const vp = this.quantumViewports[i];
+      const vpCenterX = vp.x + this.quantumViewportSize.width / 2;
+      const vpCenterY = vp.y + this.quantumViewportSize.height / 2 - 30;
+
+      // 말풍선 배경
+      const bubble = this.add.graphics().setDepth(7000);
+      bubble.fillStyle(0x000000, 0.85);
+      bubble.fillRoundedRect(vpCenterX - 75, vpCenterY - 15, 150, 30, 8);
+      bubble.lineStyle(1, this.universeColors[i], 0.8);
+      bubble.strokeRoundedRect(vpCenterX - 75, vpCenterY - 15, 150, 30, 8);
+      bubbles.push(bubble);
+
+      // 대사 텍스트
+      const text = this.add.text(vpCenterX, vpCenterY, '', {
+        fontSize: '11px',
+        fill: '#00ff00',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(7001);
+      texts.push(text);
+    }
+
+    // 타이핑 효과 (모든 뱀 동시에)
+    let charIndex = 0;
+    const typingTimer = this.time.addEvent({
+      delay: 50,
+      callback: () => {
+        charIndex++;
+        const currentText = message.substring(0, charIndex);
+        texts.forEach(t => t.setText(currentText));
+        if (charIndex >= message.length) {
+          typingTimer.destroy();
+        }
+      },
+      repeat: message.length - 1
+    });
+
+    // 대사 완료 후 정리
+    this.time.delayedCall(2000, () => {
+      // 페이드아웃
+      [...bubbles, ...texts].forEach(el => {
+        this.tweens.add({
+          targets: el,
+          alpha: 0,
+          duration: 300,
+          onComplete: () => el.destroy()
+        });
+      });
+
+      this.time.delayedCall(400, () => {
+        if (callback) callback();
+      });
+    });
+  }
+
+  /**
+   * Quantum Split 카운트다운 (6개 뷰포트에 동시 표시)
+   */
+  showQuantumCountdown(callback) {
+    const countNumbers = ['3', '2', '1', 'GO!'];
+    let countIndex = 0;
+
+    // 6개 뷰포트 각각에 카운트다운 텍스트 생성
+    const countTexts = [];
+    for (let i = 0; i < 6; i++) {
+      const vp = this.quantumViewports[i];
+      const vpCenterX = vp.x + this.quantumViewportSize.width / 2;
+      const vpCenterY = vp.y + this.quantumViewportSize.height / 2;
+
+      const text = this.add.text(vpCenterX, vpCenterY, '', {
+        fontSize: '36px',
+        fill: '#ffffff',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 4
+      }).setOrigin(0.5).setDepth(7500);
+      countTexts.push(text);
+    }
+
+    // 카운트다운 실행
+    const showCount = () => {
+      if (countIndex >= countNumbers.length) {
+        // 모든 카운트 완료
+        countTexts.forEach(t => t.destroy());
+        if (callback) callback();
+        return;
+      }
+
+      const countStr = countNumbers[countIndex];
+      const isGo = countStr === 'GO!';
+      const color = isGo ? '#00ff00' : '#ffffff';
+      const fontSize = isGo ? '42px' : '36px';
+      const displayTime = isGo ? 500 : 600;
+
+      // 모든 트윈 정리 후 새로 시작
+      countTexts.forEach((text) => {
+        this.tweens.killTweensOf(text);
+        text.setFontSize(fontSize);
+        text.setFill(color);
+        text.setText(countStr);
+        text.setAlpha(1);
+        text.setScale(1.5);
+
+        // 팝인 애니메이션
+        this.tweens.add({
+          targets: text,
+          scale: 1,
+          duration: 150,
+          ease: 'Back.easeOut'
+        });
+      });
+
+      // 페이드아웃 후 다음 카운트
+      this.time.delayedCall(displayTime - 200, () => {
+        countTexts.forEach((text) => {
+          this.tweens.add({
+            targets: text,
+            alpha: 0,
+            scale: 0.8,
+            duration: 200,
+            ease: 'Cubic.easeIn'
+          });
+        });
+      });
+
+      countIndex++;
+      this.time.delayedCall(displayTime, showCount);
+    };
+
+    // 시작
+    this.time.delayedCall(200, showCount);
+  }
+
+  /**
+   * 6개 RenderTexture 뷰포트 초기화
+   */
+  initQuantumViewports() {
+    const vpW = this.quantumViewportSize.width;
+    const vpH = this.quantumViewportSize.height;
+    const gameY = this.gameAreaY;
+
+    // 기존 뷰포트 정리
+    this.cleanupQuantumViewports();
+
+    // 6개 RenderTexture 생성 (3x2 그리드)
+    for (let i = 0; i < 6; i++) {
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const x = col * vpW;
+      const y = gameY + row * vpH;
+
+      // RenderTexture 생성
+      const rt = this.add.renderTexture(x, y, vpW, vpH);
+      rt.setOrigin(0, 0);
+      rt.setDepth(100);
+
+      // 오프스크린 Graphics 객체
+      const graphics = this.make.graphics({ add: false });
+
+      this.quantumViewports.push({
+        rt,
+        graphics,
+        x, y,
+        universeIndex: i,
+        color: this.universeColors[i]
+      });
+    }
+  }
+
+  /**
+   * 뷰포트 정리 (RenderTexture만)
+   */
+  cleanupQuantumViewports() {
+    this.quantumViewports.forEach(vp => {
+      if (vp.rt) vp.rt.destroy();
+      if (vp.graphics) vp.graphics.destroy();
+    });
+    this.quantumViewports = [];
+  }
+
+  /**
+   * 6개 뷰포트 렌더링 (매 프레임)
+   */
+  drawQuantumViewports() {
+    // 인트로 중이거나 게임 중일 때 모두 렌더링
+    if (this.quantumViewports.length === 0) return;
+
+    const head = this.snake[0];
+    const visible = this.quantumVisibleTiles; // 5
+    const viewSize = visible * 2 + 1; // 11
+    const vpW = this.quantumViewportSize.width;
+    const vpH = this.quantumViewportSize.height;
+    const tileSize = Math.floor(vpW / viewSize); // ~24px
+
+    // 뱀 머리 기준 뷰포트 시작점
+    const viewStartX = head.x - visible;
+    const viewStartY = head.y - visible;
+
+    for (let i = 0; i < 6; i++) {
+      const vp = this.quantumViewports[i];
+      const food = this.quantumFoods[i];
+
+      // 이전 프레임 지우기
+      vp.rt.clear();
+      vp.graphics.clear();
+
+      // 1. 배경 (검은색)
+      vp.graphics.fillStyle(0x000000, 1);
+      vp.graphics.fillRect(0, 0, vpW, vpH);
+
+      // 2. 그리드 라인
+      this.drawQuantumGrid(vp.graphics, viewSize, tileSize, vp.color);
+
+      // 3. 벽 표시 (맵 경계 밖)
+      this.drawQuantumWalls(vp.graphics, viewStartX, viewStartY, viewSize, tileSize);
+
+      // 4. 뱀 그리기 (인트로 중 visible 체크)
+      const shouldDrawSnake = !this.quantumSnakeVisible || this.quantumSnakeVisible[i];
+      if (shouldDrawSnake) {
+        this.drawQuantumSnake(vp.graphics, viewStartX, viewStartY, viewSize, tileSize);
+      }
+
+      // 5. 먹이 그리기 (해당 Universe)
+      if (food) {
+        this.drawQuantumFood(vp.graphics, food, viewStartX, viewStartY, viewSize, tileSize, i);
+      }
+
+      // Graphics → RenderTexture
+      vp.rt.draw(vp.graphics, 0, 0);
+    }
+  }
+
+  /**
+   * 뷰포트 그리드 그리기
+   */
+  drawQuantumGrid(graphics, viewSize, tileSize, color) {
+    graphics.lineStyle(1, color, 0.15);
+
+    for (let i = 0; i <= viewSize; i++) {
+      // 수직선
+      graphics.moveTo(i * tileSize, 0);
+      graphics.lineTo(i * tileSize, viewSize * tileSize);
+      // 수평선
+      graphics.moveTo(0, i * tileSize);
+      graphics.lineTo(viewSize * tileSize, i * tileSize);
+    }
+    graphics.strokePath();
+  }
+
+  /**
+   * 뷰포트 벽 표시 (맵 경계 밖 = 회색)
+   */
+  drawQuantumWalls(graphics, viewStartX, viewStartY, viewSize, tileSize) {
+    for (let ly = 0; ly < viewSize; ly++) {
+      for (let lx = 0; lx < viewSize; lx++) {
+        const worldX = viewStartX + lx;
+        const worldY = viewStartY + ly;
+
+        // 맵 경계 밖 = 벽
+        if (worldX < 0 || worldX >= this.cols || worldY < 0 || worldY >= this.rows) {
+          graphics.fillStyle(0x444444, 1);
+          graphics.fillRect(lx * tileSize, ly * tileSize, tileSize, tileSize);
+        }
+      }
+    }
+  }
+
+  /**
+   * 뷰포트에 뱀 그리기
+   */
+  drawQuantumSnake(graphics, viewStartX, viewStartY, viewSize, tileSize) {
+    this.snake.forEach((segment, index) => {
+      const localX = segment.x - viewStartX;
+      const localY = segment.y - viewStartY;
+
+      // 뷰포트 안에 있는지 체크
+      if (localX >= 0 && localX < viewSize && localY >= 0 && localY < viewSize) {
+        // 머리 = 밝은 초록, 몸통 = 어두운 초록
+        const color = index === 0 ? 0x00ff00 : 0x00aa00;
+        graphics.fillStyle(color, 1);
+        graphics.fillRect(
+          localX * tileSize + 1,
+          localY * tileSize + 1,
+          tileSize - 2,
+          tileSize - 2
+        );
+      }
+    });
+  }
+
+  /**
+   * 뷰포트에 먹이 그리기
+   */
+  drawQuantumFood(graphics, food, viewStartX, viewStartY, viewSize, tileSize, universeIndex) {
+    const localX = food.x - viewStartX;
+    const localY = food.y - viewStartY;
+
+    // 뷰포트 안에 있는지 체크
+    if (localX >= 0 && localX < viewSize && localY >= 0 && localY < viewSize) {
+      // 마지막 먹이 (20번째) = 초록색, 나머지 = 빨간색
+      const isLast = this.quantumTotalFood >= this.quantumTargetFood - 1;
+      const color = isLast ? 0x00ff00 : 0xff0000;
+
+      graphics.fillStyle(color, 1);
+      graphics.fillCircle(
+        localX * tileSize + tileSize / 2,
+        localY * tileSize + tileSize / 2,
+        tileSize / 2 - 2
+      );
+    }
+  }
+
+  /**
+   * Quantum Split 이동 처리
+   */
+  handleQuantumMovement() {
+    if (this.gameOver) return;
+
+    // 입력 처리
+    if (this.inputQueue.length > 0) {
+      this.direction = this.inputQueue.shift();
+    }
+
+    // 새 머리 위치 계산
+    const head = this.snake[0];
+    let newHead = { x: head.x, y: head.y };
+
+    switch (this.direction) {
+      case 'LEFT': newHead.x--; break;
+      case 'RIGHT': newHead.x++; break;
+      case 'UP': newHead.y--; break;
+      case 'DOWN': newHead.y++; break;
+    }
+
+    // 벽 충돌 → 게임오버 (모든 Universe 공통)
+    if (newHead.x < 0 || newHead.x >= this.cols ||
+        newHead.y < 0 || newHead.y >= this.rows) {
+      this.endGame();
+      return;
+    }
+
+    // 자기 충돌
+    if (this.snake.some(seg => seg.x === newHead.x && seg.y === newHead.y)) {
+      this.endGame();
+      return;
+    }
+
+    // 뱀 이동
+    this.snake.unshift(newHead);
+
+    // 6개 Universe 먹이 충돌 체크
+    let ateFood = false;
+    for (let i = 0; i < 6; i++) {
+      const food = this.quantumFoods[i];
+      if (food && newHead.x === food.x && newHead.y === food.y) {
+        this.handleQuantumFoodEaten(i);
+        ateFood = true;
+      }
+    }
+
+    if (!ateFood) {
+      this.snake.pop();
+    }
+
+    // 뷰포트 다시 그리기
+    this.drawQuantumViewports();
+  }
+
+  /**
+   * Quantum Split 먹이 먹었을 때
+   */
+  handleQuantumFoodEaten(universeIndex) {
+    this.quantumTotalFood++;
+    this.score += 10;
+    this.scoreText.setText(this.score.toString());
+
+    // 속도 증가 (5ms씩, 최소 50ms)
+    if (this.moveTimer.delay > 50) {
+      this.moveTimer.delay -= 5;
+      this.speedText.setText(this.moveTimer.delay + 'ms');
+    }
+
+    // 효과음
+    if (this.eatingSound) this.eatingSound.play();
+
+    // 효과 애니메이션
+    this.playQuantumFoodEffect(universeIndex);
+
+    // UI 업데이트
+    this.updateQuantumFoodUI();
+
+    // 클리어 체크
+    if (this.quantumTotalFood >= this.quantumTargetFood) {
+      this.quantumStageClear();
+      return;
+    }
+
+    // 해당 Universe만 새 먹이 생성
+    this.quantumFoods[universeIndex] = this.generateQuantumFood();
+  }
+
+  /**
+   * Quantum Split 먹이 효과 애니메이션
+   */
+  playQuantumFoodEffect(universeIndex) {
+    const vp = this.quantumViewports[universeIndex];
+    if (!vp) return;
+
+    // 테두리 펄스 효과
+    const flashBorder = this.add.graphics().setDepth(200);
+    flashBorder.lineStyle(4, vp.color, 1);
+    flashBorder.strokeRect(vp.x, vp.y, this.quantumViewportSize.width, this.quantumViewportSize.height);
+
+    this.tweens.add({
+      targets: flashBorder,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => flashBorder.destroy()
+    });
+  }
+
+  /**
+   * 6개 먹이 초기 생성
+   */
+  generateQuantumFoods() {
+    this.quantumFoods = [];
+    const head = this.snake[0];
+
+    for (let i = 0; i < 6; i++) {
+      // 첫 번째 먹이만 1번/6번 유니버스 고정 위치
+      if (!this.quantumFirstFoodSpawned) {
+        if (i === 0) {
+          // 1번 유니버스: 뱀 머리 3칸 앞 (진행 방향)
+          let foodPos = this.getPositionAhead(head, this.direction, 3);
+          foodPos = this.clampToGrid(foodPos);
+          this.quantumFoods.push(foodPos);
+          continue;
+        } else if (i === 5) {
+          // 6번 유니버스: 뱀 머리 6칸 앞, 1칸 아래
+          let foodPos = this.getPositionAhead(head, this.direction, 6);
+          foodPos.y += 1; // 1칸 아래
+          foodPos = this.clampToGrid(foodPos);
+          this.quantumFoods.push(foodPos);
+          continue;
+        }
+      }
+      // 나머지는 랜덤
+      this.quantumFoods.push(this.generateQuantumFood());
+    }
+
+    this.quantumFirstFoodSpawned = true;
+  }
+
+  /**
+   * 뱀 머리 기준 n칸 앞 위치 계산
+   */
+  getPositionAhead(head, direction, distance) {
+    const pos = { x: head.x, y: head.y };
+    switch (direction) {
+      case 'RIGHT': pos.x += distance; break;
+      case 'LEFT': pos.x -= distance; break;
+      case 'UP': pos.y -= distance; break;
+      case 'DOWN': pos.y += distance; break;
+    }
+    return pos;
+  }
+
+  /**
+   * 그리드 범위 내로 좌표 제한
+   */
+  clampToGrid(pos) {
+    return {
+      x: Math.max(0, Math.min(this.cols - 1, pos.x)),
+      y: Math.max(0, Math.min(this.rows - 1, pos.y))
+    };
+  }
+
+  /**
+   * 개별 먹이 생성
+   */
+  generateQuantumFood() {
+    let pos;
+    let valid = false;
+    let attempts = 0;
+
+    while (!valid && attempts < 100) {
+      pos = {
+        x: Phaser.Math.Between(0, this.cols - 1),
+        y: Phaser.Math.Between(0, this.rows - 1)
+      };
+
+      // 뱀 위가 아닌지 체크
+      const notOnSnake = !this.snake.some(seg => seg.x === pos.x && seg.y === pos.y);
+
+      valid = notOnSnake;
+      attempts++;
+    }
+
+    return pos;
+  }
+
+  /**
+   * Quantum Split 스테이지 클리어
+   */
+  quantumStageClear() {
+    this.moveTimer.paused = true;
+
+    // 병합 애니메이션 (6개 → 1개)
+    this.showQuantumMergeAnimation(() => {
+      this.cleanupQuantumSplit();
+      this.stageClear();
+    });
+  }
+
+  /**
+   * Quantum Split 병합 애니메이션
+   */
+  showQuantumMergeAnimation(callback) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = this.gameAreaY + (height - this.uiHeight - this.bottomUIHeight) / 2;
+
+    const vpW = this.quantumViewportSize.width;
+    const vpH = this.quantumViewportSize.height;
+
+    // 6개 뷰포트가 중앙으로 모임
+    this.quantumViewports.forEach((vp, i) => {
+      this.tweens.add({
+        targets: vp.rt,
+        x: centerX - vpW / 2,
+        y: centerY - vpH / 2,
+        scaleX: 0.5,
+        scaleY: 0.5,
+        alpha: i === 0 ? 1 : 0, // 첫 번째만 남김
+        duration: 800,
+        ease: 'Power2'
+      });
+    });
+
+    // 플래시 후 콜백
+    this.time.delayedCall(900, () => {
+      this.cameras.main.flash(200, 255, 255, 255);
+      if (callback) callback();
+    });
+  }
+
+  /**
+   * Quantum Split 정리
+   */
+  cleanupQuantumSplit() {
+    this.quantumSplitMode = false;
+    this.quantumTotalFood = 0;
+    this.quantumFoods = [];
+    this.quantumIntroShown = false;
+    this.quantumFirstFoodSpawned = false;
+
+    // RenderTexture 정리
+    this.cleanupQuantumViewports();
+
+    // 테두리 효과 정리 (글로우, 코너 노드, 에너지 입자, 애니메이션)
+    this.cleanupQuantumBorderEffects();
+
+    // 테두리 정리
+    if (this.quantumBorderGraphics) {
+      this.quantumBorderGraphics.destroy();
+      this.quantumBorderGraphics = null;
+    }
+
+    // 먹이 카운터 정리
+    if (this.quantumTotalFoodText) {
+      this.quantumTotalFoodText.destroy();
+      this.quantumTotalFoodText = null;
+    }
+
+    // Universe 표시 정리
+    this.quantumFoodIndicators.forEach(ind => {
+      if (ind) ind.destroy();
+    });
+    this.quantumFoodIndicators = [];
+  }
+
+  /**
+   * Quantum Split UI 생성
+   */
+  createQuantumUI() {
+    const { width } = this.cameras.main;
+
+    // 총 먹이 카운터 (상단 중앙)
+    this.quantumTotalFoodText = this.add.text(width / 2, 30, '0/20', {
+      fontSize: '24px',
+      fill: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2001);
+
+    this.updateQuantumFoodUI();
+  }
+
+  /**
+   * Quantum Split 테두리 생성 (화려한 네온 포탈 효과)
+   */
+  createQuantumBorders() {
+    // 기존 정리
+    this.cleanupQuantumBorderEffects();
+
+    const vpW = this.quantumViewportSize.width;
+    const vpH = this.quantumViewportSize.height;
+
+    // === 1. 다중 글로우 레이어 (더 많은 레이어로 부드러운 글로우) ===
+    const glowLayers = [
+      { offset: 10, alpha: 0.03, width: 20 },
+      { offset: 7, alpha: 0.06, width: 14 },
+      { offset: 5, alpha: 0.1, width: 10 },
+      { offset: 3, alpha: 0.2, width: 6 },
+      { offset: 1, alpha: 0.4, width: 3 },
+      { offset: 0, alpha: 0.8, width: 2 },
+    ];
+
+    for (const layer of glowLayers) {
+      const graphics = this.add.graphics().setDepth(150 + layer.offset);
+
+      for (let i = 0; i < 6; i++) {
+        const vp = this.quantumViewports[i];
+        graphics.lineStyle(layer.width, vp.color, layer.alpha);
+        graphics.strokeRect(
+          vp.x - layer.offset, vp.y - layer.offset,
+          vpW + layer.offset * 2, vpH + layer.offset * 2
+        );
+      }
+      this.quantumBorderGlowLayers.push(graphics);
+    }
+
+    // === 2. 메인 테두리 + 내부 하이라이트 ===
+    this.quantumBorderGraphics = this.add.graphics().setDepth(165);
+    for (let i = 0; i < 6; i++) {
+      const vp = this.quantumViewports[i];
+      // 흰색 내부 하이라이트
+      this.quantumBorderGraphics.lineStyle(1, 0xffffff, 0.4);
+      this.quantumBorderGraphics.strokeRect(vp.x + 1, vp.y + 1, vpW - 2, vpH - 2);
+    }
+
+    // === 3. 코너 빛나는 노드 (4개 x 6 유니버스) ===
+    for (let i = 0; i < 6; i++) {
+      const vp = this.quantumViewports[i];
+      const corners = [
+        { x: vp.x, y: vp.y },                    // 좌상
+        { x: vp.x + vpW, y: vp.y },              // 우상
+        { x: vp.x, y: vp.y + vpH },              // 좌하
+        { x: vp.x + vpW, y: vp.y + vpH }         // 우하
+      ];
+
+      corners.forEach((corner, ci) => {
+        // 외부 글로우 원
+        const outerGlow = this.add.graphics().setDepth(170);
+        outerGlow.fillStyle(vp.color, 0.3);
+        outerGlow.fillCircle(corner.x, corner.y, 12);
+
+        // 중간 글로우
+        const midGlow = this.add.graphics().setDepth(171);
+        midGlow.fillStyle(vp.color, 0.5);
+        midGlow.fillCircle(corner.x, corner.y, 7);
+
+        // 밝은 코어
+        const core = this.add.graphics().setDepth(172);
+        core.fillStyle(0xffffff, 0.9);
+        core.fillCircle(corner.x, corner.y, 3);
+
+        this.quantumCornerNodes.push({
+          outer: outerGlow, mid: midGlow, core,
+          x: corner.x, y: corner.y,
+          color: vp.color,
+          phase: ci * 0.5 + i * 0.3  // 각각 다른 위상
+        });
+      });
+    }
+
+    // === 4. 테두리 따라 흐르는 에너지 입자 ===
+    for (let i = 0; i < 6; i++) {
+      const vp = this.quantumViewports[i];
+      // 각 유니버스당 6개 입자
+      for (let p = 0; p < 6; p++) {
+        const particle = this.add.graphics().setDepth(175);
+        particle.fillStyle(0xffffff, 0.9);
+        particle.fillCircle(0, 0, 2);
+
+        // 트레일 (잔상)
+        const trail = this.add.graphics().setDepth(174);
+
+        this.quantumEnergyParticles.push({
+          particle, trail,
+          vpIndex: i,
+          progress: p / 6,  // 0~1 사이, 테두리 위치
+          speed: 0.003 + Math.random() * 0.002,
+          color: vp.color,
+          vp: { x: vp.x, y: vp.y, w: vpW, h: vpH }
+        });
+      }
+    }
+
+    // === 5. Universe 번호 (네온 스타일) ===
+    for (let i = 0; i < 6; i++) {
+      const vp = this.quantumViewports[i];
+      const colorHex = '#' + vp.color.toString(16).padStart(6, '0');
+
+      // 배경 글로우
+      const bgGlow = this.add.graphics().setDepth(199);
+      bgGlow.fillStyle(vp.color, 0.2);
+      bgGlow.fillRoundedRect(vp.x + 4, vp.y + 4, 32, 18, 4);
+
+      // 텍스트
+      const indicator = this.add.text(vp.x + 20, vp.y + 13, `U${i + 1}`, {
+        fontSize: '12px',
+        fill: colorHex,
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(200);
+      indicator.setShadow(0, 0, colorHex, 10, false, true);
+
+      this.quantumFoodIndicators.push(indicator);
+      this.quantumFoodIndicators.push(bgGlow);  // 정리용
+    }
+
+    // === 애니메이션 시작 ===
+    this.startQuantumBorderAnimation();
+  }
+
+  /**
+   * 테두리 효과 요소 정리
+   */
+  cleanupQuantumBorderEffects() {
+    this.quantumBorderGlowLayers.forEach(g => g.destroy());
+    this.quantumBorderGlowLayers = [];
+
+    this.quantumCornerNodes.forEach(n => {
+      n.outer.destroy();
+      n.mid.destroy();
+      n.core.destroy();
+    });
+    this.quantumCornerNodes = [];
+
+    this.quantumEnergyParticles.forEach(p => {
+      p.particle.destroy();
+      p.trail.destroy();
+    });
+    this.quantumEnergyParticles = [];
+
+    if (this.quantumBorderAnimTimer) {
+      this.quantumBorderAnimTimer.destroy();
+      this.quantumBorderAnimTimer = null;
+    }
+  }
+
+  /**
+   * Quantum 테두리 60fps 애니메이션
+   */
+  startQuantumBorderAnimation() {
+    if (this.quantumBorderAnimTimer) {
+      this.quantumBorderAnimTimer.destroy();
+    }
+
+    let time = 0;
+    this.quantumBorderAnimTimer = this.time.addEvent({
+      delay: 16,  // ~60fps
+      callback: () => {
+        time += 0.016;
+
+        // 1. 글로우 레이어 펄스
+        const baseAlphas = [0.03, 0.06, 0.1, 0.2, 0.4, 0.8];
+        this.quantumBorderGlowLayers.forEach((layer, idx) => {
+          const wave = Math.sin(time * 3 + idx * 0.4) * 0.3;
+          layer.setAlpha(Math.max(0.02, baseAlphas[idx] * (1 + wave)));
+        });
+
+        // 2. 코너 노드 펄스 + 회전 느낌
+        this.quantumCornerNodes.forEach(node => {
+          const pulse = Math.sin(time * 4 + node.phase) * 0.5 + 0.5;
+          const scale = 0.8 + pulse * 0.4;
+
+          node.outer.setScale(scale);
+          node.outer.setAlpha(0.2 + pulse * 0.3);
+          node.mid.setScale(0.9 + pulse * 0.2);
+          node.core.setAlpha(0.7 + pulse * 0.3);
+        });
+
+        // 3. 에너지 입자 이동
+        this.quantumEnergyParticles.forEach(p => {
+          p.progress += p.speed;
+          if (p.progress > 1) p.progress -= 1;
+
+          // 테두리 따라 위치 계산 (시계방향)
+          const pos = this.getQuantumBorderPosition(p.vp, p.progress);
+          p.particle.setPosition(pos.x, pos.y);
+
+          // 트레일 업데이트
+          p.trail.clear();
+          p.trail.fillStyle(p.color, 0.4);
+          for (let t = 1; t <= 4; t++) {
+            const trailProgress = p.progress - t * 0.008;
+            const tp = this.getQuantumBorderPosition(p.vp, trailProgress < 0 ? trailProgress + 1 : trailProgress);
+            p.trail.fillCircle(tp.x, tp.y, 2 - t * 0.3);
+          }
+        });
+
+        // 4. 랜덤 스파크 (1% 확률)
+        if (Math.random() < 0.01 && this.quantumViewports.length > 0) {
+          this.createQuantumSpark();
+        }
+      },
+      loop: true
+    });
+  }
+
+  /**
+   * 테두리 위 위치 계산 (progress: 0~1)
+   */
+  getQuantumBorderPosition(vp, progress) {
+    const perimeter = 2 * (vp.w + vp.h);
+    const dist = progress * perimeter;
+
+    if (dist < vp.w) {
+      return { x: vp.x + dist, y: vp.y };  // 상단
+    } else if (dist < vp.w + vp.h) {
+      return { x: vp.x + vp.w, y: vp.y + (dist - vp.w) };  // 우측
+    } else if (dist < 2 * vp.w + vp.h) {
+      return { x: vp.x + vp.w - (dist - vp.w - vp.h), y: vp.y + vp.h };  // 하단
+    } else {
+      return { x: vp.x, y: vp.y + vp.h - (dist - 2 * vp.w - vp.h) };  // 좌측
+    }
+  }
+
+  /**
+   * 랜덤 스파크 효과
+   */
+  createQuantumSpark() {
+    const vpIdx = Phaser.Math.Between(0, 5);
+    const vp = this.quantumViewports[vpIdx];
+    if (!vp) return;
+
+    const progress = Math.random();
+    const pos = this.getQuantumBorderPosition({
+      x: vp.x, y: vp.y,
+      w: this.quantumViewportSize.width,
+      h: this.quantumViewportSize.height
+    }, progress);
+
+    // 스파크 그래픽
+    const spark = this.add.graphics().setDepth(180);
+    const color = vp.color;
+
+    // 중심 밝은 점
+    spark.fillStyle(0xffffff, 1);
+    spark.fillCircle(pos.x, pos.y, 4);
+
+    // 방사형 라인들
+    spark.lineStyle(2, color, 0.8);
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2 + Math.random() * 0.5;
+      const len = 8 + Math.random() * 12;
+      spark.lineBetween(
+        pos.x, pos.y,
+        pos.x + Math.cos(angle) * len,
+        pos.y + Math.sin(angle) * len
+      );
+    }
+
+    // 페이드아웃 후 제거
+    this.tweens.add({
+      targets: spark,
+      alpha: 0,
+      scale: 1.5,
+      duration: 300,
+      ease: 'Cubic.easeOut',
+      onComplete: () => spark.destroy()
+    });
+  }
+
+  /**
+   * Quantum 테두리 펄스 애니메이션 (하위 호환)
+   */
+  startQuantumBorderPulse() {
+    // startQuantumBorderAnimation으로 통합됨
+  }
+
+  /**
+   * Quantum 테두리 펄스 정지
+   */
+  stopQuantumBorderPulse() {
+    if (this.quantumBorderPulseTimer) {
+      this.quantumBorderPulseTimer.destroy();
+      this.quantumBorderPulseTimer = null;
+    }
+  }
+
+  /**
+   * Quantum Split UI 업데이트
+   */
+  updateQuantumFoodUI() {
+    if (this.quantumTotalFoodText) {
+      this.quantumTotalFoodText.setText(`${this.quantumTotalFood}/${this.quantumTargetFood}`);
     }
   }
 
