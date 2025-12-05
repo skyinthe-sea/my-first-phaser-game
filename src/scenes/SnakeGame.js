@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
-import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage } from '../data/worlds.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage, isMetaUniverseStage, shouldDisableCombo } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -238,6 +238,30 @@ export default class SnakeGame extends Phaser.Scene {
     // 레거시 호환 (isMagnetarStage 체크용)
     this.magnetarMode = false;
     this.magnetarControlsReversed = false;
+
+    // ===== Meta Universe (Stage 16-18) =====
+    this.metaUniverseMode = false;
+    this.currentUniverse = 1; // 현재 위치 (1-6)
+    this.universeColors = [
+      0xff3333, // Universe 1: 빨강
+      0x3399ff, // Universe 2: 파랑
+      0x33ff66, // Universe 3: 초록
+      0xffff33, // Universe 4: 노랑
+      0xcc33ff, // Universe 5: 보라
+      0x33ffff  // Universe 6: 시안
+    ];
+    this.wormholes = []; // 활성 웜홀들 [{x, y, targetUniverse, color, container, graphics}]
+    this.wormholeAnimTimer = null; // 60fps 애니메이션 타이머
+    this.foodUniverse = 1; // 먹이가 있는 Universe
+    this.wormholePassCount = 0; // 웜홀 통과 횟수
+    this.metaUniverseFoodCount = 0; // 먹은 먹이 수
+    this.metaUniverseTargetFood = 5; // 테스트: 5개 (정식: 20개)
+    this.universeTitle = null; // "Universe X" 타이틀 텍스트
+    this.metaUniverseIntroShown = false; // 인트로 표시 여부
+    this.comboDisabled = false; // 콤보 비활성화 여부
+    this.multiverseElements = []; // 멀티버스 뷰 요소들
+    this.isUniverseTransitioning = false; // 전환 중 여부
+    this.transitionSnakeLength = null; // 전환 시 뱀 길이 저장
 
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
@@ -1466,6 +1490,16 @@ export default class SnakeGame extends Phaser.Scene {
       }
     }
 
+    // Meta Universe: 웜홀 충돌 체크
+    if (this.metaUniverseMode && this.wormholes.length > 0) {
+      const hitWormhole = this.checkWormholeCollision();
+      if (hitWormhole) {
+        this.startUniverseTransition(hitWormhole.targetUniverse, newHead.x, newHead.y);
+        this.draw();
+        return;
+      }
+    }
+
     // 먹이를 먹었는지 체크 (NEXUS 모드에서는 food가 null일 수 있음)
     if (this.food && newHead.x === this.food.x && newHead.y === this.food.y) {
       this.triggerFogFlash();
@@ -1524,6 +1558,19 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 탄막 보스 HIT 체크 (food 위치를 사용하지 않으므로 별도 체크)
       // (이 블록은 food 위치가 아닌 경우에는 실행되지 않음)
+
+      // Meta Universe 먹이 처리
+      if (this.metaUniverseMode) {
+        this.playFoodEffect();
+        const cleared = this.handleMetaUniverseFood();
+        if (cleared) {
+          this.draw();
+          return;
+        }
+        // Meta Universe에서는 일반 로직 스킵
+        this.draw();
+        return;
+      }
 
       this.foodCount++;
 
@@ -1739,7 +1786,12 @@ export default class SnakeGame extends Phaser.Scene {
         }
       } else {
         // 먹이를 안 먹었으면 꼬리 제거
-        this.snake.pop();
+        // 웜홀 스폰 중이면 꼬리 제거 대신 웜홀에서 세그먼트 추가
+        if (this.wormholeSpawnData && this.wormholeSpawnData.remaining > 0) {
+          this.handleWormholeSpawn();
+        } else {
+          this.snake.pop();
+        }
       }
     }
 
@@ -2104,6 +2156,9 @@ export default class SnakeGame extends Phaser.Scene {
   showDirectionChangeCounter() {
     // 보스 스테이지에서는 방향 전환 카운터 비활성화
     if (this.bossMode) return;
+
+    // Meta Universe에서는 콤보 비활성화 → 카운터도 비활성화
+    if (this.metaUniverseMode || this.comboDisabled) return;
 
     // 뱀 머리 위치
     const head = this.snake[0];
@@ -7408,7 +7463,8 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.graphics) {
       this.graphics.clear();
       // 그래픽이 숨겨져 있으면 다시 보이게 (hideSnakeGraphics 후 복구)
-      if (!this.graphics.visible) {
+      // 단, 스테이지 클리어 중이면 숨긴 상태 유지
+      if (!this.graphics.visible && !this.isStageClearingAnimation) {
         this.graphics.setVisible(true);
       }
     } else {
@@ -7421,9 +7477,13 @@ export default class SnakeGame extends Phaser.Scene {
     // 뱀 그리기 (무적 깜빡임 중에는 스킵)
     if (!skipSnakeDraw) {
       this.snake.forEach((segment, index) => {
+        // Meta Universe 스폰 애니메이션: 알파 체크
+        const segmentAlpha = this.snakeSegmentAlphas ? this.snakeSegmentAlphas[index] : 1;
+        if (segmentAlpha <= 0) return; // 알파가 0이면 그리지 않음
+
         // 글로우 효과 (강한 효과일 때)
         if (this.snakeGlow) {
-          this.graphics.fillStyle(0xff0000, 0.3);
+          this.graphics.fillStyle(0xff0000, 0.3 * segmentAlpha);
           this.graphics.fillCircle(
             segment.x * this.gridSize + this.gridSize / 2,
             segment.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
@@ -7435,26 +7495,26 @@ export default class SnakeGame extends Phaser.Scene {
           // 머리 색상
           if (this.snakePoisoned) {
             // 보스전 독 상태 - 보라색
-            this.graphics.fillStyle(0x9900ff);
-          } else if (this.comboShieldCount > 0) {
-            // 콤보 실드가 있으면 노란색 - 수트 기능
-            this.graphics.fillStyle(0xffff00);
+            this.graphics.fillStyle(0x9900ff, segmentAlpha);
+          } else if (this.comboShieldCount > 0 && !this.comboDisabled) {
+            // 콤보 실드가 있으면 노란색 - 수트 기능 (Meta Universe에서는 비활성화)
+            this.graphics.fillStyle(0xffff00, segmentAlpha);
           } else if (this.snakeHeadTint) {
-            this.graphics.fillStyle(this.snakeHeadTint);
+            this.graphics.fillStyle(this.snakeHeadTint, segmentAlpha);
           } else if (this.snakeBodyTint) {
-            this.graphics.fillStyle(this.snakeBodyTint);
+            this.graphics.fillStyle(this.snakeBodyTint, segmentAlpha);
           } else {
-            this.graphics.fillStyle(0x00ff00);
+            this.graphics.fillStyle(0x00ff00, segmentAlpha);
           }
         } else {
           // 몸통 색상
           if (this.snakePoisoned) {
             // 보스전 독 상태 - 보라색
-            this.graphics.fillStyle(0x7700cc);
+            this.graphics.fillStyle(0x7700cc, segmentAlpha);
           } else if (this.snakeBodyTint) {
-            this.graphics.fillStyle(this.snakeBodyTint);
+            this.graphics.fillStyle(this.snakeBodyTint, segmentAlpha);
           } else {
-            this.graphics.fillStyle(0x00aa00);
+            this.graphics.fillStyle(0x00aa00, segmentAlpha);
           }
         }
 
@@ -8264,6 +8324,25 @@ export default class SnakeGame extends Phaser.Scene {
     // 뱀 그래픽 숨기기 (점프 애니메이션에서 별도 렉탱글로 표시)
     this.hideSnakeGraphics();
 
+    // Meta Universe 웜홀 스폰 중이면 정리
+    if (this.wormholeSpawnData) {
+      if (this.wormholeSpawnData.wormholeAnimEvent) {
+        this.wormholeSpawnData.wormholeAnimEvent.destroy();
+      }
+      if (this.wormholeSpawnData.exitWormhole) {
+        this.wormholeSpawnData.exitWormhole.destroy();
+      }
+      this.wormholeSpawnData = null;
+    }
+
+    // Meta Universe 웜홀들과 타이틀 숨기기
+    if (this.metaUniverseMode) {
+      this.destroyWormholes();
+      if (this.universeTitle) {
+        this.universeTitle.setVisible(false);
+      }
+    }
+
     const { width, height } = this.cameras.main;
 
     // 먹이 즉시 숨김
@@ -8621,6 +8700,11 @@ export default class SnakeGame extends Phaser.Scene {
     this.cleanupSpeedBoostOrbitals();
     this.resetFogOfWar();
 
+    // Meta Universe 정리
+    if (this.metaUniverseMode) {
+      this.cleanupMetaUniverse();
+    }
+
     // 안개 보스 정리
     if (this.fogBossMode) {
       this.cleanupFogBoss();
@@ -8752,6 +8836,16 @@ export default class SnakeGame extends Phaser.Scene {
       this.hideFoodGraphics();
       this.time.delayedCall(500, () => {
         this.startNexusBoss();
+      });
+    }
+
+    // Meta Universe 스테이지 체크 (Stage 16-18)
+    if (isMetaUniverseStage(this.currentStage) && this.currentStage === 16) {
+      // Stage 16에서만 인트로 표시
+      this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.time.delayedCall(500, () => {
+        this.showMetaUniverseIntro();
       });
     }
   }
@@ -27458,6 +27552,15 @@ export default class SnakeGame extends Phaser.Scene {
         this.startNexusBoss();
       });
     }
+
+    // Meta Universe 스테이지 체크 (Stage 16-18)
+    if (isMetaUniverseStage(this.currentStage) && this.currentStage === 16) {
+      this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.time.delayedCall(500, () => {
+        this.showMetaUniverseIntro();
+      });
+    }
   }
 
   // 개발자 모드용 게임 완전 리셋
@@ -27477,6 +27580,11 @@ export default class SnakeGame extends Phaser.Scene {
     // NEXUS 보스 정리
     if (this.nexusMode) {
       this.cleanupNexus();
+    }
+
+    // Meta Universe 정리
+    if (this.metaUniverseMode) {
+      this.cleanupMetaUniverse();
     }
 
     // 안개 보스 정리
@@ -27661,6 +27769,995 @@ export default class SnakeGame extends Phaser.Scene {
       nameKo: world.nameKo || world.name || 'Unknown',
       color: '#00ff00'
     };
+  }
+
+  // =====================================================
+  // ==================== META UNIVERSE (Stage 16-18) ====================
+  // =====================================================
+
+  /**
+   * Meta Universe 인트로 시퀀스 시작
+   * 1. 콤보 UI 파괴 애니메이션
+   * 2. 뱀 "what..?" 대사
+   * 3. Universe 1 타이틀 표시
+   * 4. 3-2-1-GO 카운트다운
+   */
+  showMetaUniverseIntro() {
+    if (this.metaUniverseIntroShown) return;
+    this.metaUniverseIntroShown = true;
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 1. 콤보 UI 파괴 애니메이션
+    this.destroyComboUI(() => {
+      // 2. 뱀 대사 "what..?"
+      this.showMetaUniverseSnakeDialogue(() => {
+        // 3. Universe 1 타이틀 표시
+        this.showUniverseTitle(1, () => {
+          // 4. 카운트다운 후 게임 시작
+          this.startMetaUniverseCountdown();
+        });
+      });
+    });
+  }
+
+  /**
+   * 콤보 UI 파괴 애니메이션
+   * COMBO 텍스트가 지진처럼 격렬히 흔들리다가 폭발하듯 깨지는 효과
+   */
+  destroyComboUI(callback) {
+    const { width, height } = this.cameras.main;
+
+    // 콤보 비활성화
+    this.comboDisabled = true;
+
+    // comboText가 없거나 이미 파괴됐으면 바로 콜백
+    if (!this.comboText || !this.comboText.active) {
+      if (callback) callback();
+      return;
+    }
+
+    const comboX = this.comboText.x;
+    const comboY = this.comboText.y;
+
+    // 1단계: 카메라 미세 진동 시작 (지진 전조)
+    let earthquakeTimer = 0;
+    const earthquakeEvent = this.time.addEvent({
+      delay: 16,
+      callback: () => {
+        earthquakeTimer++;
+        // 점점 강해지는 흔들림
+        const intensity = Math.min(earthquakeTimer / 30, 1);
+        const shakeX = (Math.random() - 0.5) * 8 * intensity;
+        const shakeY = (Math.random() - 0.5) * 6 * intensity;
+        this.cameras.main.setScroll(shakeX, shakeY);
+      },
+      loop: true
+    });
+
+    // 2단계: 콤보 텍스트 격렬한 흔들림 (800ms)
+    // 좌우뿐 아니라 상하, 회전, 스케일까지 추가
+    this.tweens.add({
+      targets: this.comboText,
+      x: { value: comboX + 15, duration: 30, yoyo: true, repeat: 25 },
+      y: { value: comboY + 8, duration: 40, yoyo: true, repeat: 19 },
+      angle: { value: 5, duration: 50, yoyo: true, repeat: 15 },
+      scaleX: { value: 1.1, duration: 60, yoyo: true, repeat: 12 },
+      duration: 800,
+      onUpdate: () => {
+        // 랜덤 색상 깜빡임 (불안정한 느낌)
+        if (Math.random() < 0.3) {
+          const colors = ['#ffff00', '#ff0000', '#ff6600', '#ffffff'];
+          this.comboText.setColor(colors[Math.floor(Math.random() * colors.length)]);
+        }
+      },
+      onComplete: () => {
+        // 지진 멈춤
+        earthquakeEvent.destroy();
+        this.cameras.main.setScroll(0, 0);
+
+        // 강력한 카메라 쉐이크!
+        this.cameras.main.shake(300, 0.02);
+
+        // 폭발 플래시 (전체 화면)
+        const bigFlash = this.add.rectangle(width / 2, height / 2, width, height, 0xffffff, 0.6)
+          .setDepth(6000);
+        this.tweens.add({
+          targets: bigFlash,
+          alpha: 0,
+          duration: 200,
+          onComplete: () => bigFlash.destroy()
+        });
+
+        // 깨지는 파티클 효과 (16방향, 더 많은 조각)
+        for (let i = 0; i < 16; i++) {
+          const angle = (i / 16) * Math.PI * 2;
+          const speed = 80 + Math.random() * 60;
+          const fragment = this.add.text(comboX, comboY, '■', {
+            fontSize: (10 + Math.random() * 8) + 'px',
+            fill: Math.random() < 0.5 ? '#ffff00' : '#ff6600'
+          }).setOrigin(0.5).setDepth(5000);
+
+          this.tweens.add({
+            targets: fragment,
+            x: comboX + Math.cos(angle) * speed,
+            y: comboY + Math.sin(angle) * speed + 30, // 중력 효과
+            alpha: 0,
+            angle: Phaser.Math.Between(-360, 360),
+            scaleX: 0.3,
+            scaleY: 0.3,
+            duration: 600,
+            ease: 'Power2',
+            onComplete: () => fragment.destroy()
+          });
+        }
+
+        // "CRACK!" 텍스트 효과
+        const crackText = this.add.text(comboX, comboY, 'CRACK!', {
+          fontSize: '28px',
+          fill: '#ff3300',
+          fontStyle: 'bold',
+          stroke: '#000000',
+          strokeThickness: 3
+        }).setOrigin(0.5).setDepth(5001);
+
+        this.tweens.add({
+          targets: crackText,
+          y: comboY - 40,
+          alpha: 0,
+          scaleX: 1.5,
+          scaleY: 1.5,
+          duration: 500,
+          ease: 'Power2',
+          onComplete: () => crackText.destroy()
+        });
+
+        // 콤보 텍스트 숨기기
+        this.comboText.setVisible(false);
+        this.comboText.setText('');
+        this.comboText.setColor('#ffff00'); // 색상 복원
+
+        this.time.delayedCall(500, () => {
+          if (callback) callback();
+        });
+      }
+    });
+  }
+
+  /**
+   * Meta Universe 뱀 대사 표시 ("what..?")
+   */
+  showMetaUniverseSnakeDialogue(callback) {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 말풍선 배경
+    const bubble = this.add.rectangle(headX, headY - 50, 120, 40, 0xffffff, 0.95)
+      .setDepth(5001).setScale(0).setStrokeStyle(2, 0x000000);
+
+    this.tweens.add({
+      targets: bubble,
+      scale: 1,
+      duration: 200,
+      ease: 'Back.easeOut'
+    });
+
+    // 타이핑 효과 텍스트
+    const dialogue = "what..?";
+    const dialogueText = this.add.text(headX, headY - 50, '', {
+      fontSize: '14px',
+      fill: '#000000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(5002);
+
+    let charIndex = 0;
+    const typeTimer = this.time.addEvent({
+      delay: 80,
+      callback: () => {
+        dialogueText.setText(dialogue.substring(0, charIndex + 1));
+        charIndex++;
+        if (charIndex >= dialogue.length) {
+          typeTimer.destroy();
+          // 대사 완료 후 페이드아웃
+          this.time.delayedCall(600, () => {
+            this.tweens.add({
+              targets: [bubble, dialogueText],
+              alpha: 0,
+              duration: 200,
+              onComplete: () => {
+                bubble.destroy();
+                dialogueText.destroy();
+                if (callback) callback();
+              }
+            });
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  /**
+   * Universe 타이틀 표시 (화면 중앙에 흐릿하게)
+   */
+  showUniverseTitle(universeNum, callback) {
+    const { width, height } = this.cameras.main;
+    const color = this.universeColors[universeNum - 1];
+    const colorHex = '#' + color.toString(16).padStart(6, '0');
+
+    // 기존 타이틀 제거
+    if (this.universeTitle) {
+      this.universeTitle.destroy();
+    }
+
+    // 새 타이틀 생성
+    this.universeTitle = this.add.text(width / 2, height / 2, `Universe ${universeNum}`, {
+      fontSize: '48px',
+      fill: colorHex,
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 2
+    }).setOrigin(0.5).setDepth(100).setAlpha(0);
+
+    // 페이드인 애니메이션
+    this.tweens.add({
+      targets: this.universeTitle,
+      alpha: 0.3,
+      duration: 500,
+      ease: 'Power2',
+      onComplete: () => {
+        if (callback) callback();
+      }
+    });
+  }
+
+  /**
+   * Universe 타이틀 업데이트 (Universe 전환 시)
+   */
+  updateUniverseTitle(universeNum) {
+    const { width, height } = this.cameras.main;
+    const color = this.universeColors[universeNum - 1];
+    const colorHex = '#' + color.toString(16).padStart(6, '0');
+
+    if (this.universeTitle) {
+      // 기존 타이틀 페이드아웃
+      this.tweens.add({
+        targets: this.universeTitle,
+        alpha: 0,
+        duration: 200,
+        onComplete: () => {
+          this.universeTitle.setText(`Universe ${universeNum}`);
+          this.universeTitle.setColor(colorHex);
+          // 페이드인
+          this.tweens.add({
+            targets: this.universeTitle,
+            alpha: 0.3,
+            duration: 200
+          });
+        }
+      });
+    } else {
+      this.showUniverseTitle(universeNum);
+    }
+  }
+
+  /**
+   * Meta Universe 카운트다운 후 게임 시작
+   */
+  startMetaUniverseCountdown() {
+    const { width, height } = this.cameras.main;
+
+    let countdown = 3;
+    const countdownText = this.add.text(width / 2, height / 2 - 80, countdown.toString(), {
+      fontSize: '72px',
+      fill: '#00ff00',
+      fontStyle: 'bold',
+      stroke: '#003300',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5000);
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(100, 0.005);
+
+    const countdownTimer = this.time.addEvent({
+      delay: 600,
+      callback: () => {
+        countdown--;
+        if (countdown > 0) {
+          countdownText.setText(countdown.toString());
+          this.cameras.main.shake(100, 0.005);
+          // 스케일 펀치 효과
+          this.tweens.add({
+            targets: countdownText,
+            scaleX: 1.3,
+            scaleY: 1.3,
+            duration: 100,
+            yoyo: true
+          });
+        } else if (countdown === 0) {
+          countdownText.setText('GO!');
+          countdownText.setColor('#ffff00');
+          this.cameras.main.shake(200, 0.01);
+        } else {
+          countdownText.destroy();
+          countdownTimer.destroy();
+          // 게임 시작!
+          this.metaUniverseMode = true;
+          this.foodUniverse = this.currentUniverse; // 첫 먹이는 현재 Universe에
+          this.food = this.generateFood(); // 첫 먹이 생성
+          this.draw();
+          this.moveTimer.paused = false;
+        }
+      },
+      loop: true
+    });
+  }
+
+  /**
+   * 웜홀 5개 생성 (현재 Universe 제외)
+   */
+  createWormholes() {
+    // 기존 웜홀 제거
+    this.destroyWormholes();
+
+    // 현재 Universe 제외한 5개 Universe 선택
+    const otherUniverses = [1, 2, 3, 4, 5, 6].filter(u => u !== this.currentUniverse);
+
+    otherUniverses.forEach(targetUniverse => {
+      const color = this.universeColors[targetUniverse - 1];
+
+      // 랜덤 위치 (뱀, 먹이, 벽과 안 겹치게)
+      let x, y;
+      let attempts = 0;
+      do {
+        x = Phaser.Math.Between(2, this.cols - 3);
+        y = Phaser.Math.Between(2, this.rows - 3);
+        attempts++;
+      } while (this.isPositionOccupied(x, y) && attempts < 100);
+
+      if (attempts >= 100) {
+        console.warn('Could not find valid position for wormhole');
+        return;
+      }
+
+      // 웜홀 컨테이너 생성
+      const pixelX = x * this.gridSize + this.gridSize / 2;
+      const pixelY = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      const container = this.add.container(pixelX, pixelY).setDepth(500);
+
+      // 소용돌이 그래픽
+      const graphics = this.add.graphics();
+      container.add(graphics);
+
+      // 웜홀 번호 텍스트
+      const label = this.add.text(0, 0, targetUniverse.toString(), {
+        fontSize: '14px',
+        fill: '#ffffff',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 2
+      }).setOrigin(0.5);
+      container.add(label);
+
+      const wormhole = {
+        x,
+        y,
+        targetUniverse,
+        color,
+        container,
+        graphics,
+        label,
+        angle: 0,
+        pulsePhase: Math.random() * Math.PI * 2
+      };
+
+      this.wormholes.push(wormhole);
+    });
+
+    // 애니메이션 시작
+    this.startWormholeAnimation();
+  }
+
+  /**
+   * 웜홀 애니메이션 시작 (60fps)
+   */
+  startWormholeAnimation() {
+    if (this.wormholeAnimTimer) {
+      this.wormholeAnimTimer.destroy();
+    }
+
+    this.wormholeAnimTimer = this.time.addEvent({
+      delay: 16,
+      callback: () => this.updateWormholeAnimation(),
+      loop: true
+    });
+  }
+
+  /**
+   * 웜홀 애니메이션 업데이트
+   */
+  updateWormholeAnimation() {
+    const time = this.time.now;
+
+    this.wormholes.forEach(wormhole => {
+      if (!wormhole.graphics || !wormhole.graphics.active) return;
+
+      wormhole.graphics.clear();
+
+      // 회전 각도 업데이트
+      wormhole.angle += 0.05;
+
+      // 펄스 크기
+      const pulseScale = 1 + Math.sin(time * 0.005 + wormhole.pulsePhase) * 0.2;
+      const baseRadius = this.gridSize * 0.8 * pulseScale;
+
+      // 소용돌이 그리기 (여러 층)
+      for (let i = 4; i >= 0; i--) {
+        const radius = baseRadius * (1 - i * 0.15);
+        const alpha = 0.3 + i * 0.15;
+        const color = Phaser.Display.Color.IntegerToColor(wormhole.color);
+        const darkenFactor = 1 - i * 0.1;
+
+        wormhole.graphics.lineStyle(3, Phaser.Display.Color.GetColor(
+          color.red * darkenFactor,
+          color.green * darkenFactor,
+          color.blue * darkenFactor
+        ), alpha);
+
+        // 나선형 그리기
+        wormhole.graphics.beginPath();
+        for (let a = 0; a < Math.PI * 4; a += 0.2) {
+          const spiralRadius = radius * (1 - a / (Math.PI * 6));
+          const spiralX = Math.cos(a + wormhole.angle + i * 0.5) * spiralRadius;
+          const spiralY = Math.sin(a + wormhole.angle + i * 0.5) * spiralRadius;
+          if (a === 0) {
+            wormhole.graphics.moveTo(spiralX, spiralY);
+          } else {
+            wormhole.graphics.lineTo(spiralX, spiralY);
+          }
+        }
+        wormhole.graphics.strokePath();
+      }
+
+      // 중심 글로우
+      wormhole.graphics.fillStyle(wormhole.color, 0.5);
+      wormhole.graphics.fillCircle(0, 0, baseRadius * 0.3);
+
+      // 외곽 링
+      wormhole.graphics.lineStyle(2, wormhole.color, 0.8);
+      wormhole.graphics.strokeCircle(0, 0, baseRadius);
+    });
+  }
+
+  /**
+   * 웜홀 제거
+   */
+  destroyWormholes() {
+    if (this.wormholeAnimTimer) {
+      this.wormholeAnimTimer.destroy();
+      this.wormholeAnimTimer = null;
+    }
+
+    this.wormholes.forEach(wormhole => {
+      if (wormhole.container) wormhole.container.destroy();
+    });
+    this.wormholes = [];
+  }
+
+  /**
+   * 위치가 점유되었는지 체크 (뱀, 먹이, 다른 웜홀)
+   */
+  isPositionOccupied(x, y) {
+    // 뱀 체크
+    if (this.snake.some(seg => seg.x === x && seg.y === y)) return true;
+
+    // 먹이 체크
+    if (this.food && this.food.x === x && this.food.y === y) return true;
+
+    // 다른 웜홀 체크
+    if (this.wormholes.some(w => w.x === x && w.y === y)) return true;
+
+    // 데드존 체크
+    if (this.deadZones.some(dz => dz.x === x && dz.y === y)) return true;
+
+    return false;
+  }
+
+  /**
+   * 웜홀 충돌 체크
+   * @returns {object|null} 충돌한 웜홀 또는 null
+   */
+  checkWormholeCollision() {
+    const head = this.snake[0];
+
+    for (const wormhole of this.wormholes) {
+      if (head.x === wormhole.x && head.y === wormhole.y) {
+        return wormhole;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Universe 전환 시작
+   */
+  startUniverseTransition(targetUniverse, entryX, entryY) {
+    if (this.isUniverseTransitioning) return;
+    this.isUniverseTransitioning = true;
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 웜홀 제거
+    this.destroyWormholes();
+
+    // 속도 증가 (웜홀 통과 보너스)
+    this.wormholePassCount++;
+    this.moveTimer.delay = Math.max(50, this.moveTimer.delay - 3);
+    this.speedText.setText(this.moveTimer.delay + 'ms');
+
+    // 뱀 정보 저장 (잔상 방지)
+    this.transitionSnakeLength = this.snake.length; // 길이 저장
+    this.transitionEntryDirection = this.direction; // 진입 방향 저장
+    this.snake = [];
+    this.food = { x: -100, y: -100 }; // 먹이도 숨기기
+    this.draw(); // 화면에서 제거
+
+    // 전환 애니메이션
+    this.animateUniverseTransition(targetUniverse, entryX, entryY);
+  }
+
+  /**
+   * Universe 전환 애니메이션 (핵심!)
+   * 줌아웃 → 멀티버스 공개 → 이동+줌인 → 뱀 등장
+   *
+   * 속도 최적화: 300ms 줌아웃 + 400ms 이동/줌인 = 700ms 총
+   */
+  animateUniverseTransition(targetUniverse, entryX, entryY) {
+    const { width, height } = this.cameras.main;
+
+    // 현재 Universe 위치 계산 (3x2 그리드에서)
+    const currentCol = (this.currentUniverse - 1) % 3;
+    const currentRow = Math.floor((this.currentUniverse - 1) / 3);
+
+    // 카메라가 현재 Universe 중심을 기준으로 설정 (줌아웃 전 스크롤 위치)
+    // 현재 Universe가 중앙이 아닌 경우 오프셋 필요
+    const currentOffsetX = (currentCol - 1) * width;
+    const currentOffsetY = currentRow * height;
+
+    // 1. 멀티버스 뷰 생성 (현재 화면 복제)
+    this.createMultiverseView();
+
+    // 카메라를 현재 Universe 위치로 스크롤 (줌아웃 시 현재 위치 기준이 됨)
+    this.cameras.main.setScroll(currentOffsetX, currentOffsetY);
+
+    // 2. 줌아웃 + 멀티버스 공개 (300ms - 빠르게!)
+    this.cameras.main.zoomTo(0.25, 300, 'Power2');
+
+    // 멀티버스 요소들 즉시 페이드인
+    this.time.delayedCall(50, () => {
+      this.multiverseElements.forEach(el => {
+        if (el && el.active) {
+          this.tweens.add({
+            targets: el,
+            alpha: 1,
+            duration: 250
+          });
+        }
+      });
+    });
+
+    // 3. 이동 + 줌인 동시에 (400ms - 빠르게!) - 300ms 후 시작
+    this.time.delayedCall(300, () => {
+      // 목표 Universe 위치 계산 (3x2 그리드)
+      const gridCol = (targetUniverse - 1) % 3;
+      const gridRow = Math.floor((targetUniverse - 1) / 3);
+
+      // 확장된 월드에서의 목표 위치 (스크롤 오프셋)
+      const targetScrollX = (gridCol - 1) * width;
+      const targetScrollY = gridRow * height;
+
+      // pan 대신 scroll 직접 트윈 (더 정확한 제어)
+      this.tweens.add({
+        targets: this.cameras.main,
+        scrollX: targetScrollX,
+        scrollY: targetScrollY,
+        duration: 400,
+        ease: 'Power3'
+      });
+
+      this.cameras.main.zoomTo(1, 400, 'Power3');
+
+      // 목표 Universe 하이라이트
+      this.highlightTargetUniverse(targetUniverse);
+    });
+
+    // 4. 전환 완료 후 정리 (700ms 후 - 총 시간 단축!)
+    this.time.delayedCall(700, () => {
+      // 먼저 카메라 관련 tween 모두 중지
+      this.tweens.killTweensOf(this.cameras.main);
+
+      // 멀티버스 뷰 정리
+      this.cleanupMultiverseView();
+
+      // 카메라 완전 리셋 (중요!)
+      this.cameras.main.stopFollow();
+      this.cameras.main.setScroll(0, 0);
+      this.cameras.main.setZoom(1);
+      this.cameras.main.setRotation(0);
+
+      // Universe 변경
+      this.currentUniverse = targetUniverse;
+
+      // 뱀 대칭 위치에서 등장
+      const exitPos = this.calculateSymmetricPosition(entryX, entryY);
+      this.spawnSnakeFromWormhole(exitPos.x, exitPos.y);
+    });
+  }
+
+  /**
+   * 멀티버스 뷰 생성 (6개 Universe 그리드)
+   * 좌표계: 각 Universe는 (gridCol-1)*width, gridRow*height 오프셋
+   */
+  createMultiverseView() {
+    const { width, height } = this.cameras.main;
+
+    // 기존 요소 정리
+    this.cleanupMultiverseView();
+
+    // 6개 Universe 위치 (3x2 그리드)
+    // Universe 1: (0, 0), Universe 2: (1, 0), Universe 3: (2, 0)
+    // Universe 4: (0, 1), Universe 5: (1, 1), Universe 6: (2, 1)
+    for (let i = 1; i <= 6; i++) {
+      const gridCol = (i - 1) % 3;  // 0, 1, 2
+      const gridRow = Math.floor((i - 1) / 3);  // 0, 1
+
+      // 절대 좌표 (scrollFactor 1 기준)
+      // gridCol 0 = Universe 1,4 -> offsetX = -width (중앙 기준 왼쪽)
+      // gridCol 1 = Universe 2,5 -> offsetX = 0 (중앙)
+      // gridCol 2 = Universe 3,6 -> offsetX = +width (중앙 기준 오른쪽)
+      const x = width / 2 + (gridCol - 1) * width;
+      const y = height / 2 + gridRow * height;
+
+      const color = this.universeColors[i - 1];
+
+      if (i === this.currentUniverse) {
+        // 현재 Universe 테두리만 (내용은 실제 게임)
+        const currentBorder = this.add.rectangle(x, y, width, height)
+          .setStrokeStyle(6, 0xffffff, 1).setFillStyle(0, 0).setDepth(52).setAlpha(0);
+        this.multiverseElements.push(currentBorder);
+      } else {
+        // 다른 Universe는 배경 + 라벨
+        // Universe 배경 (어두운 복제본 표현)
+        const bg = this.add.rectangle(x, y, width - 20, height - 20, 0x111122, 0.9)
+          .setDepth(50).setAlpha(0).setStrokeStyle(4, color, 1);
+
+        // Universe 번호
+        const label = this.add.text(x, y, `Universe ${i}`, {
+          fontSize: '36px',
+          fill: '#' + color.toString(16).padStart(6, '0'),
+          fontStyle: 'bold',
+          stroke: '#000000',
+          strokeThickness: 3
+        }).setOrigin(0.5).setDepth(51).setAlpha(0);
+
+        this.multiverseElements.push(bg, label);
+      }
+    }
+  }
+
+  /**
+   * 목표 Universe 하이라이트
+   */
+  highlightTargetUniverse(targetUniverse) {
+    const { width, height } = this.cameras.main;
+    const color = this.universeColors[targetUniverse - 1];
+
+    const gridCol = (targetUniverse - 1) % 3;
+    const gridRow = Math.floor((targetUniverse - 1) / 3);
+    const x = width / 2 + (gridCol - 1) * width;
+    const y = height / 2 + gridRow * height;
+
+    // 펄스 효과 (빠르게! 400ms)
+    const highlight = this.add.rectangle(x, y, width + 10, height + 10)
+      .setStrokeStyle(8, color, 1).setFillStyle(0, 0).setDepth(60);
+
+    this.tweens.add({
+      targets: highlight,
+      scaleX: 1.05,
+      scaleY: 1.05,
+      alpha: 0,
+      duration: 400,
+      onComplete: () => {
+        if (highlight && highlight.active) highlight.destroy();
+      }
+    });
+
+    this.multiverseElements.push(highlight);
+  }
+
+  /**
+   * 멀티버스 뷰 정리
+   */
+  cleanupMultiverseView() {
+    this.multiverseElements.forEach(el => {
+      if (el && el.destroy) el.destroy();
+    });
+    this.multiverseElements = [];
+  }
+
+  /**
+   * 대칭 위치 계산 (맵 중심 기준)
+   */
+  calculateSymmetricPosition(entryX, entryY) {
+    const centerX = Math.floor(this.cols / 2);
+    const centerY = Math.floor(this.rows / 2);
+
+    let exitX = centerX + (centerX - entryX);
+    let exitY = centerY + (centerY - entryY);
+
+    // 벽 충돌 방지
+    exitX = Phaser.Math.Clamp(exitX, 2, this.cols - 3);
+    exitY = Phaser.Math.Clamp(exitY, 2, this.rows - 3);
+
+    return { x: exitX, y: exitY };
+  }
+
+  /**
+   * 웜홀에서 뱀 등장 애니메이션
+   * 1. 출구 웜홀 표시 (해당 Universe 색상)
+   * 2. 진입 반대 방향으로 나옴
+   * 3. 머리가 나오자마자 조작 가능 + 실제 속도
+   * 4. 이동할 때마다 웜홀에서 세그먼트 하나씩 등장
+   */
+  spawnSnakeFromWormhole(exitX, exitY) {
+    // 뱀 길이 저장 (전환 시 저장된 길이 사용, 최소 3)
+    const snakeLength = Math.max(3, this.transitionSnakeLength || 3);
+    this.transitionSnakeLength = null;
+
+    // 웜홀 위치 (충분한 공간 확보)
+    const wormholeX = Phaser.Math.Clamp(exitX, 3, this.cols - 4);
+    const wormholeY = Phaser.Math.Clamp(exitY, 3, this.rows - 4);
+
+    // 진입 반대 방향으로 나옴
+    const oppositeDir = {
+      'RIGHT': 'LEFT',
+      'LEFT': 'RIGHT',
+      'UP': 'DOWN',
+      'DOWN': 'UP'
+    };
+    const entryDir = this.transitionEntryDirection || 'RIGHT';
+    const exitDirection = oppositeDir[entryDir];
+    this.transitionEntryDirection = null;
+
+    // 방향별 오프셋
+    const dirOffsets = {
+      'RIGHT': { dx: 1, dy: 0 },
+      'LEFT': { dx: -1, dy: 0 },
+      'DOWN': { dx: 0, dy: 1 },
+      'UP': { dx: 0, dy: -1 }
+    };
+    const dOffset = dirOffsets[exitDirection];
+
+    // 웜홀 위치 (픽셀)
+    const wormholePixelX = wormholeX * this.gridSize + this.gridSize / 2;
+    const wormholePixelY = wormholeY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 현재 Universe 색상
+    const universeColor = this.universeColors[this.currentUniverse - 1];
+
+    // 1. 출구 웜홀 생성
+    const exitWormhole = this.add.container(wormholePixelX, wormholePixelY).setDepth(500);
+    const wormholeGraphics = this.add.graphics();
+    exitWormhole.add(wormholeGraphics);
+
+    let wormholeAngle = 0;
+    const baseRadius = this.gridSize * 1.0;
+
+    const drawExitWormhole = () => {
+      wormholeGraphics.clear();
+      wormholeAngle += 0.12;
+      for (let i = 3; i >= 0; i--) {
+        const radius = baseRadius * (1 - i * 0.18);
+        const alpha = 0.5 + i * 0.12;
+        wormholeGraphics.lineStyle(2.5, universeColor, alpha);
+        wormholeGraphics.beginPath();
+        for (let a = 0; a < Math.PI * 3; a += 0.25) {
+          const spiralRadius = radius * (1 - a / (Math.PI * 5));
+          const spiralX = Math.cos(a + wormholeAngle + i * 0.4) * spiralRadius;
+          const spiralY = Math.sin(a + wormholeAngle + i * 0.4) * spiralRadius;
+          if (a === 0) wormholeGraphics.moveTo(spiralX, spiralY);
+          else wormholeGraphics.lineTo(spiralX, spiralY);
+        }
+        wormholeGraphics.strokePath();
+      }
+      wormholeGraphics.fillStyle(universeColor, 0.7);
+      wormholeGraphics.fillCircle(0, 0, baseRadius * 0.2);
+    };
+
+    drawExitWormhole();
+    const wormholeAnimEvent = this.time.addEvent({
+      delay: 16,
+      callback: drawExitWormhole,
+      loop: true
+    });
+
+    // 2. 방향 힌트 (짧게 반짝)
+    const hintGraphics = this.add.graphics().setDepth(501);
+    const hintLength = this.gridSize * 2;
+    const beamEndX = wormholePixelX + dOffset.dx * hintLength;
+    const beamEndY = wormholePixelY + dOffset.dy * hintLength;
+
+    let flashCount = 0;
+    const flashHint = () => {
+      hintGraphics.clear();
+      for (let i = 4; i >= 0; i--) {
+        const thickness = 12 - i * 2;
+        const alpha = 0.15 + i * 0.15;
+        hintGraphics.lineStyle(thickness, universeColor, alpha);
+        hintGraphics.beginPath();
+        hintGraphics.moveTo(wormholePixelX, wormholePixelY);
+        hintGraphics.lineTo(beamEndX, beamEndY);
+        hintGraphics.strokePath();
+      }
+      hintGraphics.fillStyle(universeColor, 0.9);
+      hintGraphics.fillCircle(beamEndX, beamEndY, 6);
+    };
+
+    const hintFlashEvent = this.time.addEvent({
+      delay: 60,
+      callback: () => {
+        flashCount++;
+        if (flashCount % 2 === 1) flashHint();
+        else hintGraphics.clear();
+        if (flashCount >= 6) {
+          hintFlashEvent.destroy();
+          hintGraphics.destroy();
+        }
+      },
+      loop: true
+    });
+
+    // 3. 머리만 먼저 등장 후 즉시 게임 시작! (180ms 후)
+    this.time.delayedCall(180, () => {
+      // 뱀 초기화 - 머리만!
+      this.snake = [{ x: wormholeX, y: wormholeY }];
+      this.direction = exitDirection;
+      this.inputQueue = [];
+
+      // 웜홀 스폰 상태 저장 (남은 세그먼트)
+      this.wormholeSpawnData = {
+        remaining: snakeLength - 1, // 머리 제외한 나머지
+        wormholeX: wormholeX,
+        wormholeY: wormholeY,
+        exitWormhole: exitWormhole,
+        wormholeAnimEvent: wormholeAnimEvent,
+        universeColor: universeColor
+      };
+
+      // Universe 타이틀
+      this.updateUniverseTitle(this.currentUniverse);
+
+      // 먹이/웜홀 생성
+      if (this.currentUniverse === this.foodUniverse) {
+        this.food = this.generateFood();
+      } else {
+        this.createWormholes();
+      }
+
+      this.draw();
+
+      // 즉시 게임 재개! (방향 조작 가능)
+      this.isUniverseTransitioning = false;
+      if (this.moveTimer) this.moveTimer.paused = false;
+    });
+
+    this.draw();
+  }
+
+  /**
+   * 웜홀 스폰 처리 (moveSnake에서 호출)
+   * 뱀이 이동할 때마다 웜홀에서 세그먼트 하나 추가
+   */
+  handleWormholeSpawn() {
+    if (!this.wormholeSpawnData || this.wormholeSpawnData.remaining <= 0) {
+      // 스폰 완료 - 웜홀 닫기
+      if (this.wormholeSpawnData) {
+        const data = this.wormholeSpawnData;
+        if (data.wormholeAnimEvent) data.wormholeAnimEvent.destroy();
+        if (data.exitWormhole) {
+          this.tweens.add({
+            targets: data.exitWormhole,
+            scale: 0,
+            alpha: 0,
+            duration: 120,
+            ease: 'Power2',
+            onComplete: () => {
+              if (data.exitWormhole && data.exitWormhole.destroy) {
+                data.exitWormhole.destroy();
+              }
+            }
+          });
+        }
+        this.wormholeSpawnData = null;
+      }
+      return false;
+    }
+
+    // 웜홀에서 새 세그먼트 추가 (꼬리에)
+    this.snake.push({
+      x: this.wormholeSpawnData.wormholeX,
+      y: this.wormholeSpawnData.wormholeY
+    });
+    this.wormholeSpawnData.remaining--;
+
+    // 웜홀 펄스 효과
+    if (this.wormholeSpawnData.exitWormhole) {
+      this.tweens.add({
+        targets: this.wormholeSpawnData.exitWormhole,
+        scale: 1.2,
+        duration: 40,
+        yoyo: true,
+        ease: 'Power2'
+      });
+    }
+
+    return true; // 세그먼트 추가됨
+  }
+
+  /**
+   * Meta Universe 먹이 먹었을 때 처리
+   */
+  handleMetaUniverseFood() {
+    this.metaUniverseFoodCount++;
+
+    // 클리어 체크
+    if (this.metaUniverseFoodCount >= this.metaUniverseTargetFood) {
+      // 스테이지 클리어!
+      this.stageClear();
+      return true;
+    }
+
+    // 다음 먹이 Universe 랜덤 결정
+    this.foodUniverse = Phaser.Math.Between(1, 6);
+
+    // 먹이 숨기기 (다른 Universe에 있으므로)
+    this.food = { x: -100, y: -100 };
+
+    // 웜홀 생성
+    this.time.delayedCall(300, () => {
+      this.createWormholes();
+      this.draw();
+    });
+
+    return false;
+  }
+
+  /**
+   * Meta Universe 정리
+   */
+  cleanupMetaUniverse() {
+    this.metaUniverseMode = false;
+    this.currentUniverse = 1;
+    this.wormholePassCount = 0;
+    this.metaUniverseFoodCount = 0;
+    this.foodUniverse = 1;
+    this.metaUniverseIntroShown = false;
+    this.comboDisabled = false;
+    this.isUniverseTransitioning = false;
+    this.transitionSnakeLength = null;
+    this.snakeSegmentAlphas = null;
+
+    this.destroyWormholes();
+    this.cleanupMultiverseView();
+
+    if (this.universeTitle) {
+      this.universeTitle.destroy();
+      this.universeTitle = null;
+    }
   }
 
   update() {

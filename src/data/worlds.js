@@ -54,6 +54,17 @@ export const WORLD_CONFIG = {
     features: {
       gasZone: true          // 독가스 자기장
     }
+  },
+  world5: {
+    name: 'Meta Universe',
+    nameKo: '메타유니버스',
+    range: [16, 18],
+    bossStage: 18,
+    bossType: null,          // TBD
+    features: {
+      wormholes: true,       // 웜홀 시스템
+      noCombo: true          // 콤보 비활성화
+    }
   }
 };
 
@@ -218,4 +229,22 @@ export function shouldHaveFog(stage) {
  */
 export function shouldHaveDeadzones(stage) {
   return stage >= 4;
+}
+
+/**
+ * Check if this is a Meta Universe stage (Stage 16-18)
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ */
+export function isMetaUniverseStage(stage) {
+  return stage >= 16 && stage <= 18;
+}
+
+/**
+ * Check if combo should be disabled for a stage
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ */
+export function shouldDisableCombo(stage) {
+  return stage >= 16 && stage <= 18; // Meta Universe에서 콤보 비활성화
 }
