@@ -355,6 +355,27 @@ export default class SnakeGame extends Phaser.Scene {
     this.multiverseAnimTimer = null;         // 60fps 애니메이션 타이머
     this.multiverseBossElements = [];        // 보스 전용 요소들
 
+    // ===== Runner Mode (엔딩 러너 게임) =====
+    this.runnerMode = false;                 // 러너 모드 활성화
+    this.runnerPhase = 'none';               // 'none'|'transition'|'intro'|'playing'
+    this.runnerSpeed = 5;                    // 이동 속도
+    this.runnerY = 0;                        // 플레이어 Y 위치
+    this.runnerGroundY = 0;                  // 바닥 Y 위치
+    this.runnerJumping = false;              // 점프 중
+    this.runnerJumpVelocity = 0;             // 점프 속도
+    this.runnerGravity = 0.8;                // 중력
+    this.runnerJumpPower = -15;              // 점프력
+    this.runnerObstacles = [];               // 장애물 배열 [{x, y, type, graphics}]
+    this.runnerDeadSnakes = [];              // 죽은 뱀 배경 [{x, y, graphics}]
+    this.runnerWhiteSnakes = [];             // 위로 달리는 흰 뱀들
+    this.runnerDistance = 0;                 // 달린 거리
+    this.runnerGraphics = null;              // 메인 그래픽
+    this.runnerElements = [];                // 정리용 요소 배열
+    this.runnerTimers = [];                  // 타이머 배열
+    this.runnerPlayerSnake = [];             // 플레이어 뱀 세그먼트
+    this.runnerIntroComplete = false;        // 인트로 완료 여부
+    this.runnerDistanceText = null;          // 거리 텍스트
+
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
     this.fogTestForceEnable = false; // stage 7부터 적용
@@ -33938,11 +33959,15 @@ export default class SnakeGame extends Phaser.Scene {
       this.cameras.main.flash(500, 255, 255, 255);
     });
 
-    // === PHASE 11: 엔딩으로 이동 (16초) ===
+    // === PHASE 11: 러너 모드로 전환 (16초) ===
     this.time.delayedCall(16000, () => {
-      this.cleanupMultiverseCollapse();
-      // TODO: 엔딩 스테이지로 전환 (쿠키런 버전) - 현재는 clearStage
-      this.clearStage();
+      // victoryElements 정리
+      victoryElements.forEach(el => {
+        if (el && el.destroy) el.destroy();
+      });
+
+      // 러너 모드 시작
+      this.startRunnerTransition();
     });
   }
 
@@ -34157,6 +34182,772 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.graphics) {
       this.graphics.setVisible(true);
     }
+  }
+
+  // ==========================================
+  // ========== RUNNER MODE (엔딩) ==========
+  // ==========================================
+
+  /**
+   * 러너 모드 전환 시작 - 뱀이 하얗게 변하고 떨어짐
+   */
+  startRunnerTransition() {
+    console.log('🏃 Starting Runner Transition');
+
+    this.runnerMode = true;
+    this.runnerPhase = 'transition';
+    this.moveTimer.paused = true;
+
+    const { width, height } = this.cameras.main;
+
+    // 러너 그래픽 생성
+    this.runnerGraphics = this.add.graphics().setDepth(9600);
+    this.runnerElements = [];
+    this.runnerTimers = [];
+
+    // 배경을 검은색으로 페이드
+    const blackBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0);
+    blackBg.setDepth(9550);
+    this.runnerElements.push(blackBg);
+
+    this.tweens.add({
+      targets: blackBg,
+      alpha: 1,
+      duration: 1000
+    });
+
+    // 뱀 복사본 생성 (초록 → 흰색)
+    this.runnerPlayerSnake = this.snake.map(seg => ({
+      x: seg.x * this.gridSize + this.gridSize / 2,
+      y: seg.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
+      color: 0x00ff00
+    }));
+
+    // 색상 전환 (초록 → 흰색) + 떨어지기
+    this.time.delayedCall(1000, () => {
+      // 색상 서서히 변경
+      let colorProgress = 0;
+      const colorTimer = this.time.addEvent({
+        delay: 20,
+        callback: () => {
+          colorProgress += 0.02;
+          if (colorProgress >= 1) {
+            colorTimer.destroy();
+            // 다 하얗게 변한 후 떨어지기
+            this.startSnakeFall();
+          }
+          // 색상 보간
+          const r = Math.floor(0 + (255 - 0) * colorProgress);
+          const g = Math.floor(255 + (255 - 255) * colorProgress);
+          const b = Math.floor(0 + (255 - 0) * colorProgress);
+          const newColor = (r << 16) + (g << 8) + b;
+          this.runnerPlayerSnake.forEach(seg => seg.color = newColor);
+          this.drawRunnerTransition();
+        },
+        repeat: 50
+      });
+      this.runnerTimers.push(colorTimer);
+    });
+  }
+
+  /**
+   * 뱀 떨어지는 연출
+   */
+  startSnakeFall() {
+    const { width, height } = this.cameras.main;
+
+    // 격자 페이드아웃
+    if (this.gridGraphics) {
+      this.tweens.add({
+        targets: this.gridGraphics,
+        alpha: 0,
+        duration: 500
+      });
+    }
+
+    // 중력 적용하여 떨어지기
+    let fallSpeed = 0;
+    const fallTimer = this.time.addEvent({
+      delay: 16,
+      callback: () => {
+        fallSpeed += 0.5; // 중력
+        this.runnerPlayerSnake.forEach(seg => {
+          seg.y += fallSpeed;
+        });
+        this.drawRunnerTransition();
+
+        // 화면 아래로 떨어지면 러너 인트로 시작
+        if (this.runnerPlayerSnake[0].y > height + 100) {
+          fallTimer.destroy();
+          this.time.delayedCall(500, () => {
+            this.startRunnerIntro();
+          });
+        }
+      },
+      loop: true
+    });
+    this.runnerTimers.push(fallTimer);
+  }
+
+  /**
+   * 러너 전환 화면 그리기
+   */
+  drawRunnerTransition() {
+    if (!this.runnerGraphics) return;
+    this.runnerGraphics.clear();
+
+    // 뱀 그리기
+    this.runnerPlayerSnake.forEach((seg, i) => {
+      const size = i === 0 ? 18 : 16;
+      this.runnerGraphics.fillStyle(seg.color, 1);
+      this.runnerGraphics.fillRect(seg.x - size / 2, seg.y - size / 2, size, size);
+    });
+  }
+
+  /**
+   * 러너 인트로 시작 - 자동 플레이
+   */
+  startRunnerIntro() {
+    console.log('🏃 Starting Runner Intro');
+
+    this.runnerPhase = 'intro';
+    const { width, height } = this.cameras.main;
+
+    // 지면 설정
+    this.runnerGroundY = height - 80;
+    this.runnerY = this.runnerGroundY;
+
+    // 플레이어 뱀 위치 설정 (화면 왼쪽)
+    const startX = 80;
+    this.runnerPlayerSnake = [];
+    for (let i = 0; i < 8; i++) {
+      this.runnerPlayerSnake.push({
+        x: startX - i * 12,
+        y: this.runnerGroundY,
+        color: 0xffffff
+      });
+    }
+
+    // 초기화
+    this.runnerObstacles = [];
+    this.runnerDeadSnakes = [];
+    this.runnerWhiteSnakes = [];
+    this.runnerDistance = 0;
+    this.runnerJumping = false;
+    this.runnerJumpVelocity = 0;
+    this.runnerIntroComplete = false;
+    this.runnerSpeed = 5;
+
+    // 배경 뱀들 생성 (위를 달리는 흰 뱀들)
+    this.spawnBackgroundSnakes();
+
+    // "THE JOURNEY CONTINUES..." 텍스트
+    const journeyText = this.add.text(width / 2, height / 3, 'THE JOURNEY CONTINUES...', {
+      fontSize: '32px',
+      fill: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(9650).setAlpha(0);
+    this.runnerElements.push(journeyText);
+
+    this.tweens.add({
+      targets: journeyText,
+      alpha: 1,
+      duration: 500,
+      onComplete: () => {
+        this.time.delayedCall(2000, () => {
+          this.tweens.add({
+            targets: journeyText,
+            alpha: 0,
+            duration: 500
+          });
+        });
+      }
+    });
+
+    // 인트로 자동 플레이 시작 (장애물 + 자동 점프)
+    this.time.delayedCall(1000, () => {
+      this.startRunnerAutoPlay();
+    });
+
+    // 러너 업데이트 루프 시작
+    const runnerUpdateTimer = this.time.addEvent({
+      delay: 16,
+      callback: () => this.updateRunner(),
+      loop: true
+    });
+    this.runnerTimers.push(runnerUpdateTimer);
+  }
+
+  /**
+   * 배경 뱀들 생성
+   */
+  spawnBackgroundSnakes() {
+    const { width, height } = this.cameras.main;
+
+    // 위를 달리는 흰 뱀들 (3마리)
+    for (let i = 0; i < 3; i++) {
+      const snake = {
+        segments: [],
+        y: 100 + i * 60,
+        x: width + i * 200,
+        speed: 3 + Math.random() * 2,
+        alpha: 0.3 + i * 0.1
+      };
+
+      for (let j = 0; j < 6; j++) {
+        snake.segments.push({ x: snake.x + j * 10, y: snake.y });
+      }
+
+      this.runnerWhiteSnakes.push(snake);
+    }
+  }
+
+  /**
+   * 인트로 자동 플레이
+   */
+  startRunnerAutoPlay() {
+    // 장애물 스폰 타이머
+    const obstacleTimer = this.time.addEvent({
+      delay: 2000,
+      callback: () => {
+        if (this.runnerPhase !== 'intro') return;
+        this.spawnRunnerObstacle();
+      },
+      loop: true
+    });
+    this.runnerTimers.push(obstacleTimer);
+
+    // 죽은 뱀 배경 스폰
+    const deadSnakeTimer = this.time.addEvent({
+      delay: 3000,
+      callback: () => {
+        if (this.runnerPhase !== 'intro' && this.runnerPhase !== 'playing') return;
+        this.spawnDeadSnake();
+      },
+      loop: true
+    });
+    this.runnerTimers.push(deadSnakeTimer);
+
+    // 5초 후 플레이어 모드로 전환
+    this.time.delayedCall(5000, () => {
+      this.startRunnerPlayable();
+    });
+  }
+
+  /**
+   * 장애물 스폰
+   */
+  spawnRunnerObstacle() {
+    const { width, height } = this.cameras.main;
+
+    const types = ['germ', 'saw', 'frog', 'nexus', 'ghost'];
+    const type = Phaser.Utils.Array.GetRandom(types);
+
+    const obstacle = {
+      type: type,
+      x: width + 50,
+      y: this.runnerGroundY,
+      width: 30,
+      height: 40,
+      passed: false
+    };
+
+    // 타입별 크기 조정
+    switch (type) {
+      case 'saw':
+        obstacle.height = 50;
+        obstacle.width = 50;
+        break;
+      case 'nexus':
+        obstacle.height = 60;
+        obstacle.width = 40;
+        break;
+      case 'ghost':
+        obstacle.height = 35;
+        obstacle.width = 25;
+        break;
+    }
+
+    this.runnerObstacles.push(obstacle);
+
+    // 인트로 중이면 자동 점프
+    if (this.runnerPhase === 'intro' && !this.runnerJumping) {
+      this.time.delayedCall(800, () => {
+        if (!this.runnerJumping) {
+          this.runnerJump();
+        }
+      });
+    }
+  }
+
+  /**
+   * 죽은 뱀 배경 스폰
+   */
+  spawnDeadSnake() {
+    const { width, height } = this.cameras.main;
+
+    const deadSnake = {
+      x: width + 100,
+      y: this.runnerGroundY + 10,
+      segments: [],
+      color: Phaser.Utils.Array.GetRandom([0x666666, 0x555555, 0x444444])
+    };
+
+    // 랜덤 형태의 죽은 뱀
+    for (let i = 0; i < 5 + Math.floor(Math.random() * 5); i++) {
+      deadSnake.segments.push({
+        offsetX: i * 8,
+        offsetY: Math.sin(i * 0.5) * 3
+      });
+    }
+
+    this.runnerDeadSnakes.push(deadSnake);
+  }
+
+  /**
+   * 점프 실행
+   */
+  runnerJump() {
+    if (this.runnerJumping) return;
+
+    this.runnerJumping = true;
+    this.runnerJumpVelocity = this.runnerJumpPower;
+  }
+
+  /**
+   * 플레이어 모드 시작
+   */
+  startRunnerPlayable() {
+    console.log('🎮 Runner Playable Mode');
+
+    this.runnerPhase = 'playing';
+    this.runnerIntroComplete = true;
+
+    const { width, height } = this.cameras.main;
+
+    // 거리 텍스트 표시
+    this.runnerDistanceText = this.add.text(width - 20, 30, '0m', {
+      fontSize: '24px',
+      fill: '#00ff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(1, 0.5).setDepth(9680);
+    this.runnerElements.push(this.runnerDistanceText);
+
+    // 튜토리얼 텍스트
+    const tutorialText = this.add.text(width / 2, height / 3, 'PRESS SPACE TO JUMP!', {
+      fontSize: '28px',
+      fill: '#ffff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(9660).setAlpha(0);
+    this.runnerElements.push(tutorialText);
+
+    // 펄스 효과
+    this.tweens.add({
+      targets: tutorialText,
+      alpha: 1,
+      scale: { from: 0.8, to: 1.1 },
+      duration: 300,
+      yoyo: true,
+      repeat: 3,
+      onComplete: () => {
+        this.tweens.add({
+          targets: tutorialText,
+          alpha: 0,
+          duration: 500
+        });
+      }
+    });
+
+    // 스페이스바 입력 등록
+    this.input.keyboard.on('keydown-SPACE', () => {
+      if (this.runnerPhase === 'playing' && !this.runnerJumping) {
+        this.runnerJump();
+      }
+    });
+
+    // 장애물 스폰 속도 증가
+    const fastObstacleTimer = this.time.addEvent({
+      delay: 1500,
+      callback: () => {
+        if (this.runnerPhase !== 'playing') return;
+        this.spawnRunnerObstacle();
+      },
+      loop: true
+    });
+    this.runnerTimers.push(fastObstacleTimer);
+  }
+
+  /**
+   * 러너 업데이트 (매 프레임)
+   */
+  updateRunner() {
+    if (!this.runnerMode) return;
+
+    const { width, height } = this.cameras.main;
+
+    // 거리 증가
+    this.runnerDistance += this.runnerSpeed;
+
+    // 점프 물리
+    if (this.runnerJumping) {
+      this.runnerJumpVelocity += this.runnerGravity;
+      this.runnerY += this.runnerJumpVelocity;
+
+      // 착지
+      if (this.runnerY >= this.runnerGroundY) {
+        this.runnerY = this.runnerGroundY;
+        this.runnerJumping = false;
+        this.runnerJumpVelocity = 0;
+      }
+    }
+
+    // 플레이어 뱀 위치 업데이트
+    const head = this.runnerPlayerSnake[0];
+    head.y = this.runnerY;
+
+    // 몸통이 머리를 따라감
+    for (let i = this.runnerPlayerSnake.length - 1; i > 0; i--) {
+      const seg = this.runnerPlayerSnake[i];
+      const prev = this.runnerPlayerSnake[i - 1];
+      seg.y += (prev.y - seg.y) * 0.3;
+    }
+
+    // 장애물 이동 및 충돌 체크
+    for (let i = this.runnerObstacles.length - 1; i >= 0; i--) {
+      const obs = this.runnerObstacles[i];
+      obs.x -= this.runnerSpeed;
+
+      // 화면 밖으로 나간 장애물 제거
+      if (obs.x < -100) {
+        this.runnerObstacles.splice(i, 1);
+        continue;
+      }
+
+      // 충돌 체크 (플레이어블 모드에서만)
+      if (this.runnerPhase === 'playing' && !obs.passed) {
+        if (this.checkRunnerCollision(obs)) {
+          this.runnerGameOver();
+          return;
+        }
+
+        // 장애물 통과
+        if (obs.x < head.x - obs.width / 2) {
+          obs.passed = true;
+        }
+      }
+    }
+
+    // 배경 흰 뱀 이동
+    this.runnerWhiteSnakes.forEach(snake => {
+      snake.x -= snake.speed;
+      snake.segments.forEach((seg, i) => {
+        seg.x = snake.x + i * 10;
+        seg.y = snake.y + Math.sin((this.runnerDistance + i * 20) * 0.02) * 5;
+      });
+
+      // 화면 밖으로 나가면 리셋
+      if (snake.x < -100) {
+        snake.x = width + 200 + Math.random() * 300;
+      }
+    });
+
+    // 죽은 뱀 이동
+    this.runnerDeadSnakes.forEach((deadSnake, i) => {
+      deadSnake.x -= this.runnerSpeed * 0.5;
+
+      // 화면 밖으로 나가면 제거
+      if (deadSnake.x < -200) {
+        this.runnerDeadSnakes.splice(i, 1);
+      }
+    });
+
+    // 그리기
+    this.drawRunner();
+  }
+
+  /**
+   * 충돌 체크
+   */
+  checkRunnerCollision(obstacle) {
+    const head = this.runnerPlayerSnake[0];
+    const playerBox = {
+      x: head.x - 8,
+      y: head.y - 8,
+      width: 16,
+      height: 16
+    };
+
+    const obsBox = {
+      x: obstacle.x - obstacle.width / 2,
+      y: obstacle.y - obstacle.height,
+      width: obstacle.width,
+      height: obstacle.height
+    };
+
+    // AABB 충돌
+    return playerBox.x < obsBox.x + obsBox.width &&
+      playerBox.x + playerBox.width > obsBox.x &&
+      playerBox.y < obsBox.y + obsBox.height &&
+      playerBox.y + playerBox.height > obsBox.y;
+  }
+
+  /**
+   * 러너 게임오버
+   */
+  runnerGameOver() {
+    console.log('💀 Runner Game Over');
+
+    this.runnerPhase = 'gameover';
+    const { width, height } = this.cameras.main;
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(500, 0.02);
+
+    // 플래시
+    this.cameras.main.flash(300, 255, 0, 0);
+
+    // 게임오버 텍스트
+    const gameOverText = this.add.text(width / 2, height / 2 - 50, 'GAME OVER', {
+      fontSize: '48px',
+      fill: '#ff0000',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(9700).setAlpha(0);
+    this.runnerElements.push(gameOverText);
+
+    this.tweens.add({
+      targets: gameOverText,
+      alpha: 1,
+      scale: { from: 0.5, to: 1 },
+      duration: 300,
+      ease: 'Back.easeOut'
+    });
+
+    // 거리 표시
+    const distanceText = this.add.text(width / 2, height / 2 + 20, `Distance: ${Math.floor(this.runnerDistance)}m`, {
+      fontSize: '24px',
+      fill: '#ffffff'
+    }).setOrigin(0.5).setDepth(9700).setAlpha(0);
+    this.runnerElements.push(distanceText);
+
+    this.tweens.add({
+      targets: distanceText,
+      alpha: 1,
+      duration: 300,
+      delay: 300
+    });
+
+    // 2초 후 클리어
+    this.time.delayedCall(3000, () => {
+      this.cleanupRunner();
+      this.cleanupMultiverseCollapse();
+      this.clearStage();
+    });
+  }
+
+  /**
+   * 러너 화면 그리기
+   */
+  drawRunner() {
+    if (!this.runnerGraphics) return;
+    this.runnerGraphics.clear();
+
+    const { width, height } = this.cameras.main;
+
+    // 배경 그라데이션 효과 (어두운 우주)
+    this.runnerGraphics.fillStyle(0x0a0a1a, 1);
+    this.runnerGraphics.fillRect(0, 0, width, height);
+
+    // 별들 (간단하게)
+    for (let i = 0; i < 50; i++) {
+      const starX = (i * 67 + this.runnerDistance * 0.1) % width;
+      const starY = (i * 37) % (this.runnerGroundY - 50);
+      const starAlpha = 0.3 + Math.sin(this.runnerDistance * 0.01 + i) * 0.2;
+      this.runnerGraphics.fillStyle(0xffffff, starAlpha);
+      this.runnerGraphics.fillCircle(starX, starY, 1);
+    }
+
+    // 죽은 뱀 배경 (먼저 그림)
+    this.runnerDeadSnakes.forEach(deadSnake => {
+      this.runnerGraphics.fillStyle(deadSnake.color, 0.5);
+      deadSnake.segments.forEach(seg => {
+        this.runnerGraphics.fillRect(
+          deadSnake.x + seg.offsetX - 5,
+          deadSnake.y + seg.offsetY - 5,
+          10, 10
+        );
+      });
+    });
+
+    // 지면
+    this.runnerGraphics.fillStyle(0x333333, 1);
+    this.runnerGraphics.fillRect(0, this.runnerGroundY + 10, width, height - this.runnerGroundY);
+
+    // 지면 라인
+    this.runnerGraphics.lineStyle(2, 0x00ff00, 0.5);
+    this.runnerGraphics.lineBetween(0, this.runnerGroundY + 10, width, this.runnerGroundY + 10);
+
+    // 배경 흰 뱀들
+    this.runnerWhiteSnakes.forEach(snake => {
+      this.runnerGraphics.fillStyle(0xffffff, snake.alpha);
+      snake.segments.forEach((seg, i) => {
+        const size = i === 0 ? 10 : 8;
+        this.runnerGraphics.fillRect(seg.x - size / 2, seg.y - size / 2, size, size);
+      });
+    });
+
+    // 장애물
+    this.runnerObstacles.forEach(obs => {
+      this.drawRunnerObstacle(obs);
+    });
+
+    // 플레이어 뱀
+    this.runnerPlayerSnake.forEach((seg, i) => {
+      const size = i === 0 ? 18 : 14;
+
+      // 글로우
+      this.runnerGraphics.fillStyle(0xffffff, 0.3);
+      this.runnerGraphics.fillCircle(seg.x, seg.y, size * 0.8);
+
+      // 몸체
+      this.runnerGraphics.fillStyle(seg.color, 1);
+      this.runnerGraphics.fillRect(seg.x - size / 2, seg.y - size / 2, size, size);
+
+      // 머리 눈
+      if (i === 0) {
+        this.runnerGraphics.fillStyle(0x000000, 1);
+        this.runnerGraphics.fillCircle(seg.x + 4, seg.y - 2, 2);
+        this.runnerGraphics.fillCircle(seg.x + 4, seg.y + 2, 2);
+      }
+    });
+
+    // 거리 텍스트 업데이트
+    if (this.runnerPhase === 'playing' && this.runnerDistanceText) {
+      this.runnerDistanceText.setText(`${Math.floor(this.runnerDistance)}m`);
+    }
+  }
+
+  /**
+   * 장애물 그리기
+   */
+  drawRunnerObstacle(obs) {
+    const x = obs.x;
+    const y = obs.y;
+
+    switch (obs.type) {
+      case 'germ':
+        // 세균 (보라색 원)
+        this.runnerGraphics.fillStyle(0x9932cc, 1);
+        this.runnerGraphics.fillCircle(x, y - 15, 15);
+        // 촉수
+        for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2;
+          this.runnerGraphics.lineStyle(3, 0x9932cc, 1);
+          this.runnerGraphics.lineBetween(
+            x, y - 15,
+            x + Math.cos(angle) * 22, y - 15 + Math.sin(angle) * 22
+          );
+        }
+        break;
+
+      case 'saw':
+        // 톱니 (회전하는 원)
+        const sawRotation = this.runnerDistance * 0.1;
+        this.runnerGraphics.fillStyle(0xaaaaaa, 1);
+        this.runnerGraphics.fillCircle(x, y - 25, 20);
+        // 톱니 이빨
+        for (let i = 0; i < 8; i++) {
+          const angle = sawRotation + (i / 8) * Math.PI * 2;
+          this.runnerGraphics.fillStyle(0x888888, 1);
+          this.runnerGraphics.fillTriangle(
+            x + Math.cos(angle) * 20, y - 25 + Math.sin(angle) * 20,
+            x + Math.cos(angle + 0.2) * 30, y - 25 + Math.sin(angle + 0.2) * 30,
+            x + Math.cos(angle - 0.2) * 30, y - 25 + Math.sin(angle - 0.2) * 30
+          );
+        }
+        break;
+
+      case 'frog':
+        // 독개구리 (Stage 3 보스)
+        this.runnerGraphics.fillStyle(0x00aa00, 1);
+        this.runnerGraphics.fillEllipse(x, y - 15, 25, 20);
+        // 눈
+        this.runnerGraphics.fillStyle(0xffff00, 1);
+        this.runnerGraphics.fillCircle(x - 8, y - 22, 5);
+        this.runnerGraphics.fillCircle(x + 8, y - 22, 5);
+        this.runnerGraphics.fillStyle(0x000000, 1);
+        this.runnerGraphics.fillCircle(x - 8, y - 22, 2);
+        this.runnerGraphics.fillCircle(x + 8, y - 22, 2);
+        break;
+
+      case 'nexus':
+        // NEXUS (Stage 15 보스)
+        this.runnerGraphics.fillStyle(0x00ffff, 1);
+        this.runnerGraphics.fillRect(x - 15, y - 50, 30, 50);
+        // 눈 (빛나는)
+        const pulse = Math.sin(this.runnerDistance * 0.05) * 0.3 + 0.7;
+        this.runnerGraphics.fillStyle(0xff0000, pulse);
+        this.runnerGraphics.fillCircle(x - 5, y - 35, 4);
+        this.runnerGraphics.fillCircle(x + 5, y - 35, 4);
+        break;
+
+      case 'ghost':
+        // 고스트 뱀 (Phase 1 잔상)
+        const ghostColor = Phaser.Utils.Array.GetRandom(this.universeColors || [0xff6b6b]);
+        this.runnerGraphics.fillStyle(ghostColor, 0.7);
+        for (let i = 0; i < 4; i++) {
+          this.runnerGraphics.fillRect(x - 6 + i * 10, y - 30 + Math.sin(i) * 5, 10, 10);
+        }
+        break;
+    }
+  }
+
+  /**
+   * 러너 정리
+   */
+  cleanupRunner() {
+    console.log('🧹 Cleaning up Runner Mode');
+
+    this.runnerMode = false;
+    this.runnerPhase = 'none';
+
+    // 타이머 정리
+    this.runnerTimers.forEach(timer => {
+      if (timer && timer.destroy) timer.destroy();
+    });
+    this.runnerTimers = [];
+
+    // 그래픽 정리
+    if (this.runnerGraphics) {
+      this.runnerGraphics.destroy();
+      this.runnerGraphics = null;
+    }
+
+    // 거리 텍스트 정리
+    if (this.runnerDistanceText) {
+      this.runnerDistanceText.destroy();
+      this.runnerDistanceText = null;
+    }
+
+    // UI 요소 정리
+    this.runnerElements.forEach(el => {
+      if (el && el.destroy) el.destroy();
+    });
+    this.runnerElements = [];
+
+    // 배열 초기화
+    this.runnerObstacles = [];
+    this.runnerDeadSnakes = [];
+    this.runnerWhiteSnakes = [];
+    this.runnerPlayerSnake = [];
+
+    // 키보드 리스너 제거
+    this.input.keyboard.off('keydown-SPACE');
   }
 
   update() {
