@@ -257,3 +257,12 @@ export function shouldDisableCombo(stage) {
 export function isQuantumSplitStage(stage) {
   return stage === 17;
 }
+
+/**
+ * Check if this is the Multiverse Collapse boss stage (Stage 18)
+ * @param {number} stage - Stage number
+ * @returns {boolean}
+ */
+export function isMultiverseCollapseStage(stage) {
+  return stage === 18;
+}

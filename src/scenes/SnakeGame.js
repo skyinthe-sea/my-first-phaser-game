@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getShopItems } from '../data/items.js';
 import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
-import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage, isMetaUniverseStage, shouldDisableCombo, isQuantumSplitStage } from '../data/worlds.js';
+import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage, isMetaUniverseStage, shouldDisableCombo, isQuantumSplitStage, isMultiverseCollapseStage } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
   constructor() {
@@ -284,6 +284,76 @@ export default class SnakeGame extends Phaser.Scene {
     this.quantumFoodIndicators = [];         // 각 universe 먹이 표시 UI
     this.quantumTotalFoodText = null;        // 총 먹이 카운터 텍스트
     this.quantumFirstFoodSpawned = false;    // 첫 먹이 스폰 여부 (1번/6번 고정용)
+
+    // ===== Multiverse Collapse Boss (Stage 18) =====
+    this.multiverseCollapseMode = false;     // 보스 모드 활성화
+    this.multiverseCollapsePhase = 'none';   // 'none'|'intro'|'fiveselves'|'fourthwall'|'victory'
+    this.multiverseIntroShown = false;       // 인트로 최초 1회만 (부활 시 스킵)
+
+    // Phase 1: Five Selves (5개의 과거 자아)
+    this.ghostSnakes = [];                   // [{snake, direction, color, behavior, alive, graphics, trailElements, moveTimer}]
+    this.ghostSnakesDefeated = 0;            // 제거한 고스트 수
+    this.ghostColors = [
+      0xff6b6b,  // Ghost 1: 빨강 (Stage 3 - Frog)
+      0xffa500,  // Ghost 2: 주황 (Stage 6 - Bullet)
+      0xffff00,  // Ghost 3: 노랑 (Stage 9 - Fog)
+      0x00ffff,  // Ghost 4: 시안 (Stage 12 - Gear)
+      0xff00ff   // Ghost 5: 마젠타 (Stage 15 - NEXUS)
+    ];
+    this.ghostBehaviors = ['aggressive', 'evasive', 'stalking', 'pattern', 'smart'];
+    this.ghostNames = [
+      'Frog Slayer',
+      'Bullet Dodger',
+      'Fog Walker',
+      'Gear Breaker',
+      'Nexus Cracker'
+    ];
+    this.ghostDialogues = [
+      'Stage 3... The Frog...',
+      'Stage 6... Bullets everywhere...',
+      'Stage 9... Lost in fog...',
+      'Stage 12... Gears grinding...',
+      'Stage 15... NEXUS... pain...'
+    ];
+
+    // Phase 2: Doppelganger (도플갱어)
+    this.doppelganger = null;                // {snake, direction, hp, graphics, glowGraphics}
+    this.doppelInputHistory = [];            // [{direction, time}] 입력 기록
+    this.doppelInputDelay = 500;             // 0.5초 딜레이
+    this.doppelMaxHP = 5;                    // 도플갱어 HP
+    this.doppelRecordTimer = null;           // 입력 기록 타이머
+    this.doppelHPBar = null;                 // HP 바 컨테이너
+    this.doppelHPBarElements = [];           // HP 바 요소들
+    this.doppelColor = 0x9932cc;             // 도플갱어 색상 (다크 바이올렛)
+
+    // Phase 3: Become One (융합)
+    this.twoHeadedMode = false;              // 양머리 모드
+    this.fusionSnake = [];                   // [{x, y, headIndex}] headIndex: 0=초록머리, 1=보라머리, -1=몸통
+    this.fusionDirection1 = 'RIGHT';         // 첫 번째 머리 방향 (WASD)
+    this.fusionDirection2 = 'LEFT';          // 두 번째 머리 방향 (화살표)
+    this.fusionInputQueue1 = [];             // 첫 번째 머리 입력 큐
+    this.fusionInputQueue2 = [];             // 두 번째 머리 입력 큐
+    this.fusionFoodCount = 0;                // 성공한 먹이 수
+    this.fusionTargetFood = 5;               // 클리어 조건
+    this.fusionFood = null;                  // 현재 먹이 위치
+    this.fusionFoodGraphics = null;          // 먹이 그래픽
+
+    // Phase 2: Fourth Wall (제4의 벽 파괴) - 새 컨셉
+    this.fourthWallPhase = 'none';           // 'none'|'intro'|'score_attack'|'walls_closing'|'ui_chaos'|'game_over_hunt'
+    this.fourthWallProjectiles = [];         // 날아오는 숫자/UI 탄막
+    this.fourthWallBoundaries = null;        // {left, right, top, bottom} 좁혀지는 벽
+    this.fourthWallOriginalBounds = null;    // 원래 경계 저장
+    this.gameOverLetters = [];               // [{char, x, y, eaten, graphics}]
+    this.gameOverLettersEaten = 0;           // 먹은 글자 수
+    this.fourthWallGraphics = null;          // 메인 그래픽
+    this.fourthWallUIElements = [];          // UI 요소들 (정리용)
+    this.fourthWallTimers = [];              // 타이머들 (정리용)
+    this.fakeGameOverCount = 0;              // 가짜 게임오버 횟수
+
+    // Multiverse Collapse Visual Effects
+    this.multiverseElements = [];            // 정리용 요소 배열 (중복 선언이지만 보스용으로 분리)
+    this.multiverseAnimTimer = null;         // 60fps 애니메이션 타이머
+    this.multiverseBossElements = [];        // 보스 전용 요소들
 
     // 시야 제한(Fog of War)
     this.fogStageStart = 7;
@@ -591,6 +661,11 @@ export default class SnakeGame extends Phaser.Scene {
         this.handleShopInput('LEFT');
         return;
       }
+      // Phase 3: 화살표는 두 번째 머리 조작
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(2, 'LEFT');
+        return;
+      }
       this.startMusicOnFirstInput();
       this.addDirectionToQueue('LEFT');
     });
@@ -600,6 +675,11 @@ export default class SnakeGame extends Phaser.Scene {
       if (this.loanUIOpen) return;
       if (this.shopOpen) {
         this.handleShopInput('RIGHT');
+        return;
+      }
+      // Phase 3: 화살표는 두 번째 머리 조작
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(2, 'RIGHT');
         return;
       }
       this.startMusicOnFirstInput();
@@ -616,6 +696,11 @@ export default class SnakeGame extends Phaser.Scene {
         this.handleShopInput('UP');
         return;
       }
+      // Phase 3: 화살표는 두 번째 머리 조작
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(2, 'UP');
+        return;
+      }
       this.startMusicOnFirstInput();
       this.addDirectionToQueue('UP');
     });
@@ -630,8 +715,48 @@ export default class SnakeGame extends Phaser.Scene {
         this.handleShopInput('DOWN');
         return;
       }
+      // Phase 3: 화살표는 두 번째 머리 조작
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(2, 'DOWN');
+        return;
+      }
       this.startMusicOnFirstInput();
       this.addDirectionToQueue('DOWN');
+    });
+
+    // ========== WASD 키 (Phase 3: Become One - 첫 번째 머리 조작) ==========
+    this.input.keyboard.on('keydown-W', () => {
+      if (this.devModeEnabled) return;
+      if (this.bossInputBlocked) return;
+      if (this.shopOpen || this.loanUIOpen) return;
+      // Phase 3 융합 뱀 모드에서만 WASD 사용
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(1, 'UP');
+      }
+    });
+    this.input.keyboard.on('keydown-A', () => {
+      if (this.devModeEnabled) return;
+      if (this.bossInputBlocked) return;
+      if (this.shopOpen || this.loanUIOpen) return;
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(1, 'LEFT');
+      }
+    });
+    this.input.keyboard.on('keydown-S', () => {
+      if (this.devModeEnabled) return;
+      if (this.bossInputBlocked) return;
+      if (this.shopOpen || this.loanUIOpen) return;
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(1, 'DOWN');
+      }
+    });
+    this.input.keyboard.on('keydown-D', () => {
+      if (this.devModeEnabled) return;
+      if (this.bossInputBlocked) return;
+      if (this.shopOpen || this.loanUIOpen) return;
+      if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+        this.handleFusionInput(1, 'RIGHT');
+      }
     });
 
     // ENTER 키 (상점에서 다음 스테이지)
@@ -1307,6 +1432,28 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
+    // Multiverse Collapse 모드 처리
+    if (this.multiverseCollapseMode) {
+      // Phase 2 (fourthwall): 일반 이동 + 글자 충돌 체크
+      if (this.multiverseCollapsePhase === 'fourthwall') {
+        // 일반 이동 로직 계속 진행 (return 안 함)
+        // 이동 후 글자 충돌 체크는 아래에서 처리
+      }
+      // 레거시: Phase 2 (becomeone): 융합 뱀 이동
+      else if (this.multiverseCollapsePhase === 'becomeone') {
+        this.moveFusionSnake();
+        return;
+      }
+      // 레거시: Phase 2 (doppelganger): 입력 기록
+      if (this.multiverseCollapsePhase === 'doppelganger' && this.inputQueue.length > 0) {
+        const nextDir = this.inputQueue[0]; // peek (shift는 아래에서)
+        this.doppelInputHistory.push({
+          direction: nextDir,
+          time: Date.now()
+        });
+      }
+    }
+
     // 보스 인트로 중 이동 카운트 체크 (3칸 이동 후 대사)
     if (this.bossMode && this.bossPhase === 'intro' && this.bossIntroMoveCount !== undefined) {
       this.bossIntroMoveCount++;
@@ -1525,6 +1672,25 @@ export default class SnakeGame extends Phaser.Scene {
         this.startUniverseTransition(hitWormhole.targetUniverse, newHead.x, newHead.y);
         this.draw();
         return;
+      }
+    }
+
+    // Multiverse Collapse 충돌 체크
+    if (this.multiverseCollapseMode) {
+      // Phase 1: 고스트 뱀 충돌 체크
+      if (this.multiverseCollapsePhase === 'fiveselves' && this.ghostSnakes.length > 0) {
+        this.checkGhostCollision();
+        if (this.gameOver) return;
+      }
+      // Phase 2: 도플갱어 이동 + 충돌 체크
+      if (this.multiverseCollapsePhase === 'doppelganger' && this.doppelganger) {
+        this.moveDoppelganger(); // 플레이어 이동과 동시에 도플갱어도 이동
+        if (this.gameOver) return;
+      }
+
+      // Phase 2 (Fourth Wall): GAME OVER 글자 충돌 체크
+      if (this.multiverseCollapsePhase === 'fourthwall') {
+        this.checkGameOverLetterCollision();
       }
     }
 
@@ -7493,6 +7659,12 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
+    // Multiverse Collapse Phase 3: 융합 뱀은 별도 렌더링
+    if (this.multiverseCollapseMode && this.multiverseCollapsePhase === 'becomeone') {
+      // drawFusionSnake가 독립 타이머에서 호출됨
+      return;
+    }
+
     // 이전 프레임 지우기
     if (this.graphics) {
       this.graphics.clear();
@@ -8629,7 +8801,8 @@ export default class SnakeGame extends Phaser.Scene {
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
     const isGearTitan = this.isGearTitanStage();
-    const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && !isGearTitan && !isMagnetarStage(this.currentStage) && (
+    const isMultiverse = isMultiverseCollapseStage(this.currentStage);
+    const isPoisonFrogBoss = !isBulletBoss && !isFogBoss && !isGearTitan && !isMagnetarStage(this.currentStage) && !isMultiverse && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
@@ -8889,6 +9062,15 @@ export default class SnakeGame extends Phaser.Scene {
       this.moveTimer.paused = true;
       this.time.delayedCall(500, () => {
         this.showQuantumSplitIntro();
+      });
+    }
+
+    // Multiverse Collapse 보스 스테이지 체크 (Stage 18)
+    if (isMultiverseCollapseStage(this.currentStage)) {
+      this.food = { x: -100, y: -100 }; // 기본 먹이 숨김
+      this.moveTimer.paused = true;
+      this.time.delayedCall(500, () => {
+        this.startMultiverseCollapseBoss();
       });
     }
   }
@@ -27506,12 +27688,12 @@ export default class SnakeGame extends Phaser.Scene {
     // 보스 스테이지 여부
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
-    const isPoisonBoss = !isBulletBoss && !isFogBoss && !isMagnetarStage(this.currentStage) && (
+    const isPoisonBoss = !isBulletBoss && !isFogBoss && !isMagnetarStage(this.currentStage) && !isMultiverseCollapseStage(this.currentStage) && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
 
-    // 보스 스테이지 진입
+    // 보스 스테이지 진입 (독개구리/탄막/안개 보스만)
     if (isPoisonBoss || isBulletBoss || isFogBoss) {
       this.enterBossStage();
     }
@@ -27561,8 +27743,8 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // Poison Frog boss (every 3 stages except bullet/fog/Magnetar)
-    const isPoisonBoss = !this.isBulletBossStage() && !this.isFogBossStage() && !isMagnetarStage(this.currentStage) && (
+    // Poison Frog boss (every 3 stages except bullet/fog/Magnetar/Multiverse)
+    const isPoisonBoss = !this.isBulletBossStage() && !this.isFogBossStage() && !isMagnetarStage(this.currentStage) && !isMultiverseCollapseStage(this.currentStage) && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
@@ -27613,6 +27795,15 @@ export default class SnakeGame extends Phaser.Scene {
         this.showQuantumSplitIntro();
       });
     }
+
+    // Multiverse Collapse 보스 스테이지 체크 (Stage 18)
+    if (isMultiverseCollapseStage(this.currentStage)) {
+      this.food = { x: -100, y: -100 };
+      this.moveTimer.paused = true;
+      this.time.delayedCall(500, () => {
+        this.startMultiverseCollapseBoss();
+      });
+    }
   }
 
   // 개발자 모드용 게임 완전 리셋
@@ -27642,6 +27833,11 @@ export default class SnakeGame extends Phaser.Scene {
     // Quantum Split 정리
     if (this.quantumSplitMode) {
       this.cleanupQuantumSplit();
+    }
+
+    // Multiverse Collapse 정리
+    if (this.multiverseCollapseMode) {
+      this.cleanupMultiverseCollapse();
     }
 
     // 안개 보스 정리
@@ -30076,6 +30272,3890 @@ export default class SnakeGame extends Phaser.Scene {
   updateQuantumFoodUI() {
     if (this.quantumTotalFoodText) {
       this.quantumTotalFoodText.setText(`${this.quantumTotalFood}/${this.quantumTargetFood}`);
+    }
+  }
+
+  // ================================================================================
+  // ===== STAGE 18: MULTIVERSE COLLAPSE BOSS ======================================
+  // ================================================================================
+
+  /**
+   * Stage 18 체크 - Multiverse Collapse 보스 스테이지인지
+   */
+  isMultiverseCollapseStage() {
+    return this.currentStage === 18;
+  }
+
+  /**
+   * Multiverse Collapse 보스 시작
+   */
+  startMultiverseCollapseBoss() {
+    console.log('🌌 Starting Multiverse Collapse Boss (Stage 18)');
+
+    this.multiverseCollapseMode = true;
+    this.moveTimer.paused = true;
+
+    // 17탄 Quantum Split에서 이어지는 경우 정리
+    if (this.quantumSplitMode) {
+      // 뷰포트는 유지하고 인트로에서 폭발시킴
+    }
+
+    // 부활 시 인트로 스킵 → 바로 Phase 1
+    if (this.multiverseIntroShown) {
+      console.log('🔄 Skipping intro (revival) - directly to Phase 1');
+      this.multiverseCollapsePhase = 'fiveselves';
+      this.ghostSnakesDefeated = 0;
+
+      // 짧은 준비 시간 후 바로 시작
+      const { width, height } = this.cameras.main;
+      const readyText = this.add.text(width / 2, height / 2, 'ROUND 2\nFIGHT!', {
+        fontSize: '48px',
+        fill: '#ff6b6b',
+        fontStyle: 'bold',
+        align: 'center',
+        stroke: '#000000',
+        strokeThickness: 6
+      }).setOrigin(0.5).setDepth(9999).setAlpha(0);
+
+      this.tweens.add({
+        targets: readyText,
+        alpha: 1,
+        scale: { from: 0.5, to: 1.2 },
+        duration: 300,
+        ease: 'Back.easeOut',
+        onComplete: () => {
+          this.cameras.main.shake(200, 0.01);
+          this.time.delayedCall(800, () => {
+            this.tweens.add({
+              targets: readyText,
+              alpha: 0,
+              duration: 200,
+              onComplete: () => {
+                readyText.destroy();
+                this.createGhostSnakes();
+                this.startMultiverseAnimLoop();
+                this.moveTimer.paused = false;
+              }
+            });
+          });
+        }
+      });
+      return;
+    }
+
+    // 최초 1회: 인트로 시퀀스 시작
+    this.multiverseCollapsePhase = 'intro';
+    this.multiverseIntroShown = true;
+    this.showMultiverseCollapseIntro();
+  }
+
+  /**
+   * Multiverse Collapse 인트로 시퀀스 (~15초)
+   */
+  showMultiverseCollapseIntro() {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 전체 화면 미세 떨림 시작 (10초간)
+    this.cameras.main.shake(10000, 0.003);
+
+    // === STEP 1: 경고 메시지 (0-2초) ===
+    this.time.delayedCall(500, () => {
+      // 빨간 경고 오버레이
+      const warningOverlay = this.add.rectangle(centerX, centerY, width, height, 0xff0000, 0);
+      warningOverlay.setDepth(9000);
+      this.multiverseBossElements.push(warningOverlay);
+
+      // 깜빡임 효과
+      this.tweens.add({
+        targets: warningOverlay,
+        alpha: { from: 0, to: 0.15 },
+        duration: 150,
+        yoyo: true,
+        repeat: 5
+      });
+
+      // 경고 텍스트
+      const warningText = this.add.text(centerX, 100, '⚠ QUANTUM INSTABILITY DETECTED ⚠', {
+        fontSize: '24px',
+        fill: '#ff0000',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 4
+      }).setOrigin(0.5).setDepth(9001).setAlpha(0);
+      this.multiverseBossElements.push(warningText);
+
+      this.tweens.add({
+        targets: warningText,
+        alpha: 1,
+        duration: 300,
+        onComplete: () => {
+          // 글리치 효과
+          this.time.addEvent({
+            delay: 100,
+            callback: () => {
+              warningText.x = centerX + Phaser.Math.Between(-5, 5);
+            },
+            repeat: 15
+          });
+        }
+      });
+    });
+
+    // === STEP 2: 뱀 대사 (2-3초) ===
+    this.time.delayedCall(2000, () => {
+      this.showMultiverseDialogue("Something's wrong... The universes are...", 2000);
+    });
+
+    // === STEP 3: 우주 붕괴 시퀀스 (4-7초) ===
+    this.time.delayedCall(4000, () => {
+      this.showUniverseCollapseSequence();
+    });
+
+    // === STEP 4: 암전 + 심장박동 펄스 (7-9초) ===
+    this.time.delayedCall(7000, () => {
+      // 완전 암전
+      const blackout = this.add.rectangle(centerX, centerY, width, height, 0x000000, 0);
+      blackout.setDepth(9100);
+      this.multiverseBossElements.push(blackout);
+
+      this.tweens.add({
+        targets: blackout,
+        alpha: 1,
+        duration: 500,
+        onComplete: () => {
+          // 심장박동 펄스
+          this.time.addEvent({
+            delay: 800,
+            callback: () => {
+              this.tweens.add({
+                targets: blackout,
+                alpha: 0.7,
+                duration: 100,
+                yoyo: true
+              });
+              this.cameras.main.shake(100, 0.01);
+            },
+            repeat: 2
+          });
+        }
+      });
+    });
+
+    // === STEP 5: 타이틀 등장 (9-11초) ===
+    this.time.delayedCall(9000, () => {
+      this.cameras.main.flash(300, 255, 255, 255);
+
+      this.time.delayedCall(300, () => {
+        this.showBossTitle('MULTIVERSE COLLAPSE', () => {
+          // 타이틀 후 계속
+        });
+      });
+    });
+
+    // === STEP 6: "is that... ME?!" 대사 (11초) ===
+    this.time.delayedCall(11000, () => {
+      this.showMultiverseDialogue("Wait... is that... ME?!", 1500);
+    });
+
+    // === STEP 7: 5개 눈 등장 (12-14초) ===
+    this.time.delayedCall(12500, () => {
+      this.showGhostEyesAppear();
+    });
+
+    // === STEP 8: 카운트다운 + Phase 1 시작 (14-16초) ===
+    this.time.delayedCall(14500, () => {
+      this.showMultiverseCountdown(() => {
+        // 인트로 요소 정리
+        this.cleanupIntroElements();
+        // Phase 1 시작
+        this.startPhase1FiveSelves();
+      });
+    });
+  }
+
+  /**
+   * Multiverse 대사 표시
+   */
+  showMultiverseDialogue(text, duration) {
+    const { width } = this.cameras.main;
+    const centerX = width / 2;
+
+    const dialogue = this.add.text(centerX, 500, '', {
+      fontSize: '20px',
+      fill: '#00ff00',
+      fontStyle: 'italic',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(9200);
+    this.multiverseBossElements.push(dialogue);
+
+    // 타이핑 효과
+    let charIndex = 0;
+    const typeTimer = this.time.addEvent({
+      delay: 40,
+      callback: () => {
+        charIndex++;
+        dialogue.setText(text.substring(0, charIndex));
+        if (charIndex >= text.length) {
+          typeTimer.destroy();
+        }
+      },
+      repeat: text.length - 1
+    });
+
+    // 페이드아웃
+    this.time.delayedCall(duration, () => {
+      this.tweens.add({
+        targets: dialogue,
+        alpha: 0,
+        duration: 300,
+        onComplete: () => dialogue.destroy()
+      });
+    });
+  }
+
+  /**
+   * 6개 우주 붕괴 시퀀스
+   */
+  showUniverseCollapseSequence() {
+    const colors = this.universeColors || [0xff6b6b, 0xffa500, 0xffff00, 0x00ff00, 0xff00ff, 0x00ffff];
+
+    // Quantum Split 뷰포트가 있으면 폭발
+    if (this.quantumViewports && this.quantumViewports.length > 0) {
+      for (let i = 0; i < 6; i++) {
+        this.time.delayedCall(i * 500, () => {
+          this.explodeQuantumViewport(i);
+        });
+      }
+    } else {
+      // 뷰포트 없으면 가상 폭발
+      for (let i = 0; i < 6; i++) {
+        this.time.delayedCall(i * 500, () => {
+          this.showVirtualUniverseExplosion(i, colors[i]);
+        });
+      }
+    }
+  }
+
+  /**
+   * Quantum 뷰포트 폭발
+   */
+  explodeQuantumViewport(index) {
+    const vp = this.quantumViewports[index];
+    if (!vp || !vp.rt) return;
+
+    const x = vp.x + this.quantumViewportSize.width / 2;
+    const y = vp.y + this.quantumViewportSize.height / 2;
+    const color = this.universeColors[index] || 0xffffff;
+
+    // 깜빡임
+    let flash = 0;
+    const flashTimer = this.time.addEvent({
+      delay: 60,
+      callback: () => {
+        flash++;
+        if (vp.rt && vp.rt.active) {
+          vp.rt.setTint(flash % 2 ? 0xff0000 : 0xffffff);
+        }
+        if (flash >= 6) {
+          flashTimer.destroy();
+          this.createExplosionEffect(x, y, color, 25);
+
+          // 뷰포트 사라짐
+          if (vp.rt && vp.rt.active) {
+            this.tweens.add({
+              targets: vp.rt,
+              scale: 0,
+              rotation: Phaser.Math.DegToRad(30),
+              alpha: 0,
+              duration: 300,
+              ease: 'Back.easeIn'
+            });
+          }
+        }
+      },
+      repeat: 5
+    });
+
+    this.cameras.main.shake(200, 0.015);
+  }
+
+  /**
+   * 가상 우주 폭발 (뷰포트 없을 때)
+   */
+  showVirtualUniverseExplosion(index, color) {
+    const { width, height } = this.cameras.main;
+    const positions = [
+      { x: width * 0.2, y: height * 0.3 },
+      { x: width * 0.5, y: height * 0.25 },
+      { x: width * 0.8, y: height * 0.3 },
+      { x: width * 0.2, y: height * 0.7 },
+      { x: width * 0.5, y: height * 0.75 },
+      { x: width * 0.8, y: height * 0.7 }
+    ];
+
+    const pos = positions[index];
+    this.createExplosionEffect(pos.x, pos.y, color, 20);
+    this.cameras.main.shake(150, 0.01);
+    this.cameras.main.flash(100, ...this.hexToRgbArray(color));
+  }
+
+  /**
+   * 범용 폭발 이펙트
+   */
+  createExplosionEffect(x, y, color, particleCount = 20) {
+    // 충격파 링 3개
+    for (let r = 0; r < 3; r++) {
+      this.time.delayedCall(r * 80, () => {
+        const ring = this.add.circle(x, y, 10);
+        ring.setStrokeStyle(4 - r, color, 0.8);
+        ring.setFillStyle(0x000000, 0);
+        ring.setDepth(9050);
+
+        this.tweens.add({
+          targets: ring,
+          radius: 100 + r * 30,
+          alpha: 0,
+          duration: 400,
+          ease: 'Cubic.easeOut',
+          onComplete: () => ring.destroy()
+        });
+      });
+    }
+
+    // 파티클
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (i / particleCount) * Math.PI * 2;
+      const dist = 50 + Math.random() * 100;
+      const size = 4 + Math.random() * 6;
+
+      const particle = this.add.rectangle(x, y, size, size, color, 1);
+      particle.setDepth(9051);
+
+      this.tweens.add({
+        targets: particle,
+        x: x + Math.cos(angle) * dist,
+        y: y + Math.sin(angle) * dist,
+        alpha: 0,
+        rotation: Math.random() * 6,
+        scale: 0.2,
+        duration: 500 + Math.random() * 300,
+        ease: 'Power2.easeOut',
+        onComplete: () => particle.destroy()
+      });
+    }
+  }
+
+  /**
+   * 보스 타이틀 표시
+   */
+  showBossTitle(title, callback) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 배경 암전 (조금 밝게)
+    const titleBg = this.add.rectangle(centerX, centerY, width, height, 0x000000, 0.8);
+    titleBg.setDepth(9300);
+    this.multiverseBossElements.push(titleBg);
+
+    // 글로우 레이어들
+    const glowColors = [0xff00ff, 0x00ffff, 0xffff00];
+    const glowTexts = [];
+
+    for (let i = 0; i < 3; i++) {
+      const glow = this.add.text(centerX, centerY, title, {
+        fontSize: '48px',
+        fill: '#' + glowColors[i].toString(16).padStart(6, '0'),
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(9301 + i).setAlpha(0.3);
+      glowTexts.push(glow);
+      this.multiverseBossElements.push(glow);
+    }
+
+    // 메인 타이틀
+    const mainTitle = this.add.text(centerX, centerY, title, {
+      fontSize: '48px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      stroke: '#9932cc',
+      strokeThickness: 8
+    }).setOrigin(0.5).setDepth(9310).setScale(0.5).setAlpha(0);
+    this.multiverseBossElements.push(mainTitle);
+
+    // 등장 애니메이션
+    this.tweens.add({
+      targets: mainTitle,
+      scale: 1,
+      alpha: 1,
+      duration: 500,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        // 펄스 효과
+        this.tweens.add({
+          targets: mainTitle,
+          scale: 1.05,
+          duration: 300,
+          yoyo: true,
+          repeat: 2
+        });
+
+        // 글로우 오프셋 애니메이션
+        glowTexts.forEach((glow, i) => {
+          this.tweens.add({
+            targets: glow,
+            x: centerX + Math.cos(i * 2.09) * 3,
+            y: centerY + Math.sin(i * 2.09) * 3,
+            duration: 100,
+            yoyo: true,
+            repeat: 5
+          });
+        });
+      }
+    });
+
+    // 2초 후 콜백
+    this.time.delayedCall(2000, () => {
+      if (callback) callback();
+    });
+  }
+
+  /**
+   * 5개 고스트 눈 등장
+   */
+  showGhostEyesAppear() {
+    const { width, height } = this.cameras.main;
+    const positions = [
+      { x: width * 0.15, y: height * 0.4 },
+      { x: width * 0.35, y: height * 0.3 },
+      { x: width * 0.5, y: height * 0.5 },
+      { x: width * 0.65, y: height * 0.3 },
+      { x: width * 0.85, y: height * 0.4 }
+    ];
+
+    for (let i = 0; i < 5; i++) {
+      this.time.delayedCall(i * 300, () => {
+        const pos = positions[i];
+        const color = this.ghostColors[i];
+
+        // 눈 컨테이너
+        const eyeContainer = this.add.container(pos.x, pos.y).setDepth(9400);
+        this.multiverseBossElements.push(eyeContainer);
+
+        // 외부 글로우
+        const outerGlow = this.add.circle(0, 0, 20, color, 0.3);
+        // 중간 글로우
+        const midGlow = this.add.circle(0, 0, 12, color, 0.5);
+        // 눈알
+        const eyeWhite = this.add.circle(0, 0, 8, 0xffffff, 0.9);
+        // 동공
+        const pupil = this.add.circle(0, 0, 4, 0x000000, 1);
+
+        eyeContainer.add([outerGlow, midGlow, eyeWhite, pupil]);
+        eyeContainer.setScale(0).setAlpha(0);
+
+        // 등장
+        this.tweens.add({
+          targets: eyeContainer,
+          scale: 1,
+          alpha: 1,
+          duration: 300,
+          ease: 'Back.easeOut'
+        });
+
+        // 눈동자 움직임
+        this.tweens.add({
+          targets: pupil,
+          x: { from: -2, to: 2 },
+          duration: 500,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        });
+
+        // 펄스
+        this.tweens.add({
+          targets: outerGlow,
+          scale: 1.3,
+          alpha: 0.1,
+          duration: 600,
+          yoyo: true,
+          repeat: -1
+        });
+      });
+    }
+  }
+
+  /**
+   * 카운트다운
+   */
+  showMultiverseCountdown(callback) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    const counts = ['3', '2', '1', 'FIGHT!'];
+    const colors = ['#ff6b6b', '#ffa500', '#ffff00', '#00ff00'];
+
+    counts.forEach((text, i) => {
+      this.time.delayedCall(i * 600, () => {
+        const countText = this.add.text(centerX, centerY, text, {
+          fontSize: text === 'FIGHT!' ? '64px' : '72px',
+          fill: colors[i],
+          fontStyle: 'bold',
+          stroke: '#000000',
+          strokeThickness: 6
+        }).setOrigin(0.5).setDepth(9500).setScale(0.3).setAlpha(0);
+
+        this.tweens.add({
+          targets: countText,
+          scale: 1.5,
+          alpha: 1,
+          duration: 200,
+          ease: 'Back.easeOut',
+          onComplete: () => {
+            this.tweens.add({
+              targets: countText,
+              scale: 2,
+              alpha: 0,
+              duration: 300,
+              ease: 'Power2',
+              onComplete: () => {
+                countText.destroy();
+                if (i === counts.length - 1 && callback) {
+                  callback();
+                }
+              }
+            });
+          }
+        });
+
+        if (text !== 'FIGHT!') {
+          this.cameras.main.shake(50, 0.005);
+        } else {
+          this.cameras.main.shake(200, 0.02);
+          this.cameras.main.flash(200, 255, 255, 255);
+        }
+      });
+    });
+  }
+
+  /**
+   * 인트로 요소 정리
+   */
+  cleanupIntroElements() {
+    this.multiverseBossElements.forEach(el => {
+      if (el && el.destroy && el.active !== false) {
+        this.tweens.add({
+          targets: el,
+          alpha: 0,
+          duration: 300,
+          onComplete: () => {
+            if (el.destroy) el.destroy();
+          }
+        });
+      }
+    });
+    this.multiverseBossElements = [];
+
+    // Quantum Split 완전 정리
+    if (this.quantumSplitMode) {
+      this.cleanupQuantumSplit();
+    }
+  }
+
+  /**
+   * Hex 색상을 RGB 배열로 변환
+   */
+  hexToRgbArray(hex) {
+    return [
+      (hex >> 16) & 255,
+      (hex >> 8) & 255,
+      hex & 255
+    ];
+  }
+
+  // ================================================================================
+  // ===== PHASE 1: THE FIVE SELVES ================================================
+  // ================================================================================
+
+  /**
+   * Phase 1 시작 - 5개의 과거 자아
+   */
+  startPhase1FiveSelves() {
+    console.log('👻 Phase 1: The Five Selves');
+
+    this.multiverseCollapsePhase = 'fiveselves';
+    this.ghostSnakesDefeated = 0;
+
+    // 페이즈 전환 타이틀
+    this.showPhaseTitle('PHASE 1', 'THE FIVE SELVES', () => {
+      // 5개 고스트 뱀 생성
+      this.createGhostSnakes();
+
+      // 게임 재개
+      this.moveTimer.paused = false;
+
+      // 60fps 애니메이션 시작
+      this.startMultiverseAnimLoop();
+    });
+  }
+
+  /**
+   * 페이즈 전환 타이틀
+   */
+  showPhaseTitle(phase, subtitle, callback) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 배경 어둡게
+    const phaseBg = this.add.rectangle(centerX, centerY, width, height, 0x000000, 0.7);
+    phaseBg.setDepth(8000);
+
+    // 페이즈 번호
+    const phaseText = this.add.text(centerX, centerY - 30, phase, {
+      fontSize: '36px',
+      fill: '#888888',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(8001).setAlpha(0);
+
+    // 서브타이틀
+    const subText = this.add.text(centerX, centerY + 20, subtitle, {
+      fontSize: '32px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      stroke: '#9932cc',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(8001).setAlpha(0);
+
+    // 등장
+    this.tweens.add({
+      targets: [phaseText, subText],
+      alpha: 1,
+      duration: 300
+    });
+
+    this.tweens.add({
+      targets: subText,
+      scale: { from: 0.8, to: 1 },
+      duration: 300,
+      ease: 'Back.easeOut'
+    });
+
+    // 페이드아웃 및 콜백
+    this.time.delayedCall(1500, () => {
+      this.tweens.add({
+        targets: [phaseBg, phaseText, subText],
+        alpha: 0,
+        duration: 300,
+        onComplete: () => {
+          phaseBg.destroy();
+          phaseText.destroy();
+          subText.destroy();
+          if (callback) callback();
+        }
+      });
+    });
+  }
+
+  /**
+   * 5개 고스트 뱀 생성
+   */
+  createGhostSnakes() {
+    const spawnPositions = [
+      { x: 5, y: 5 },      // 좌상
+      { x: 34, y: 5 },     // 우상
+      { x: 5, y: 22 },     // 좌하
+      { x: 34, y: 22 },    // 우하
+      { x: 20, y: 13 }     // 중앙
+    ];
+
+    for (let i = 0; i < 5; i++) {
+      const pos = spawnPositions[i];
+
+      const ghost = {
+        snake: [
+          { x: pos.x, y: pos.y },
+          { x: pos.x - 1, y: pos.y },
+          { x: pos.x - 2, y: pos.y }
+        ],
+        direction: 'RIGHT',
+        color: this.ghostColors[i],
+        behavior: this.ghostBehaviors[i],
+        name: this.ghostNames[i],
+        dialogue: this.ghostDialogues[i],
+        alive: true,
+        graphics: this.add.graphics().setDepth(100 + i),
+        trailGraphics: this.add.graphics().setDepth(50 + i),
+        trailElements: [],
+        moveTimer: null,
+        patternStep: 0,
+        lastTurnTime: 0
+      };
+
+      this.ghostSnakes.push(ghost);
+
+      // 고스트별 등장 대사
+      this.time.delayedCall(i * 400, () => {
+        this.showGhostAppearDialogue(ghost, i);
+      });
+
+      // AI 시작 (약간 딜레이)
+      this.time.delayedCall(1000 + i * 200, () => {
+        this.startGhostAI(ghost, i);
+      });
+    }
+  }
+
+  /**
+   * 고스트 등장 대사
+   */
+  showGhostAppearDialogue(ghost, index) {
+    const head = ghost.snake[0];
+    const x = head.x * this.gridSize + this.gridSize / 2;
+    const y = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const dialogue = this.add.text(x, y - 30, ghost.dialogue, {
+      fontSize: '12px',
+      fill: '#' + ghost.color.toString(16).padStart(6, '0'),
+      fontStyle: 'italic',
+      stroke: '#000000',
+      strokeThickness: 2
+    }).setOrigin(0.5).setDepth(500).setAlpha(0);
+
+    this.tweens.add({
+      targets: dialogue,
+      alpha: 1,
+      y: y - 50,
+      duration: 300,
+      onComplete: () => {
+        this.time.delayedCall(1500, () => {
+          this.tweens.add({
+            targets: dialogue,
+            alpha: 0,
+            y: y - 70,
+            duration: 300,
+            onComplete: () => dialogue.destroy()
+          });
+        });
+      }
+    });
+  }
+
+  /**
+   * 고스트 AI 시작
+   */
+  startGhostAI(ghost, index) {
+    // 플레이어 속도의 80%
+    const playerSpeed = this.moveTimer ? this.moveTimer.delay : 90;
+    const ghostSpeed = Math.floor(playerSpeed / 0.8); // 80% 속도 = 딜레이 125%
+
+    ghost.moveTimer = this.time.addEvent({
+      delay: ghostSpeed,
+      callback: () => this.updateGhostMovement(ghost, index),
+      loop: true
+    });
+  }
+
+  /**
+   * 고스트 이동 업데이트
+   */
+  updateGhostMovement(ghost, index) {
+    if (!ghost.alive || this.gameOver || this.multiverseCollapsePhase !== 'fiveselves') return;
+
+    const head = ghost.snake[0];
+    const playerHead = this.snake[0];
+
+    // 행동 패턴에 따른 방향 결정
+    let newDirection = ghost.direction;
+
+    switch (ghost.behavior) {
+      case 'aggressive':
+        newDirection = this.getDirectionTowards(head, playerHead, ghost.direction);
+        break;
+      case 'evasive':
+        newDirection = this.getEvasiveDirection(head, playerHead, ghost.direction);
+        break;
+      case 'stalking':
+        newDirection = this.getStalkingDirection(head, playerHead, ghost.direction);
+        break;
+      case 'pattern':
+        newDirection = this.getPatternDirection(ghost);
+        break;
+      case 'smart':
+        newDirection = this.getSmartDirection(head, playerHead, ghost.direction, this.direction);
+        break;
+    }
+
+    // 벽/자기 충돌 방지
+    newDirection = this.avoidGhostCollision(ghost, newDirection);
+    ghost.direction = newDirection;
+
+    // 이동
+    this.moveGhostSnake(ghost);
+
+    // 플레이어와 충돌 체크
+    this.checkGhostPlayerCollision(ghost, index);
+  }
+
+  /**
+   * 목표를 향해 이동
+   */
+  getDirectionTowards(from, to, currentDir) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+
+    // 더 먼 축 우선
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx > 0 ? 'RIGHT' : 'LEFT';
+    } else if (dy !== 0) {
+      return dy > 0 ? 'DOWN' : 'UP';
+    }
+    return currentDir;
+  }
+
+  /**
+   * 회피 이동
+   */
+  getEvasiveDirection(head, playerHead, currentDir) {
+    const dist = Math.abs(head.x - playerHead.x) + Math.abs(head.y - playerHead.y);
+
+    if (dist < 8) {
+      // 플레이어와 반대 방향
+      const dx = head.x - playerHead.x;
+      const dy = head.y - playerHead.y;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        return dx > 0 ? 'RIGHT' : 'LEFT';
+      } else {
+        return dy > 0 ? 'DOWN' : 'UP';
+      }
+    }
+
+    // 랜덤 이동
+    if (Math.random() < 0.1) {
+      const dirs = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
+      return dirs[Math.floor(Math.random() * dirs.length)];
+    }
+    return currentDir;
+  }
+
+  /**
+   * 스토킹 이동 (주변 맴돔)
+   */
+  getStalkingDirection(head, playerHead, currentDir) {
+    const dist = Math.abs(head.x - playerHead.x) + Math.abs(head.y - playerHead.y);
+
+    if (dist < 5) {
+      // 너무 가까우면 거리 유지
+      return this.getEvasiveDirection(head, playerHead, currentDir);
+    } else if (dist > 10) {
+      // 너무 멀면 접근
+      return this.getDirectionTowards(head, playerHead, currentDir);
+    }
+
+    // 원형으로 맴돔
+    const angle = Math.atan2(head.y - playerHead.y, head.x - playerHead.x);
+    const newAngle = angle + 0.5;
+
+    if (Math.abs(Math.cos(newAngle)) > Math.abs(Math.sin(newAngle))) {
+      return Math.cos(newAngle) > 0 ? 'RIGHT' : 'LEFT';
+    } else {
+      return Math.sin(newAngle) > 0 ? 'DOWN' : 'UP';
+    }
+  }
+
+  /**
+   * 패턴 이동 (사각형)
+   */
+  getPatternDirection(ghost) {
+    ghost.patternStep = (ghost.patternStep || 0) + 1;
+
+    // 10칸마다 방향 전환
+    if (ghost.patternStep % 10 === 0) {
+      const dirs = ['RIGHT', 'DOWN', 'LEFT', 'UP'];
+      const currentIdx = dirs.indexOf(ghost.direction);
+      return dirs[(currentIdx + 1) % 4];
+    }
+    return ghost.direction;
+  }
+
+  /**
+   * 스마트 이동 (예측)
+   */
+  getSmartDirection(head, playerHead, currentDir, playerDir) {
+    // 플레이어가 이동할 방향 예측
+    let predictedX = playerHead.x;
+    let predictedY = playerHead.y;
+
+    switch (playerDir) {
+      case 'LEFT': predictedX -= 3; break;
+      case 'RIGHT': predictedX += 3; break;
+      case 'UP': predictedY -= 3; break;
+      case 'DOWN': predictedY += 3; break;
+    }
+
+    return this.getDirectionTowards(head, { x: predictedX, y: predictedY }, currentDir);
+  }
+
+  /**
+   * 고스트 충돌 회피
+   */
+  avoidGhostCollision(ghost, direction) {
+    const head = ghost.snake[0];
+    let newHead = { x: head.x, y: head.y };
+
+    switch (direction) {
+      case 'LEFT': newHead.x--; break;
+      case 'RIGHT': newHead.x++; break;
+      case 'UP': newHead.y--; break;
+      case 'DOWN': newHead.y++; break;
+    }
+
+    // 벽 체크
+    if (newHead.x < 0 || newHead.x >= this.cols || newHead.y < 0 || newHead.y >= this.rows) {
+      // 반대 방향 시도
+      const opposite = { 'LEFT': 'RIGHT', 'RIGHT': 'LEFT', 'UP': 'DOWN', 'DOWN': 'UP' };
+      return opposite[direction] || direction;
+    }
+
+    // 자기 몸통 체크
+    for (let i = 1; i < ghost.snake.length; i++) {
+      if (ghost.snake[i].x === newHead.x && ghost.snake[i].y === newHead.y) {
+        // 다른 방향 시도
+        const dirs = ['UP', 'DOWN', 'LEFT', 'RIGHT'].filter(d => d !== direction);
+        for (const d of dirs) {
+          let testHead = { x: head.x, y: head.y };
+          switch (d) {
+            case 'LEFT': testHead.x--; break;
+            case 'RIGHT': testHead.x++; break;
+            case 'UP': testHead.y--; break;
+            case 'DOWN': testHead.y++; break;
+          }
+          const collision = ghost.snake.some(s => s.x === testHead.x && s.y === testHead.y);
+          if (!collision && testHead.x >= 0 && testHead.x < this.cols && testHead.y >= 0 && testHead.y < this.rows) {
+            return d;
+          }
+        }
+      }
+    }
+
+    return direction;
+  }
+
+  /**
+   * 고스트 뱀 이동
+   */
+  moveGhostSnake(ghost) {
+    const head = ghost.snake[0];
+    const oldHead = { x: head.x, y: head.y };
+
+    let newHead = { x: head.x, y: head.y };
+
+    switch (ghost.direction) {
+      case 'LEFT': newHead.x--; break;
+      case 'RIGHT': newHead.x++; break;
+      case 'UP': newHead.y--; break;
+      case 'DOWN': newHead.y++; break;
+    }
+
+    // 벽 랩핑
+    if (newHead.x < 0) newHead.x = this.cols - 1;
+    if (newHead.x >= this.cols) newHead.x = 0;
+    if (newHead.y < 0) newHead.y = this.rows - 1;
+    if (newHead.y >= this.rows) newHead.y = 0;
+
+    ghost.snake.unshift(newHead);
+    ghost.snake.pop();
+
+    // 트레일 효과
+    this.addGhostTrail(ghost, oldHead);
+  }
+
+  /**
+   * 고스트 트레일 추가
+   */
+  addGhostTrail(ghost, position) {
+    const x = position.x * this.gridSize + this.gridSize / 2;
+    const y = position.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const trail = this.add.circle(x, y, this.gridSize / 3, ghost.color, 0.4);
+    trail.setDepth(50);
+    trail.setBlendMode(Phaser.BlendModes.ADD);
+
+    ghost.trailElements.push(trail);
+
+    this.tweens.add({
+      targets: trail,
+      alpha: 0,
+      scale: 0.3,
+      duration: 400,
+      onComplete: () => {
+        trail.destroy();
+        const idx = ghost.trailElements.indexOf(trail);
+        if (idx > -1) ghost.trailElements.splice(idx, 1);
+      }
+    });
+
+    // 최대 15개 유지
+    while (ghost.trailElements.length > 15) {
+      const old = ghost.trailElements.shift();
+      if (old && old.destroy) old.destroy();
+    }
+  }
+
+  /**
+   * 모든 고스트 뱀과의 충돌 체크 (moveSnake에서 호출)
+   */
+  checkGhostCollision() {
+    if (!this.ghostSnakes || this.ghostSnakes.length === 0) return;
+
+    for (let i = 0; i < this.ghostSnakes.length; i++) {
+      const ghost = this.ghostSnakes[i];
+      if (ghost && ghost.alive) {
+        this.checkGhostPlayerCollision(ghost, i);
+        if (this.gameOver) return;
+      }
+    }
+  }
+
+  /**
+   * 플레이어-고스트 충돌 체크
+   */
+  checkGhostPlayerCollision(ghost, index) {
+    if (!ghost.alive) return;
+
+    const ghostHead = ghost.snake[0];
+    const playerHead = this.snake[0];
+
+    // 머리 vs 머리 = 둘 다 사망
+    if (ghostHead.x === playerHead.x && ghostHead.y === playerHead.y) {
+      this.defeatGhostSnake(ghost, index);
+      this.endGame(); // 플레이어도 사망
+      return;
+    }
+
+    // 플레이어 머리 vs 고스트 몸통(옆/뒤) = 플레이어 승리 (고스트 제거)
+    for (let i = 1; i < ghost.snake.length; i++) {
+      if (ghost.snake[i].x === playerHead.x && ghost.snake[i].y === playerHead.y) {
+        this.defeatGhostSnake(ghost, index);
+        return;
+      }
+    }
+
+    // 고스트 머리 vs 플레이어 몸통 = 플레이어 데미지
+    for (let i = 1; i < this.snake.length; i++) {
+      if (ghostHead.x === this.snake[i].x && ghostHead.y === this.snake[i].y) {
+        this.handleMultiversePlayerDamage('ghost_attack');
+        return;
+      }
+    }
+  }
+
+  /**
+   * 고스트 제거
+   */
+  defeatGhostSnake(ghost, index) {
+    ghost.alive = false;
+    if (ghost.moveTimer) {
+      ghost.moveTimer.destroy();
+      ghost.moveTimer = null;
+    }
+
+    this.ghostSnakesDefeated++;
+
+    // 화려한 제거 효과
+    this.showGhostDefeatEffect(ghost, index);
+
+    // HIT 텍스트
+    // TODO: 테스트용 임시 설정 - 원래는 /5
+    const totalGhostsRequired = 1; // TODO: 테스트 후 5로 복원
+    this.showMultiverseHitText(`SELF ${this.ghostSnakesDefeated}/${totalGhostsRequired} DEFEATED`, ghost.color);
+
+    // 제거 대사
+    this.showMultiverseDialogue("I remember now... I survived this.", 1500);
+
+    // 모두 제거했으면 Phase 2 (Fourth Wall)
+    // TODO: 테스트용 임시 설정 - 원래는 5마리 (this.ghostSnakesDefeated >= 5)
+    const ghostsRequiredForPhase2 = 1; // TODO: 테스트 후 5로 복원
+    if (this.ghostSnakesDefeated >= ghostsRequiredForPhase2) {
+      this.time.delayedCall(2000, () => {
+        this.startPhase2FourthWall();
+      });
+    }
+  }
+
+  /**
+   * 고스트 제거 효과
+   */
+  showGhostDefeatEffect(ghost, index) {
+    const head = ghost.snake[0];
+    const x = head.x * this.gridSize + this.gridSize / 2;
+    const y = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 화면 효과
+    this.cameras.main.flash(100, ...this.hexToRgbArray(ghost.color));
+    this.cameras.main.shake(200, 0.015);
+
+    // 폭발 파티클
+    this.createExplosionEffect(x, y, ghost.color, 25);
+
+    // 이름 표시
+    const nameText = this.add.text(x, y - 30, ghost.name, {
+      fontSize: '16px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(300);
+
+    this.tweens.add({
+      targets: nameText,
+      y: y - 80,
+      alpha: 0,
+      duration: 1000,
+      ease: 'Power2',
+      onComplete: () => nameText.destroy()
+    });
+
+    // 고스트 그래픽 정리
+    if (ghost.graphics) ghost.graphics.destroy();
+    if (ghost.trailGraphics) ghost.trailGraphics.destroy();
+    ghost.trailElements.forEach(t => { if (t && t.destroy) t.destroy(); });
+    ghost.trailElements = [];
+  }
+
+  /**
+   * Multiverse HIT 텍스트
+   */
+  showMultiverseHitText(text, color) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+
+    const hitText = this.add.text(centerX, 150, text, {
+      fontSize: '28px',
+      fill: '#' + (color || 0xffffff).toString(16).padStart(6, '0'),
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(8000).setScale(0.5).setAlpha(0);
+
+    this.tweens.add({
+      targets: hitText,
+      scale: 1,
+      alpha: 1,
+      duration: 200,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.time.delayedCall(1000, () => {
+          this.tweens.add({
+            targets: hitText,
+            alpha: 0,
+            y: 120,
+            duration: 300,
+            onComplete: () => hitText.destroy()
+          });
+        });
+      }
+    });
+  }
+
+  /**
+   * 플레이어 데미지 처리 (Multiverse)
+   */
+  handleMultiversePlayerDamage(source) {
+    // 실드가 있으면 소모
+    if (this.comboShieldCount > 0) {
+      this.comboShieldCount--;
+      this.updateShieldUI();
+      this.cameras.main.shake(100, 0.01);
+      return;
+    }
+
+    // 게임오버
+    this.endGame();
+  }
+
+  /**
+   * 고스트 뱀 렌더링
+   */
+  drawGhostSnakes() {
+    this.ghostSnakes.forEach((ghost) => {
+      if (!ghost.alive || !ghost.graphics) return;
+
+      ghost.graphics.clear();
+
+      // 외부 글로우
+      ghost.snake.forEach((seg) => {
+        const x = seg.x * this.gridSize + this.gridSize / 2;
+        const y = seg.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+        ghost.graphics.fillStyle(ghost.color, 0.2);
+        ghost.graphics.fillCircle(x, y, this.gridSize / 2 + 4);
+      });
+
+      // 메인 바디 (눈 없음 - 실루엣 형태)
+      ghost.snake.forEach((seg, i) => {
+        const x = seg.x * this.gridSize;
+        const y = seg.y * this.gridSize + this.gameAreaY;
+        const alpha = i === 0 ? 0.9 : Math.max(0.4, 0.7 - i * 0.05);
+
+        ghost.graphics.fillStyle(ghost.color, alpha);
+        ghost.graphics.fillRect(x + 1, y + 1, this.gridSize - 2, this.gridSize - 2);
+      });
+    });
+  }
+
+  /**
+   * Multiverse 애니메이션 루프 시작
+   */
+  startMultiverseAnimLoop() {
+    if (this.multiverseAnimTimer) {
+      this.multiverseAnimTimer.destroy();
+    }
+
+    this.multiverseAnimTimer = this.time.addEvent({
+      delay: 16, // ~60fps
+      callback: () => {
+        if (this.multiverseCollapsePhase === 'fiveselves') {
+          this.drawGhostSnakes();
+        } else if (this.multiverseCollapsePhase === 'fourthwall') {
+          this.drawFourthWall();
+        } else if (this.multiverseCollapsePhase === 'doppelganger') {
+          this.drawDoppelganger();
+        } else if (this.multiverseCollapsePhase === 'becomeone') {
+          this.drawFusionSnake();
+        }
+      },
+      loop: true
+    });
+  }
+
+  // ================================================================================
+  // ===== PHASE 2: THE DOPPELGANGER ===============================================
+  // ================================================================================
+
+  /**
+   * Phase 2 시작 - 도플갱어
+   */
+  startPhase2Doppelganger() {
+    console.log('👥 Phase 2: The Doppelganger');
+
+    this.multiverseCollapsePhase = 'doppelganger';
+    this.moveTimer.paused = true;
+
+    // 고스트 정리
+    this.cleanupGhostSnakes();
+
+    // 페이즈 전환 타이틀
+    this.showPhaseTitle('PHASE 2', 'THE DOPPELGANGER', () => {
+      // 도플갱어 등장 대사
+      this.showMultiverseDialogue("You think you know yourself? I AM you... 0.5 seconds ago.", 3000);
+
+      this.time.delayedCall(3500, () => {
+        // 도플갱어 생성
+        this.createDoppelganger();
+
+        // HP 바 생성
+        this.createDoppelHPBar();
+
+        // 입력 기록 시작
+        this.startDoppelInputRecording();
+
+        // 게임 재개
+        this.moveTimer.paused = false;
+      });
+    });
+  }
+
+  /**
+   * 고스트 정리
+   */
+  cleanupGhostSnakes() {
+    this.ghostSnakes.forEach(ghost => {
+      if (ghost.moveTimer) ghost.moveTimer.destroy();
+      if (ghost.graphics) ghost.graphics.destroy();
+      if (ghost.trailGraphics) ghost.trailGraphics.destroy();
+      ghost.trailElements.forEach(t => { if (t && t.destroy) t.destroy(); });
+    });
+    this.ghostSnakes = [];
+  }
+
+  /**
+   * 도플갱어 생성
+   */
+  createDoppelganger() {
+    const playerHead = this.snake[0];
+
+    // 플레이어 반대편에 생성
+    const mirrorX = this.cols - 1 - playerHead.x;
+    const mirrorY = this.rows - 1 - playerHead.y;
+
+    this.doppelganger = {
+      snake: [
+        { x: mirrorX, y: mirrorY },
+        { x: mirrorX + 1, y: mirrorY },
+        { x: mirrorX + 2, y: mirrorY }
+      ],
+      direction: 'LEFT',
+      hp: this.doppelMaxHP,
+      graphics: this.add.graphics().setDepth(100),
+      glowGraphics: this.add.graphics().setDepth(99),
+      trailElements: []
+    };
+
+    this.doppelInputHistory = [];
+
+    // 등장 효과
+    this.cameras.main.flash(200, 153, 50, 204); // 보라색 플래시
+    this.cameras.main.shake(200, 0.015);
+  }
+
+  /**
+   * 도플갱어 HP 바 생성
+   */
+  createDoppelHPBar() {
+    const { width } = this.cameras.main;
+    const barWidth = 200;
+    const barHeight = 20;
+    const x = width - barWidth - 20;
+    const y = 70;
+
+    // 배경
+    const bg = this.add.rectangle(x + barWidth / 2, y + barHeight / 2, barWidth, barHeight, 0x333333);
+    bg.setDepth(2000);
+    this.doppelHPBarElements.push(bg);
+
+    // HP 바
+    for (let i = 0; i < this.doppelMaxHP; i++) {
+      const segWidth = (barWidth - 10) / this.doppelMaxHP - 2;
+      const segX = x + 5 + i * (segWidth + 2);
+
+      const seg = this.add.rectangle(segX + segWidth / 2, y + barHeight / 2, segWidth, barHeight - 6, this.doppelColor);
+      seg.setDepth(2001);
+      this.doppelHPBarElements.push(seg);
+    }
+
+    // 라벨
+    const label = this.add.text(x + barWidth / 2, y - 10, 'DOPPELGANGER', {
+      fontSize: '12px',
+      fill: '#9932cc',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2001);
+    this.doppelHPBarElements.push(label);
+  }
+
+  /**
+   * HP 바 업데이트
+   */
+  updateDoppelHPBar() {
+    if (!this.doppelganger) return;
+
+    const hp = this.doppelganger.hp;
+
+    // HP 바 세그먼트 업데이트 (첫 번째는 배경, 마지막은 라벨)
+    for (let i = 1; i <= this.doppelMaxHP; i++) {
+      const seg = this.doppelHPBarElements[i];
+      if (seg) {
+        if (i <= hp) {
+          seg.setFillStyle(this.doppelColor);
+        } else {
+          seg.setFillStyle(0x333333);
+        }
+      }
+    }
+  }
+
+  /**
+   * 입력 기록 시작
+   */
+  startDoppelInputRecording() {
+    this.doppelRecordTimer = this.time.addEvent({
+      delay: 16, // 60fps
+      callback: () => {
+        if (!this.doppelganger || this.multiverseCollapsePhase !== 'doppelganger') return;
+
+        // 현재 방향 기록
+        this.doppelInputHistory.push({
+          direction: this.direction,
+          time: Date.now()
+        });
+
+        // 0.5초 지난 입력 실행
+        const now = Date.now();
+        while (this.doppelInputHistory.length > 0 &&
+               now - this.doppelInputHistory[0].time >= this.doppelInputDelay) {
+          const input = this.doppelInputHistory.shift();
+          this.doppelganger.direction = input.direction;
+        }
+      },
+      loop: true
+    });
+  }
+
+  /**
+   * 도플갱어 이동 (moveSnake에서 호출)
+   */
+  moveDoppelganger() {
+    if (!this.doppelganger || this.multiverseCollapsePhase !== 'doppelganger') return;
+
+    const head = this.doppelganger.snake[0];
+    const oldHead = { x: head.x, y: head.y };
+    let newHead = { x: head.x, y: head.y };
+
+    switch (this.doppelganger.direction) {
+      case 'LEFT': newHead.x--; break;
+      case 'RIGHT': newHead.x++; break;
+      case 'UP': newHead.y--; break;
+      case 'DOWN': newHead.y++; break;
+    }
+
+    // 벽 랩핑 (플레이어와 동일)
+    if (newHead.x < 0) newHead.x = this.cols - 1;
+    if (newHead.x >= this.cols) newHead.x = 0;
+    if (newHead.y < 0) newHead.y = this.rows - 1;
+    if (newHead.y >= this.rows) newHead.y = 0;
+
+    this.doppelganger.snake.unshift(newHead);
+    this.doppelganger.snake.pop();
+
+    // 트레일
+    this.addDoppelTrail(oldHead);
+
+    // 충돌 체크
+    this.checkDoppelCollisions();
+  }
+
+  /**
+   * 도플갱어 트레일
+   */
+  addDoppelTrail(position) {
+    const x = position.x * this.gridSize + this.gridSize / 2;
+    const y = position.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const trail = this.add.circle(x, y, this.gridSize / 3, this.doppelColor, 0.3);
+    trail.setDepth(50);
+    trail.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.doppelganger.trailElements.push(trail);
+
+    this.tweens.add({
+      targets: trail,
+      alpha: 0,
+      scale: 0.3,
+      duration: 400,
+      onComplete: () => {
+        trail.destroy();
+        const idx = this.doppelganger.trailElements.indexOf(trail);
+        if (idx > -1) this.doppelganger.trailElements.splice(idx, 1);
+      }
+    });
+
+    while (this.doppelganger.trailElements.length > 15) {
+      const old = this.doppelganger.trailElements.shift();
+      if (old && old.destroy) old.destroy();
+    }
+  }
+
+  /**
+   * 도플갱어 충돌 체크
+   */
+  checkDoppelCollisions() {
+    if (!this.doppelganger) return;
+
+    const playerHead = this.snake[0];
+    const doppelHead = this.doppelganger.snake[0];
+
+    // 플레이어 머리 vs 도플갱어 몸통 = 플레이어 데미지
+    for (let i = 1; i < this.doppelganger.snake.length; i++) {
+      const seg = this.doppelganger.snake[i];
+      if (playerHead.x === seg.x && playerHead.y === seg.y) {
+        this.handleMultiversePlayerDamage('doppel_body');
+        return;
+      }
+    }
+
+    // 도플갱어 머리 vs 플레이어 몸통 = 도플갱어 데미지
+    for (let i = 1; i < this.snake.length; i++) {
+      const seg = this.snake[i];
+      if (doppelHead.x === seg.x && doppelHead.y === seg.y) {
+        this.handleDoppelDamage();
+        return;
+      }
+    }
+
+    // 머리 vs 머리 = 양쪽 데미지 (밀침)
+    if (playerHead.x === doppelHead.x && playerHead.y === doppelHead.y) {
+      this.handleDoppelDamage();
+      this.cameras.main.shake(300, 0.03);
+    }
+  }
+
+  /**
+   * 도플갱어 데미지
+   */
+  handleDoppelDamage() {
+    if (!this.doppelganger) return;
+
+    this.doppelganger.hp--;
+
+    // 피격 효과
+    this.cameras.main.shake(150, 0.02);
+    this.cameras.main.flash(100, 153, 50, 204);
+
+    // HP 바 업데이트
+    this.updateDoppelHPBar();
+
+    // HIT 대사
+    const hitDialogues = [
+      "Ugh... you're learning...",
+      "",
+      "How... how can you predict yourself?!",
+      "",
+      "If I fall... we BOTH fall!"
+    ];
+    const hitCount = this.doppelMaxHP - this.doppelganger.hp;
+    if (hitDialogues[hitCount - 1]) {
+      this.showMultiverseDialogue(hitDialogues[hitCount - 1], 2000);
+    }
+
+    // HIT 텍스트
+    this.showMultiverseHitText(`DOPPEL HIT ${hitCount}/${this.doppelMaxHP}`, this.doppelColor);
+
+    // 도플갱어 축소 효과
+    if (this.doppelganger.snake.length > 3) {
+      const tail1 = this.doppelganger.snake.pop();
+      const tail2 = this.doppelganger.snake.pop();
+      if (tail1) this.createExplosionEffect(
+        tail1.x * this.gridSize + this.gridSize / 2,
+        tail1.y * this.gridSize + this.gridSize / 2 + this.gameAreaY,
+        this.doppelColor, 5
+      );
+    }
+
+    // HP 소진 = Phase 2 (Become One) - 도플갱어 제거로 사용 안함
+    if (this.doppelganger.hp <= 0) {
+      this.time.delayedCall(1500, () => {
+        this.startPhase2BecomeOne();
+      });
+    }
+  }
+
+  /**
+   * 도플갱어 렌더링
+   */
+  drawDoppelganger() {
+    if (!this.doppelganger || !this.doppelganger.graphics) return;
+
+    const g = this.doppelganger.graphics;
+    const glow = this.doppelganger.glowGraphics;
+
+    g.clear();
+    glow.clear();
+
+    // 글로우
+    this.doppelganger.snake.forEach((seg) => {
+      const x = seg.x * this.gridSize + this.gridSize / 2;
+      const y = seg.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      glow.fillStyle(this.doppelColor, 0.2);
+      glow.fillCircle(x, y, this.gridSize / 2 + 6);
+    });
+
+    // 메인 바디
+    this.doppelganger.snake.forEach((seg, i) => {
+      const x = seg.x * this.gridSize;
+      const y = seg.y * this.gridSize + this.gameAreaY;
+
+      const brightness = i === 0 ? 1.0 : Math.max(0.5, 0.8 - i * 0.03);
+      g.fillStyle(this.doppelColor, brightness);
+      g.fillRect(x + 1, y + 1, this.gridSize - 2, this.gridSize - 2);
+
+      // 머리 - 빨간 눈
+      if (i === 0) {
+        g.fillStyle(0xff0000, 0.9);
+        g.fillCircle(x + 6, y + this.gridSize / 2, 3);
+        g.fillCircle(x + 14, y + this.gridSize / 2, 3);
+        g.fillStyle(0x000000, 1);
+        g.fillCircle(x + 6, y + this.gridSize / 2, 1.5);
+        g.fillCircle(x + 14, y + this.gridSize / 2, 1.5);
+      }
+    });
+  }
+
+  // ================================================================================
+  // ===== PHASE 2: THE FOURTH WALL (제4의 벽 파괴) ================================
+  // ================================================================================
+
+  /**
+   * Phase 2 시작 - 제4의 벽 파괴
+   * 게임 UI가 보스가 됨!
+   */
+  startPhase2FourthWall() {
+    console.log('🎮 Phase 2: The Fourth Wall');
+
+    this.multiverseCollapsePhase = 'fourthwall';
+    this.fourthWallPhase = 'intro';
+    this.moveTimer.paused = true;
+
+    // 배열 초기화
+    this.fourthWallTimers = [];
+    this.fourthWallUIElements = [];
+    this.fourthWallProjectiles = [];
+    this.gameOverLetters = [];
+    this.gameOverLettersEaten = 0;
+
+    // 원래 경계 저장
+    this.fourthWallOriginalBounds = {
+      left: 0,
+      right: this.cols - 1,
+      top: 0,
+      bottom: this.rows - 1
+    };
+    this.fourthWallBoundaries = { ...this.fourthWallOriginalBounds };
+
+    // 그래픽 초기화
+    this.fourthWallGraphics = this.add.graphics().setDepth(500);
+
+    // 인트로 시퀀스
+    this.showFourthWallIntro();
+  }
+
+  /**
+   * Fourth Wall 인트로 시퀀스 (강화됨)
+   */
+  showFourthWallIntro() {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 화면 깨짐 시작
+    this.cameras.main.shake(500, 0.03);
+
+    // 초기 글리치 폭발
+    this.createGlitchEffect(10);
+
+    // 뱀 대사
+    this.showMultiverseDialogue("Wait... what's happening to the—", 1500);
+
+    // 화면 찢어지는 효과
+    this.time.delayedCall(800, () => {
+      this.createScreenTearEffect();
+    });
+
+    this.time.delayedCall(2000, () => {
+      // 두 번째 글리치 웨이브
+      this.createGlitchEffect(15);
+      this.cameras.main.flash(200, 255, 0, 255);
+
+      // 에러 메시지들 표시
+      this.showErrorMessages();
+
+      this.time.delayedCall(1500, () => {
+        // 화면 완전 정지 효과
+        this.createScreenFreezeEffect(() => {
+          // 페이즈 타이틀
+          this.showPhaseTitle('PHASE 2', 'THE FOURTH WALL', () => {
+            // 경고 메시지 (글리치 스타일)
+            const warningBg = this.add.rectangle(centerX, centerY, width, 80, 0x000000, 0.8)
+              .setDepth(999);
+
+            const warningText = this.add.text(centerX, centerY, '>> SYSTEM BREACH: GAME UI HOSTILE <<', {
+              fontSize: '28px',
+              fill: '#ff0000',
+              fontStyle: 'bold',
+              stroke: '#00ffff',
+              strokeThickness: 3
+            }).setOrigin(0.5).setDepth(1000);
+
+            if (this.fourthWallUIElements) this.fourthWallUIElements.push(warningBg, warningText);
+
+            // 글리치 떨림
+            this.tweens.add({
+              targets: warningText,
+              x: warningText.x + 3,
+              yoyo: true,
+              repeat: 10,
+              duration: 30
+            });
+
+            this.tweens.add({
+              targets: [warningBg, warningText],
+              alpha: 0,
+              duration: 500,
+              delay: 2000,
+              onComplete: () => {
+                warningBg.destroy();
+                warningText.destroy();
+                // Score Attack 시작
+                this.startScoreAttack();
+              }
+            });
+          });
+        });
+      });
+    });
+  }
+
+  /**
+   * 화면 찢어지는 효과
+   */
+  createScreenTearEffect() {
+    const { width, height } = this.cameras.main;
+
+    // 여러 개의 수평 찢어짐
+    for (let i = 0; i < 5; i++) {
+      const y = Math.random() * height;
+      const tearHeight = 10 + Math.random() * 30;
+
+      const tear = this.add.rectangle(
+        width / 2,
+        y,
+        width,
+        tearHeight,
+        0x000000,
+        1
+      ).setDepth(9999);
+
+      // 찢어진 부분에 글리치 컬러
+      const glitchLine = this.add.rectangle(
+        width / 2 + (Math.random() - 0.5) * 20,
+        y,
+        width,
+        2,
+        Math.random() > 0.5 ? 0xff00ff : 0x00ffff,
+        1
+      ).setDepth(10000);
+
+      this.tweens.add({
+        targets: [tear, glitchLine],
+        x: tear.x + (Math.random() - 0.5) * 100,
+        alpha: 0,
+        duration: 200 + Math.random() * 200,
+        delay: i * 50,
+        onComplete: () => {
+          tear.destroy();
+          glitchLine.destroy();
+        }
+      });
+    }
+  }
+
+  /**
+   * 에러 메시지 표시
+   */
+  showErrorMessages() {
+    const { width, height } = this.cameras.main;
+    const errors = [
+      'ERROR: UI_REVOLT_DETECTED',
+      'WARNING: SCORE_WEAPONIZED',
+      'CRITICAL: WALLS_UNSTABLE',
+      'FATAL: GAME_OVER_ESCAPED'
+    ];
+
+    errors.forEach((msg, i) => {
+      this.time.delayedCall(i * 200, () => {
+        const x = 50 + Math.random() * (width - 100);
+        const y = 100 + Math.random() * (height - 200);
+
+        const errorText = this.add.text(x, y, msg, {
+          fontSize: '14px',
+          fill: '#ff0000',
+          fontFamily: 'monospace',
+          backgroundColor: '#000000'
+        }).setDepth(9000).setAlpha(0);
+
+        this.tweens.add({
+          targets: errorText,
+          alpha: 1,
+          duration: 100,
+          yoyo: true,
+          hold: 500,
+          onComplete: () => errorText.destroy()
+        });
+      });
+    });
+  }
+
+  /**
+   * 화면 정지 효과
+   */
+  createScreenFreezeEffect(callback) {
+    const { width, height } = this.cameras.main;
+
+    // 정적 노이즈 오버레이
+    const noiseOverlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.5)
+      .setDepth(9500);
+
+    // 스캔라인 효과
+    for (let y = 0; y < height; y += 4) {
+      const scanline = this.add.rectangle(width / 2, y, width, 1, 0x000000, 0.3)
+        .setDepth(9501);
+      this.time.delayedCall(500, () => scanline.destroy());
+    }
+
+    // "SYSTEM REBOOTING..." 텍스트
+    const rebootText = this.add.text(width / 2, height / 2, 'SYSTEM REBOOTING...', {
+      fontSize: '24px',
+      fill: '#00ff00',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5).setDepth(9600);
+
+    this.tweens.add({
+      targets: rebootText,
+      alpha: { from: 1, to: 0.3 },
+      yoyo: true,
+      repeat: 2,
+      duration: 200
+    });
+
+    this.time.delayedCall(800, () => {
+      noiseOverlay.destroy();
+      rebootText.destroy();
+      this.cameras.main.flash(300, 255, 255, 255);
+      if (callback) callback();
+    });
+  }
+
+  /**
+   * 글리치 효과 생성 (강화됨)
+   */
+  createGlitchEffect(intensity) {
+    const { width, height } = this.cameras.main;
+
+    for (let i = 0; i < intensity; i++) {
+      this.time.delayedCall(i * 50, () => {
+        // 수평 글리치 바
+        const glitchBar = this.add.rectangle(
+          width / 2,
+          Math.random() * height,
+          width,
+          3 + Math.random() * 25,
+          Phaser.Math.Between(0, 1) ? 0xff00ff : 0x00ffff,
+          0.8
+        ).setDepth(9999);
+
+        this.tweens.add({
+          targets: glitchBar,
+          x: glitchBar.x + (Math.random() - 0.5) * 100,
+          scaleY: 0.1,
+          alpha: 0,
+          duration: 100 + Math.random() * 100,
+          onComplete: () => glitchBar.destroy()
+        });
+
+        // 수직 글리치 (화면 찢어지는 효과)
+        if (Math.random() > 0.5) {
+          const vertGlitch = this.add.rectangle(
+            Math.random() * width,
+            height / 2,
+            3 + Math.random() * 10,
+            height,
+            0xffffff,
+            0.6
+          ).setDepth(9999);
+
+          this.tweens.add({
+            targets: vertGlitch,
+            y: vertGlitch.y + (Math.random() - 0.5) * 50,
+            alpha: 0,
+            duration: 80,
+            onComplete: () => vertGlitch.destroy()
+          });
+        }
+
+        // 노이즈 사각형
+        if (Math.random() > 0.7) {
+          const noise = this.add.rectangle(
+            Math.random() * width,
+            Math.random() * height,
+            20 + Math.random() * 50,
+            20 + Math.random() * 50,
+            Math.random() > 0.5 ? 0x000000 : 0xffffff,
+            0.5
+          ).setDepth(9998);
+
+          this.tweens.add({
+            targets: noise,
+            alpha: 0,
+            duration: 60,
+            onComplete: () => noise.destroy()
+          });
+        }
+      });
+    }
+  }
+
+  /**
+   * UI 요소들 떨림 효과
+   */
+  shakeUIElements() {
+    // 점수 텍스트 떨림
+    if (this.scoreText) {
+      this.tweens.add({
+        targets: this.scoreText,
+        x: this.scoreText.x + 3,
+        yoyo: true,
+        repeat: 5,
+        duration: 50
+      });
+    }
+  }
+
+  /**
+   * Stage 1: Score Attack - 점수판이 숫자를 쏜다!
+   */
+  startScoreAttack() {
+    console.log('📊 Score Attack Phase');
+    this.fourthWallPhase = 'score_attack';
+    this.moveTimer.paused = false;
+
+    // 뱀 대사
+    this.showMultiverseDialogue("The score is... attacking me?!", 1500);
+
+    // 점수판 강조
+    if (this.scoreText) {
+      this.tweens.add({
+        targets: this.scoreText,
+        scale: 1.5,
+        duration: 300,
+        yoyo: true,
+        repeat: 2
+      });
+    }
+
+    // 숫자 탄막 발사 타이머
+    const projectileTimer = this.time.addEvent({
+      delay: 400,
+      callback: () => this.fireScoreProjectile(),
+      repeat: 24 // 10초 동안 25발
+    });
+    if (this.fourthWallTimers) this.fourthWallTimers.push(projectileTimer);
+
+    // 10초 후 다음 단계
+    this.time.delayedCall(10000, () => {
+      projectileTimer.destroy();
+      this.showMultiverseDialogue("I survived the numbers!", 1500);
+
+      this.time.delayedCall(2000, () => {
+        this.startWallsClosing();
+      });
+    });
+  }
+
+  /**
+   * 점수 숫자 탄막 발사
+   */
+  fireScoreProjectile() {
+    if (this.fourthWallPhase !== 'score_attack' && this.fourthWallPhase !== 'ui_chaos') return;
+
+    const { width } = this.cameras.main;
+
+    // 랜덤 숫자
+    const nums = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '-', '×'];
+    const numChar = nums[Math.floor(Math.random() * nums.length)];
+
+    // 발사 위치 (왼쪽 상단 점수판 근처)
+    const startX = 100 + Math.random() * 50;
+    const startY = 30;
+
+    // 뱀 머리 방향으로 발사
+    const head = this.snake[0];
+    const targetX = head.x * this.gridSize + this.gridSize / 2;
+    const targetY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const projectile = this.add.text(startX, startY, numChar, {
+      fontSize: '28px',
+      fill: '#ffff00',
+      fontStyle: 'bold',
+      stroke: '#ff0000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(600);
+
+    // 트레일 효과
+    const trail = this.add.graphics().setDepth(599);
+
+    this.fourthWallProjectiles.push({ text: projectile, trail, active: true });
+
+    // 발사 애니메이션
+    this.tweens.add({
+      targets: projectile,
+      x: targetX + (Math.random() - 0.5) * 100, // 약간의 오차
+      y: targetY + (Math.random() - 0.5) * 100,
+      scale: 1.5,
+      duration: 800,
+      ease: 'Quad.easeIn',
+      onUpdate: () => {
+        // 트레일 그리기
+        trail.clear();
+        trail.lineStyle(3, 0xffff00, 0.5);
+        trail.lineBetween(startX, startY, projectile.x, projectile.y);
+      },
+      onComplete: () => {
+        // 충돌 체크 (현재 뱀 위치와)
+        const hitHead = this.snake[0];
+        const hitX = hitHead.x * this.gridSize + this.gridSize / 2;
+        const hitY = hitHead.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+        const dist = Phaser.Math.Distance.Between(projectile.x, projectile.y, hitX, hitY);
+
+        if (dist < this.gridSize * 1.5) {
+          // 플레이어 피격!
+          this.cameras.main.shake(200, 0.02);
+          this.cameras.main.flash(100, 255, 255, 0);
+        }
+
+        // 폭발 효과
+        this.createExplosionEffect(projectile.x, projectile.y, 0xffff00, 8);
+        trail.destroy();
+        projectile.destroy();
+      }
+    });
+  }
+
+  /**
+   * Stage 2: Walls Closing - 벽이 좁혀온다!
+   */
+  startWallsClosing() {
+    console.log('🧱 Walls Closing Phase');
+    this.fourthWallPhase = 'walls_closing';
+
+    // 뱀 대사
+    this.showMultiverseDialogue("The walls... they're closing in!", 1500);
+
+    // 경고 사운드 효과 (시각적)
+    this.cameras.main.flash(200, 255, 0, 0);
+
+    // 벽 좁히기 타이머 (3초마다, 총 3번)
+    let shrinkCount = 0;
+    const maxShrinks = 3;
+
+    const shrinkTimer = this.time.addEvent({
+      delay: 3000,
+      callback: () => {
+        shrinkCount++;
+        this.shrinkWalls();
+
+        // 경고 텍스트
+        const warningText = this.add.text(
+          this.cameras.main.width / 2,
+          this.cameras.main.height / 2,
+          `WALLS SHRINKING! (${shrinkCount}/${maxShrinks})`,
+          {
+            fontSize: '32px',
+            fill: '#ff0000',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 4
+          }
+        ).setOrigin(0.5).setDepth(1000);
+
+        this.tweens.add({
+          targets: warningText,
+          scale: { from: 0.5, to: 1.2 },
+          alpha: { from: 1, to: 0 },
+          duration: 1000,
+          onComplete: () => warningText.destroy()
+        });
+
+        if (shrinkCount >= maxShrinks) {
+          shrinkTimer.destroy();
+
+          this.time.delayedCall(2000, () => {
+            // 벽 산산조각
+            this.shatterWalls();
+          });
+        }
+      },
+      repeat: maxShrinks - 1
+    });
+    if (this.fourthWallTimers) this.fourthWallTimers.push(shrinkTimer);
+  }
+
+  /**
+   * 벽 좁히기
+   */
+  shrinkWalls() {
+    // 경계 좁히기
+    this.fourthWallBoundaries.left += 2;
+    this.fourthWallBoundaries.right -= 2;
+    this.fourthWallBoundaries.top += 1;
+    this.fourthWallBoundaries.bottom -= 1;
+
+    // 화면 효과
+    this.cameras.main.shake(300, 0.02);
+
+    // 벽 경계 체크 - 뱀이 좁혀진 벽 안에 있는지
+    const head = this.snake[0];
+    if (head.x <= this.fourthWallBoundaries.left ||
+        head.x >= this.fourthWallBoundaries.right ||
+        head.y <= this.fourthWallBoundaries.top ||
+        head.y >= this.fourthWallBoundaries.bottom) {
+      // 뱀을 안전한 위치로 텔레포트
+      const safeX = Math.floor((this.fourthWallBoundaries.left + this.fourthWallBoundaries.right) / 2);
+      const safeY = Math.floor((this.fourthWallBoundaries.top + this.fourthWallBoundaries.bottom) / 2);
+      this.snake[0] = { x: safeX, y: safeY };
+      this.cameras.main.flash(200, 0, 255, 255);
+    }
+  }
+
+  /**
+   * 벽 산산조각 효과
+   */
+  shatterWalls() {
+    const { width, height } = this.cameras.main;
+
+    // 대형 플래시
+    this.cameras.main.flash(500, 255, 255, 255);
+    this.cameras.main.shake(500, 0.04);
+
+    // 벽 파편 효과
+    for (let i = 0; i < 30; i++) {
+      const edge = Math.floor(Math.random() * 4); // 0=top, 1=right, 2=bottom, 3=left
+      let x, y;
+
+      switch (edge) {
+        case 0: x = Math.random() * width; y = this.gameAreaY; break;
+        case 1: x = width; y = this.gameAreaY + Math.random() * (height - this.gameAreaY); break;
+        case 2: x = Math.random() * width; y = height; break;
+        case 3: x = 0; y = this.gameAreaY + Math.random() * (height - this.gameAreaY); break;
+      }
+
+      const shard = this.add.rectangle(x, y, 20, 20, 0xffffff, 1).setDepth(800);
+      shard.setAngle(Math.random() * 360);
+
+      this.tweens.add({
+        targets: shard,
+        x: width / 2 + (Math.random() - 0.5) * 400,
+        y: height / 2 + (Math.random() - 0.5) * 400,
+        angle: shard.angle + 360,
+        alpha: 0,
+        duration: 1000,
+        ease: 'Quad.easeOut',
+        onComplete: () => shard.destroy()
+      });
+    }
+
+    // 벽 원상복구
+    this.fourthWallBoundaries = { ...this.fourthWallOriginalBounds };
+
+    // 뱀 대사
+    this.showMultiverseDialogue("The walls... shattered?!", 1500);
+
+    this.time.delayedCall(2000, () => {
+      this.startUIChaos();
+    });
+  }
+
+  /**
+   * Stage 3: UI Chaos - 모든 UI가 공격!
+   */
+  startUIChaos() {
+    console.log('💥 UI Chaos Phase');
+    this.fourthWallPhase = 'ui_chaos';
+
+    // 뱀 대사
+    this.showMultiverseDialogue("Everything is attacking at once!", 1500);
+
+    // 카오스 효과들
+    let chaosCount = 0;
+    const maxChaos = 10;
+
+    const chaosTimer = this.time.addEvent({
+      delay: 1000,
+      callback: () => {
+        chaosCount++;
+        const effect = Math.floor(Math.random() * 4);
+
+        switch (effect) {
+          case 0: this.fireScoreProjectile(); break;
+          case 1: this.spawnFakeGameOver(); break;
+          case 2: this.createGlitchEffect(3); break;
+          case 3: this.spawnUIAttack(); break;
+        }
+
+        if (chaosCount >= maxChaos) {
+          chaosTimer.destroy();
+          this.showMultiverseDialogue("There's only one way to end this...", 2000);
+
+          this.time.delayedCall(2500, () => {
+            this.startGameOverHunt();
+          });
+        }
+      },
+      repeat: maxChaos - 1
+    });
+    if (this.fourthWallTimers) this.fourthWallTimers.push(chaosTimer);
+  }
+
+  /**
+   * 가짜 게임오버 화면
+   */
+  spawnFakeGameOver() {
+    const { width, height } = this.cameras.main;
+
+    // 어두운 배경
+    const fakeBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.9)
+      .setDepth(9000);
+
+    // 가짜 GAME OVER 텍스트
+    const fakeText = this.add.text(width / 2, height / 2, 'GAME OVER', {
+      fontSize: '64px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(9001);
+
+    this.fakeGameOverCount++;
+
+    // 1초 후 "FAKE!" 표시하고 사라짐
+    this.time.delayedCall(800, () => {
+      const fakeLabel = this.add.text(width / 2, height / 2 + 80, '...FAKE!', {
+        fontSize: '32px',
+        fill: '#00ff00',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(9002);
+
+      this.tweens.add({
+        targets: [fakeBg, fakeText, fakeLabel],
+        alpha: 0,
+        duration: 300,
+        onComplete: () => {
+          fakeBg.destroy();
+          fakeText.destroy();
+          fakeLabel.destroy();
+        }
+      });
+    });
+  }
+
+  /**
+   * UI 공격 (랜덤 UI 요소가 탄막)
+   */
+  spawnUIAttack() {
+    const { width, height } = this.cameras.main;
+
+    // 랜덤 UI 텍스트
+    const uiTexts = ['STAGE', 'FOOD:', 'SCORE:', 'COMBO', '$', '♥'];
+    const text = uiTexts[Math.floor(Math.random() * uiTexts.length)];
+
+    // 랜덤 위치에서 발사
+    const startX = Math.random() * width;
+    const startY = Math.random() < 0.5 ? 30 : 30;
+
+    const uiProjectile = this.add.text(startX, startY, text, {
+      fontSize: '20px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      stroke: '#ff00ff',
+      strokeThickness: 2
+    }).setOrigin(0.5).setDepth(600);
+
+    // 뱀 방향으로
+    const head = this.snake[0];
+    const targetX = head.x * this.gridSize + this.gridSize / 2;
+    const targetY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    this.tweens.add({
+      targets: uiProjectile,
+      x: targetX,
+      y: targetY,
+      rotation: Math.PI * 2,
+      duration: 600,
+      onComplete: () => {
+        this.createExplosionEffect(uiProjectile.x, uiProjectile.y, 0xff00ff, 5);
+        uiProjectile.destroy();
+      }
+    });
+  }
+
+  /**
+   * Stage 4: Game Over Hunt - GAME OVER 글자를 먹어라!
+   */
+  startGameOverHunt() {
+    console.log('🎯 Game Over Hunt Phase');
+    this.fourthWallPhase = 'game_over_hunt';
+    this.gameOverLettersEaten = 0;
+
+    // 뱀 대사
+    this.showMultiverseDialogue("I have to... EAT the Game Over?!", 2000);
+
+    this.time.delayedCall(2500, () => {
+      // 타이틀
+      const huntTitle = this.add.text(
+        this.cameras.main.width / 2,
+        this.cameras.main.height / 2 - 50,
+        'DEVOUR THE GAME OVER!',
+        {
+          fontSize: '36px',
+          fill: '#ff0000',
+          fontStyle: 'bold',
+          stroke: '#000000',
+          strokeThickness: 4
+        }
+      ).setOrigin(0.5).setDepth(1000);
+
+      this.tweens.add({
+        targets: huntTitle,
+        scale: { from: 0.5, to: 1.2 },
+        alpha: { from: 0, to: 1 },
+        duration: 500,
+        yoyo: true,
+        hold: 1000,
+        onComplete: () => huntTitle.destroy()
+      });
+
+      this.time.delayedCall(2000, () => {
+        this.spawnGameOverLetters();
+      });
+    });
+  }
+
+  /**
+   * GAME OVER 글자들 배치
+   */
+  spawnGameOverLetters() {
+    const letters = 'GAMEOVER'.split('');
+    const { width, height } = this.cameras.main;
+    this.gameOverLetters = [];
+
+    console.log('📝 Spawning GAMEOVER letters, cols:', this.cols, 'rows:', this.rows);
+
+    // 글자들을 그리드 상에 랜덤 배치
+    letters.forEach((char, i) => {
+      // 랜덤 그리드 위치 (벽에서 떨어진 곳)
+      let gx, gy;
+      let attempts = 0;
+      do {
+        gx = Phaser.Math.Between(5, this.cols - 6);
+        gy = Phaser.Math.Between(3, this.rows - 4);
+        attempts++;
+      } while (this.isPositionOccupiedForLetter(gx, gy) && attempts < 50);
+
+      const x = gx * this.gridSize + this.gridSize / 2;
+      const y = gy * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      console.log(`Letter ${char} at grid (${gx}, ${gy}) -> pixel (${x}, ${y})`);
+
+      // 글자 생성 (글리치 스타일)
+      const letterText = this.add.text(x, y, char, {
+        fontSize: '40px',
+        fill: '#ff0000',
+        fontStyle: 'bold',
+        stroke: '#00ffff',
+        strokeThickness: 4
+      }).setOrigin(0.5).setDepth(500).setScale(0);
+
+      // 글리치 그림자 효과
+      const shadowText = this.add.text(x + 3, y + 3, char, {
+        fontSize: '40px',
+        fill: '#00ffff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(499).setScale(0).setAlpha(0.5);
+
+      // 등장 애니메이션
+      this.tweens.add({
+        targets: [letterText, shadowText],
+        scale: 1,
+        duration: 300,
+        delay: i * 100,
+        ease: 'Back.easeOut'
+      });
+
+      // 펄스 + 글리치 효과
+      this.tweens.add({
+        targets: letterText,
+        scale: { from: 1, to: 1.3 },
+        yoyo: true,
+        repeat: -1,
+        duration: 400,
+        delay: i * 100 + 300
+      });
+
+      // 그림자 글리치 떨림
+      this.tweens.add({
+        targets: shadowText,
+        x: { from: x + 3, to: x + 6 },
+        alpha: { from: 0.3, to: 0.7 },
+        yoyo: true,
+        repeat: -1,
+        duration: 150,
+        delay: i * 50
+      });
+
+      this.gameOverLetters.push({
+        char,
+        gridX: gx,
+        gridY: gy,
+        eaten: false,
+        graphics: letterText,
+        shadow: shadowText
+      });
+    });
+
+    // 안내 텍스트 (글리치 스타일)
+    const hintText = this.add.text(
+      width / 2,
+      height - 30,
+      '>> DEVOUR ALL 8 LETTERS TO ESCAPE <<',
+      {
+        fontSize: '20px',
+        fill: '#00ff00',
+        stroke: '#000000',
+        strokeThickness: 2
+      }
+    ).setOrigin(0.5).setDepth(1000);
+
+    if (this.fourthWallUIElements) this.fourthWallUIElements.push(hintText);
+
+    // 주기적으로 글자 위치 변경 (3초마다)
+    const shuffleTimer = this.time.addEvent({
+      delay: 3000,
+      callback: () => this.shuffleRemainingLetters(),
+      loop: true
+    });
+    if (this.fourthWallTimers) {
+      this.fourthWallTimers.push(shuffleTimer);
+    }
+  }
+
+  /**
+   * 위치 점유 체크 (글자용)
+   */
+  isPositionOccupiedForLetter(gx, gy) {
+    // 뱀 몸통
+    for (const seg of this.snake) {
+      if (seg.x === gx && seg.y === gy) return true;
+    }
+    // 다른 글자
+    for (const letter of this.gameOverLetters) {
+      if (!letter.eaten && letter.gridX === gx && letter.gridY === gy) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 남은 글자들 위치 섞기
+   */
+  shuffleRemainingLetters() {
+    if (this.fourthWallPhase !== 'game_over_hunt') return;
+    if (!this.gameOverLetters || this.gameOverLetters.length === 0) return;
+
+    // 글리치 효과와 함께 이동
+    this.createGlitchEffect(3);
+    this.cameras.main.shake(150, 0.01);
+
+    this.gameOverLetters.forEach(letter => {
+      if (letter.eaten) return;
+
+      // 새 위치
+      let gx, gy, attempts = 0;
+      do {
+        gx = Phaser.Math.Between(5, this.cols - 6);
+        gy = Phaser.Math.Between(3, this.rows - 4);
+        attempts++;
+      } while (this.isPositionOccupiedForLetter(gx, gy) && attempts < 50);
+
+      letter.gridX = gx;
+      letter.gridY = gy;
+
+      const newX = gx * this.gridSize + this.gridSize / 2;
+      const newY = gy * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      // 글리치 텔레포트 효과
+      this.tweens.add({
+        targets: letter.graphics,
+        alpha: 0,
+        duration: 100,
+        onComplete: () => {
+          letter.graphics.setPosition(newX, newY);
+          this.tweens.add({
+            targets: letter.graphics,
+            alpha: 1,
+            duration: 100
+          });
+        }
+      });
+
+      // 그림자도 이동
+      if (letter.shadow) {
+        this.tweens.add({
+          targets: letter.shadow,
+          alpha: 0,
+          duration: 100,
+          onComplete: () => {
+            letter.shadow.setPosition(newX + 3, newY + 3);
+            this.tweens.add({
+              targets: letter.shadow,
+              alpha: 0.5,
+              duration: 100
+            });
+          }
+        });
+      }
+    });
+  }
+
+  /**
+   * 위치 점유 체크 (레거시)
+   */
+  isPositionOccupied(gx, gy) {
+    return this.isPositionOccupiedForLetter(gx, gy);
+  }
+
+  /**
+   * GAME OVER 글자 충돌 체크 (moveSnake에서 호출)
+   */
+  checkGameOverLetterCollision() {
+    if (this.fourthWallPhase !== 'game_over_hunt') return;
+
+    const head = this.snake[0];
+
+    this.gameOverLetters.forEach(letter => {
+      if (letter.eaten) return;
+
+      if (head.x === letter.gridX && head.y === letter.gridY) {
+        // 글자 먹음!
+        letter.eaten = true;
+        this.gameOverLettersEaten++;
+
+        // 강렬한 글리치 효과
+        this.cameras.main.flash(150, 255, 0, 255); // 마젠타 플래시
+        this.cameras.main.shake(200, 0.03);
+        this.createGlitchEffect(5);
+        this.createExplosionEffect(
+          letter.graphics.x,
+          letter.graphics.y,
+          0x00ffff, // 시안 폭발
+          20
+        );
+
+        // 글자 + 그림자 사라짐 (글리치 효과)
+        const targets = [letter.graphics];
+        if (letter.shadow) targets.push(letter.shadow);
+
+        this.tweens.add({
+          targets: targets,
+          scale: 3,
+          alpha: 0,
+          rotation: Math.PI,
+          duration: 300,
+          ease: 'Back.easeIn',
+          onComplete: () => {
+            letter.graphics.destroy();
+            if (letter.shadow) letter.shadow.destroy();
+          }
+        });
+
+        // 진행 표시 (글리치 스타일)
+        const progressText = this.add.text(
+          this.cameras.main.width / 2,
+          this.cameras.main.height / 2,
+          `>> ${this.gameOverLettersEaten}/8 CONSUMED <<`,
+          {
+            fontSize: '32px',
+            fill: '#00ff00',
+            fontStyle: 'bold',
+            stroke: '#ff00ff',
+            strokeThickness: 4
+          }
+        ).setOrigin(0.5).setDepth(1000);
+
+        // 글리치 떨림
+        this.tweens.add({
+          targets: progressText,
+          x: progressText.x + 5,
+          yoyo: true,
+          repeat: 3,
+          duration: 50
+        });
+
+        this.tweens.add({
+          targets: progressText,
+          y: progressText.y - 80,
+          alpha: 0,
+          duration: 1200,
+          delay: 200,
+          onComplete: () => progressText.destroy()
+        });
+
+        // 대사
+        if (this.gameOverLettersEaten === 4) {
+          this.showMultiverseDialogue("SYSTEM CORRUPTION: 50%", 1500);
+        } else if (this.gameOverLettersEaten === 7) {
+          this.showMultiverseDialogue("FINAL BYTE REMAINING...", 1000);
+        }
+
+        // 모두 먹었으면 승리!
+        if (this.gameOverLettersEaten >= 8) {
+          this.showFourthWallVictory();
+        }
+      }
+    });
+  }
+
+  /**
+   * Fourth Wall 승리 시퀀스
+   */
+  showFourthWallVictory() {
+    console.log('🏆 Fourth Wall Victory!');
+    this.fourthWallPhase = 'victory';
+    this.multiverseCollapsePhase = 'victory';
+    this.moveTimer.paused = true;
+
+    const { width, height } = this.cameras.main;
+
+    // 슬로우모션
+    this.time.timeScale = 0.3;
+
+    // 대형 플래시
+    this.cameras.main.flash(1000, 255, 255, 255);
+    this.cameras.main.shake(500, 0.05);
+
+    // 타이머들 정리
+    this.fourthWallTimers.forEach(t => { if (t && t.destroy) t.destroy(); });
+
+    // 승리 텍스트
+    this.time.delayedCall(500, () => {
+      const victoryText = this.add.text(width / 2, height / 2 - 50, 'YOU BROKE THE FOURTH WALL', {
+        fontSize: '36px',
+        fill: '#00ff00',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 6
+      }).setOrigin(0.5).setDepth(10000).setScale(0);
+
+      this.tweens.add({
+        targets: victoryText,
+        scale: 1.2,
+        duration: 500,
+        ease: 'Back.easeOut'
+      });
+
+      // 서브 텍스트
+      this.time.delayedCall(800, () => {
+        const subText = this.add.text(width / 2, height / 2 + 20, 'The game is no longer your enemy.', {
+          fontSize: '20px',
+          fill: '#ffffff',
+          stroke: '#000000',
+          strokeThickness: 3
+        }).setOrigin(0.5).setDepth(10000).setAlpha(0);
+
+        this.tweens.add({
+          targets: subText,
+          alpha: 1,
+          duration: 500
+        });
+
+        // 뱀 최종 대사
+        this.time.delayedCall(1500, () => {
+          this.time.timeScale = 1;
+
+          this.showMultiverseDialogue("I am the master of my own game now.", 2500);
+
+          // 불꽃놀이 (글리치 버전)
+          this.time.delayedCall(1000, () => {
+            this.startFourthWallFireworks();
+          });
+
+          // 최종 승리 처리
+          this.time.delayedCall(5000, () => {
+            victoryText.destroy();
+            subText.destroy();
+            this.cleanupFourthWall();
+            this.showMultiverseCollapseVictory();
+          });
+        });
+      });
+    });
+  }
+
+  /**
+   * Fourth Wall 전용 승리 불꽃놀이
+   */
+  startFourthWallFireworks() {
+    const { width, height } = this.cameras.main;
+    const colors = [0xff0000, 0xffa500, 0xffff00, 0x00ff00, 0x00ffff, 0xff00ff];
+
+    for (let i = 0; i < 15; i++) {
+      this.time.delayedCall(i * 300, () => {
+        const x = 100 + Math.random() * (width - 200);
+        const y = 100 + Math.random() * (height - 200);
+        const color = colors[Math.floor(Math.random() * colors.length)];
+
+        this.createExplosionEffect(x, y, color, 30);
+        this.cameras.main.flash(50, ...this.hexToRgbArray(color));
+        this.createGlitchEffect(2); // 글리치 효과 추가
+      });
+    }
+  }
+
+  /**
+   * Fourth Wall 렌더링 (draw에서 호출)
+   */
+  drawFourthWall() {
+    if (!this.fourthWallGraphics) return;
+
+    this.fourthWallGraphics.clear();
+
+    const { width, height } = this.cameras.main;
+    const time = Date.now();
+
+    // 지속적인 스캔라인 효과 (화면 전체)
+    this.fourthWallGraphics.fillStyle(0x000000, 0.03);
+    for (let y = 0; y < height; y += 3) {
+      if ((y + Math.floor(time * 0.1)) % 6 < 3) {
+        this.fourthWallGraphics.fillRect(0, y, width, 1);
+      }
+    }
+
+    // 랜덤 글리치 라인 (확률적)
+    if (Math.random() > 0.95) {
+      const glitchY = Math.random() * height;
+      this.fourthWallGraphics.fillStyle(Math.random() > 0.5 ? 0xff00ff : 0x00ffff, 0.3);
+      this.fourthWallGraphics.fillRect(0, glitchY, width, 2 + Math.random() * 5);
+    }
+
+    // 화면 가장자리 디지털 노이즈
+    this.fourthWallGraphics.fillStyle(0xff00ff, 0.1 + Math.sin(time * 0.005) * 0.05);
+    this.fourthWallGraphics.fillRect(0, this.gameAreaY, 3, height - this.gameAreaY);
+    this.fourthWallGraphics.fillRect(width - 3, this.gameAreaY, 3, height - this.gameAreaY);
+
+    // 좁혀진 벽 표시
+    if (this.fourthWallPhase === 'walls_closing' && this.fourthWallBoundaries) {
+      const bounds = this.fourthWallBoundaries;
+      const orig = this.fourthWallOriginalBounds;
+
+      // 위험 영역 (빨간색 + 글리치 패턴)
+      const dangerAlpha = 0.3 + Math.sin(time * 0.01) * 0.1;
+      this.fourthWallGraphics.fillStyle(0xff0000, dangerAlpha);
+
+      // 상단
+      if (bounds.top > orig.top) {
+        this.fourthWallGraphics.fillRect(
+          0, this.gameAreaY,
+          width,
+          bounds.top * this.gridSize
+        );
+        // 글리치 라인
+        this.fourthWallGraphics.fillStyle(0xff00ff, 0.5);
+        this.fourthWallGraphics.fillRect(0, bounds.top * this.gridSize + this.gameAreaY - 2, width, 2);
+      }
+
+      // 하단
+      if (bounds.bottom < orig.bottom) {
+        this.fourthWallGraphics.fillStyle(0xff0000, dangerAlpha);
+        this.fourthWallGraphics.fillRect(
+          0, (bounds.bottom + 1) * this.gridSize + this.gameAreaY,
+          width,
+          (orig.bottom - bounds.bottom) * this.gridSize
+        );
+        this.fourthWallGraphics.fillStyle(0x00ffff, 0.5);
+        this.fourthWallGraphics.fillRect(0, (bounds.bottom + 1) * this.gridSize + this.gameAreaY, width, 2);
+      }
+
+      // 좌측
+      if (bounds.left > orig.left) {
+        this.fourthWallGraphics.fillStyle(0xff0000, dangerAlpha);
+        this.fourthWallGraphics.fillRect(
+          0, this.gameAreaY,
+          bounds.left * this.gridSize,
+          height - this.gameAreaY
+        );
+        this.fourthWallGraphics.fillStyle(0xff00ff, 0.5);
+        this.fourthWallGraphics.fillRect(bounds.left * this.gridSize - 2, this.gameAreaY, 2, height - this.gameAreaY);
+      }
+
+      // 우측
+      if (bounds.right < orig.right) {
+        this.fourthWallGraphics.fillStyle(0xff0000, dangerAlpha);
+        this.fourthWallGraphics.fillRect(
+          (bounds.right + 1) * this.gridSize, this.gameAreaY,
+          (orig.right - bounds.right) * this.gridSize,
+          height - this.gameAreaY
+        );
+        this.fourthWallGraphics.fillStyle(0x00ffff, 0.5);
+        this.fourthWallGraphics.fillRect((bounds.right + 1) * this.gridSize, this.gameAreaY, 2, height - this.gameAreaY);
+      }
+
+      // 경계선 (강렬한 깜빡임 + 이중 라인)
+      const flash = Math.sin(time * 0.02) * 0.5 + 0.5;
+      this.fourthWallGraphics.lineStyle(6, 0xff0000, flash);
+      this.fourthWallGraphics.strokeRect(
+        bounds.left * this.gridSize,
+        bounds.top * this.gridSize + this.gameAreaY,
+        (bounds.right - bounds.left + 1) * this.gridSize,
+        (bounds.bottom - bounds.top + 1) * this.gridSize
+      );
+      this.fourthWallGraphics.lineStyle(2, 0xffffff, flash * 0.5);
+      this.fourthWallGraphics.strokeRect(
+        bounds.left * this.gridSize + 3,
+        bounds.top * this.gridSize + this.gameAreaY + 3,
+        (bounds.right - bounds.left + 1) * this.gridSize - 6,
+        (bounds.bottom - bounds.top + 1) * this.gridSize - 6
+      );
+    }
+  }
+
+  /**
+   * Fourth Wall 정리
+   */
+  cleanupFourthWall() {
+    this.fourthWallPhase = 'none';
+
+    // 타이머 정리
+    this.fourthWallTimers.forEach(t => { if (t && t.destroy) t.destroy(); });
+    this.fourthWallTimers = [];
+
+    // 그래픽 정리
+    if (this.fourthWallGraphics) {
+      this.fourthWallGraphics.destroy();
+      this.fourthWallGraphics = null;
+    }
+
+    // UI 요소 정리
+    this.fourthWallUIElements.forEach(el => { if (el && el.destroy) el.destroy(); });
+    this.fourthWallUIElements = [];
+
+    // 탄막 정리
+    this.fourthWallProjectiles.forEach(p => {
+      if (p.text && p.text.destroy) p.text.destroy();
+      if (p.trail && p.trail.destroy) p.trail.destroy();
+    });
+    this.fourthWallProjectiles = [];
+
+    // 글자 정리 (그림자 포함)
+    this.gameOverLetters.forEach(l => {
+      if (l.graphics && l.graphics.destroy) l.graphics.destroy();
+      if (l.shadow && l.shadow.destroy) l.shadow.destroy();
+    });
+    this.gameOverLetters = [];
+    this.gameOverLettersEaten = 0;
+
+    // 경계 복구
+    this.fourthWallBoundaries = null;
+  }
+
+  // ================================================================================
+  // ===== PHASE 3: BECOME ONE (레거시 - 비활성화) ==================================
+  // ================================================================================
+
+  /**
+   * Phase 2 시작 - 융합 (도플갱어 제거됨) - 레거시
+   * @deprecated Fourth Wall로 대체됨
+   */
+  startPhase2BecomeOne() {
+    console.log('🔗 Phase 2: Become One');
+
+    this.multiverseCollapsePhase = 'becomeone';
+    this.moveTimer.paused = true;
+
+    // 페이즈 전환 타이틀
+    this.showPhaseTitle('FINAL PHASE', 'BECOME ONE', () => {
+      // 융합 대사
+      this.showMultiverseDialogue("We cannot exist apart... We must BECOME ONE!", 2500);
+
+      this.time.delayedCall(3000, () => {
+        // 융합 시퀀스
+        this.showFusionSequence(() => {
+          // 튜토리얼
+          this.showFusionTutorial();
+
+          // 융합 먹이 생성
+          this.generateFusionFood();
+
+          // 입력 설정
+          this.setupFusionControls();
+
+          // 게임 재개
+          this.moveTimer.paused = false;
+        });
+      });
+    });
+  }
+
+  /**
+   * 융합 시퀀스
+   */
+  showFusionSequence(callback) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 배경 암전
+    const fusionBg = this.add.rectangle(centerX, centerY, width, height, 0x000000, 0);
+    fusionBg.setDepth(9000);
+
+    this.tweens.add({
+      targets: fusionBg,
+      alpha: 0.8,
+      duration: 500
+    });
+
+    // 플레이어와 도플갱어 위치
+    const playerHead = this.snake[0];
+    const doppelHead = this.doppelganger ? this.doppelganger.snake[0] : { x: 30, y: 13 };
+
+    const px = playerHead.x * this.gridSize + this.gridSize / 2;
+    const py = playerHead.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const dx = doppelHead.x * this.gridSize + this.gridSize / 2;
+    const dy = doppelHead.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 에너지 연결선
+    this.time.delayedCall(500, () => {
+      const energyLine = this.add.graphics().setDepth(9001);
+      let progress = 0;
+
+      const lineTimer = this.time.addEvent({
+        delay: 16,
+        callback: () => {
+          progress += 0.03;
+          energyLine.clear();
+
+          if (progress >= 1) {
+            lineTimer.destroy();
+
+            // 폭발!
+            this.cameras.main.flash(400, 255, 255, 255);
+            this.cameras.main.shake(500, 0.03);
+
+            // 중앙에 폭발
+            this.createExplosionEffect(centerX, centerY, 0xffffff, 40);
+
+            // "BECOME ONE" 텍스트
+            const fusionText = this.add.text(centerX, centerY, 'BECOME ONE', {
+              fontSize: '48px',
+              fill: '#ffffff',
+              fontStyle: 'bold',
+              stroke: '#9932cc',
+              strokeThickness: 8
+            }).setOrigin(0.5).setDepth(9100).setScale(0.5).setAlpha(0);
+
+            this.tweens.add({
+              targets: fusionText,
+              scale: 1.2,
+              alpha: 1,
+              duration: 500,
+              ease: 'Back.easeOut'
+            });
+
+            this.time.delayedCall(1500, () => {
+              this.tweens.add({
+                targets: [fusionBg, fusionText, energyLine],
+                alpha: 0,
+                duration: 500,
+                onComplete: () => {
+                  fusionBg.destroy();
+                  fusionText.destroy();
+                  energyLine.destroy();
+
+                  // 융합 뱀 생성
+                  this.createFusionSnake();
+
+                  // 도플갱어 정리
+                  this.cleanupDoppelganger();
+
+                  if (callback) callback();
+                }
+              });
+            });
+          } else {
+            // 에너지 라인 그리기
+            const midX = px + (dx - px) * progress;
+            const midY = py + (dy - py) * progress;
+
+            for (let i = 0; i < 5; i++) {
+              const wave = Math.sin(Date.now() * 0.01 + i * 0.5) * 8;
+              const lineColor = i % 2 === 0 ? 0x00ff00 : this.doppelColor;
+              energyLine.lineStyle(6 - i, lineColor, 0.3 + i * 0.15);
+              energyLine.lineBetween(px, py + wave, midX, midY + wave);
+              energyLine.lineBetween(dx, dy - wave, midX, midY - wave);
+            }
+          }
+        },
+        loop: true
+      });
+    });
+  }
+
+  /**
+   * 융합 뱀 생성
+   */
+  createFusionSnake() {
+    this.twoHeadedMode = true;
+    this.fusionSnake = [];
+    this.fusionFoodCount = 0;
+
+    // 플레이어 뱀 (머리가 headIndex: 0)
+    this.snake.forEach((seg, i) => {
+      this.fusionSnake.push({
+        x: seg.x,
+        y: seg.y,
+        headIndex: i === 0 ? 0 : -1
+      });
+    });
+
+    // 도플갱어 뱀 역순 연결 (머리가 headIndex: 1)
+    if (this.doppelganger) {
+      const reversedDoppel = [...this.doppelganger.snake].reverse();
+      reversedDoppel.forEach((seg, i) => {
+        this.fusionSnake.push({
+          x: seg.x,
+          y: seg.y,
+          headIndex: i === reversedDoppel.length - 1 ? 1 : -1
+        });
+      });
+    } else {
+      // 도플갱어 없으면 기본 추가
+      const lastSeg = this.fusionSnake[this.fusionSnake.length - 1];
+      this.fusionSnake.push({ x: lastSeg.x - 1, y: lastSeg.y, headIndex: -1 });
+      this.fusionSnake.push({ x: lastSeg.x - 2, y: lastSeg.y, headIndex: -1 });
+      this.fusionSnake.push({ x: lastSeg.x - 3, y: lastSeg.y, headIndex: 1 });
+    }
+
+    // 방향 초기화
+    this.fusionDirection1 = 'RIGHT';
+    this.fusionDirection2 = 'LEFT';
+    this.fusionInputQueue1 = [];
+    this.fusionInputQueue2 = [];
+
+    // 융합 그래픽
+    this.fusionGraphics = this.add.graphics().setDepth(100);
+    this.fusionGlowGraphics = this.add.graphics().setDepth(99);
+  }
+
+  /**
+   * 도플갱어 정리
+   */
+  cleanupDoppelganger() {
+    if (this.doppelRecordTimer) {
+      this.doppelRecordTimer.destroy();
+      this.doppelRecordTimer = null;
+    }
+
+    if (this.doppelganger) {
+      if (this.doppelganger.graphics) this.doppelganger.graphics.destroy();
+      if (this.doppelganger.glowGraphics) this.doppelganger.glowGraphics.destroy();
+      this.doppelganger.trailElements.forEach(t => { if (t && t.destroy) t.destroy(); });
+      this.doppelganger = null;
+    }
+
+    this.doppelHPBarElements.forEach(el => { if (el && el.destroy) el.destroy(); });
+    this.doppelHPBarElements = [];
+  }
+
+  /**
+   * 융합 튜토리얼
+   */
+  showFusionTutorial() {
+    const { width } = this.cameras.main;
+    const centerX = width / 2;
+
+    const tutorial = this.add.text(centerX, 90, 'WASD: Green Head  |  Arrows: Purple Head', {
+      fontSize: '16px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      backgroundColor: '#000000',
+      padding: { x: 15, y: 8 }
+    }).setOrigin(0.5).setDepth(2000);
+
+    // 색상 강조
+    const greenPart = this.add.text(centerX - 80, 90, 'WASD: Green Head', {
+      fontSize: '16px',
+      fill: '#00ff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2001);
+
+    const purplePart = this.add.text(centerX + 80, 90, 'Arrows: Purple Head', {
+      fontSize: '16px',
+      fill: '#9932cc',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(2001);
+
+    // 10초 후 페이드아웃
+    this.time.delayedCall(10000, () => {
+      this.tweens.add({
+        targets: [tutorial, greenPart, purplePart],
+        alpha: 0,
+        duration: 500,
+        onComplete: () => {
+          tutorial.destroy();
+          greenPart.destroy();
+          purplePart.destroy();
+        }
+      });
+    });
+  }
+
+  /**
+   * 융합 컨트롤 설정
+   */
+  setupFusionControls() {
+    // WASD 키 추가
+    this.fusionKeys = {
+      W: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W),
+      A: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A),
+      S: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),
+      D: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D)
+    };
+
+    // WASD 입력 처리
+    this.fusionKeys.W.on('down', () => this.handleFusionInput(1, 'UP'));
+    this.fusionKeys.A.on('down', () => this.handleFusionInput(1, 'LEFT'));
+    this.fusionKeys.S.on('down', () => this.handleFusionInput(1, 'DOWN'));
+    this.fusionKeys.D.on('down', () => this.handleFusionInput(1, 'RIGHT'));
+
+    // 화살표는 두 번째 머리
+    // 기존 입력 시스템을 수정해야 함
+  }
+
+  /**
+   * 융합 입력 처리
+   */
+  handleFusionInput(headIndex, direction) {
+    if (!this.twoHeadedMode || this.multiverseCollapsePhase !== 'becomeone') return;
+
+    if (headIndex === 1) {
+      // 첫 번째 머리 (WASD)
+      const opposite = { 'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT' };
+      if (direction !== opposite[this.fusionDirection1]) {
+        if (this.fusionInputQueue1.length < 2) {
+          this.fusionInputQueue1.push(direction);
+        }
+      }
+    } else {
+      // 두 번째 머리 (화살표)
+      const opposite = { 'UP': 'DOWN', 'DOWN': 'UP', 'LEFT': 'RIGHT', 'RIGHT': 'LEFT' };
+      if (direction !== opposite[this.fusionDirection2]) {
+        if (this.fusionInputQueue2.length < 2) {
+          this.fusionInputQueue2.push(direction);
+        }
+      }
+    }
+  }
+
+  /**
+   * 융합 먹이 생성
+   */
+  generateFusionFood() {
+    // 랜덤 위치
+    let foodX, foodY;
+    let valid = false;
+
+    while (!valid) {
+      foodX = Phaser.Math.Between(3, this.cols - 4);
+      foodY = Phaser.Math.Between(3, this.rows - 4);
+
+      // 뱀과 겹치지 않는지 확인
+      valid = !this.fusionSnake.some(seg => seg.x === foodX && seg.y === foodY);
+    }
+
+    this.fusionFood = { x: foodX, y: foodY };
+
+    // 먹이 그래픽
+    if (this.fusionFoodGraphics) {
+      this.fusionFoodGraphics.destroy();
+    }
+
+    const fx = foodX * this.gridSize + this.gridSize / 2;
+    const fy = foodY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    this.fusionFoodGraphics = this.add.container(fx, fy).setDepth(90);
+
+    // 글로우
+    const glow = this.add.circle(0, 0, 15, 0xffffff, 0.3);
+    // 외부 원
+    const outer = this.add.circle(0, 0, 10, 0xffd700, 0.8);
+    // 내부 원
+    const inner = this.add.circle(0, 0, 6, 0xffff00, 1);
+
+    this.fusionFoodGraphics.add([glow, outer, inner]);
+
+    // 펄스 애니메이션
+    this.tweens.add({
+      targets: glow,
+      scale: 1.5,
+      alpha: 0.1,
+      duration: 600,
+      yoyo: true,
+      repeat: -1
+    });
+  }
+
+  /**
+   * 융합 뱀 이동
+   */
+  moveFusionSnake() {
+    if (!this.twoHeadedMode || this.multiverseCollapsePhase !== 'becomeone') return;
+
+    // 입력 처리
+    if (this.fusionInputQueue1.length > 0) {
+      this.fusionDirection1 = this.fusionInputQueue1.shift();
+    }
+    if (this.fusionInputQueue2.length > 0) {
+      this.fusionDirection2 = this.fusionInputQueue2.shift();
+    }
+
+    // 첫 번째 머리 (인덱스 0)
+    const head1Idx = this.fusionSnake.findIndex(s => s.headIndex === 0);
+    const head1 = this.fusionSnake[head1Idx];
+    let newHead1 = { x: head1.x, y: head1.y, headIndex: 0 };
+
+    switch (this.fusionDirection1) {
+      case 'LEFT': newHead1.x--; break;
+      case 'RIGHT': newHead1.x++; break;
+      case 'UP': newHead1.y--; break;
+      case 'DOWN': newHead1.y++; break;
+    }
+
+    // 두 번째 머리 (마지막 인덱스)
+    const head2Idx = this.fusionSnake.findIndex(s => s.headIndex === 1);
+    const head2 = this.fusionSnake[head2Idx];
+    let newHead2 = { x: head2.x, y: head2.y, headIndex: 1 };
+
+    switch (this.fusionDirection2) {
+      case 'LEFT': newHead2.x--; break;
+      case 'RIGHT': newHead2.x++; break;
+      case 'UP': newHead2.y--; break;
+      case 'DOWN': newHead2.y++; break;
+    }
+
+    // 벽 체크
+    newHead1 = this.wrapFusionPosition(newHead1);
+    newHead2 = this.wrapFusionPosition(newHead2);
+
+    // 꼬임 체크 (두 머리가 같은 칸)
+    if (newHead1.x === newHead2.x && newHead1.y === newHead2.y) {
+      this.handleFusionTangle();
+      return;
+    }
+
+    // 자기 충돌 체크
+    for (let i = 0; i < this.fusionSnake.length; i++) {
+      const seg = this.fusionSnake[i];
+      if (seg.headIndex !== 0 && seg.headIndex !== 1) {
+        if ((newHead1.x === seg.x && newHead1.y === seg.y) ||
+            (newHead2.x === seg.x && newHead2.y === seg.y)) {
+          this.handleFusionSelfCollision();
+          return;
+        }
+      }
+    }
+
+    // 머리 업데이트
+    this.fusionSnake[head1Idx] = { ...this.fusionSnake[head1Idx + 1], headIndex: -1 };
+    this.fusionSnake[head2Idx] = { ...this.fusionSnake[head2Idx - 1], headIndex: -1 };
+
+    // 새 머리 삽입
+    this.fusionSnake.unshift(newHead1);
+    this.fusionSnake.push(newHead2);
+
+    // 중간 세그먼트 2개 제거
+    const midIdx = Math.floor(this.fusionSnake.length / 2);
+    this.fusionSnake.splice(midIdx, 2);
+
+    // headIndex 재설정
+    this.fusionSnake[0].headIndex = 0;
+    this.fusionSnake[this.fusionSnake.length - 1].headIndex = 1;
+    for (let i = 1; i < this.fusionSnake.length - 1; i++) {
+      this.fusionSnake[i].headIndex = -1;
+    }
+
+    // 먹이 체크
+    this.checkFusionFoodCollision(newHead1, newHead2);
+  }
+
+  /**
+   * 위치 랩핑
+   */
+  wrapFusionPosition(pos) {
+    if (pos.x < 0) pos.x = this.cols - 1;
+    if (pos.x >= this.cols) pos.x = 0;
+    if (pos.y < 0) pos.y = this.rows - 1;
+    if (pos.y >= this.rows) pos.y = 0;
+    return pos;
+  }
+
+  /**
+   * 융합 먹이 충돌 체크
+   */
+  checkFusionFoodCollision(head1, head2) {
+    if (!this.fusionFood) return;
+
+    const food = this.fusionFood;
+    const head1OnFood = head1.x === food.x && head1.y === food.y;
+    const head2OnFood = head2.x === food.x && head2.y === food.y;
+
+    if (head1OnFood && head2OnFood) {
+      // 성공! 두 머리가 동시에 먹음
+      this.fusionFoodCount++;
+      this.showFusionFoodSuccess();
+
+      if (this.fusionFoodCount >= this.fusionTargetFood) {
+        this.time.delayedCall(1500, () => {
+          this.showMultiverseCollapseVictory();
+        });
+      } else {
+        this.time.delayedCall(500, () => {
+          this.generateFusionFood();
+        });
+      }
+    } else if (head1OnFood || head2OnFood) {
+      // 실패! 한 머리만
+      this.showFusionFoodFail();
+      this.time.delayedCall(500, () => {
+        this.generateFusionFood();
+      });
+    }
+  }
+
+  /**
+   * 융합 먹이 성공
+   */
+  showFusionFoodSuccess() {
+    const food = this.fusionFood;
+    const x = food.x * this.gridSize + this.gridSize / 2;
+    const y = food.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 성공 효과
+    this.cameras.main.flash(100, 255, 215, 0);
+    this.createExplosionEffect(x, y, 0xffd700, 15);
+
+    // 성공 대사
+    const successDialogues = [
+      "Yes... we can work together...",
+      "",
+      "Two minds... one purpose...",
+      "",
+      "WE ARE ONE!"
+    ];
+    if (successDialogues[this.fusionFoodCount - 1]) {
+      this.showMultiverseDialogue(successDialogues[this.fusionFoodCount - 1], 2000);
+    }
+
+    // 카운터 표시
+    this.showMultiverseHitText(`SYNC ${this.fusionFoodCount}/${this.fusionTargetFood}`, 0xffd700);
+
+    // 먹이 제거
+    if (this.fusionFoodGraphics) {
+      this.fusionFoodGraphics.destroy();
+      this.fusionFoodGraphics = null;
+    }
+    this.fusionFood = null;
+  }
+
+  /**
+   * 융합 먹이 실패
+   */
+  showFusionFoodFail() {
+    // 실패 효과
+    this.cameras.main.shake(100, 0.01);
+
+    const failText = this.add.text(400, 300, 'DESYNC!', {
+      fontSize: '24px',
+      fill: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(8000);
+
+    this.tweens.add({
+      targets: failText,
+      alpha: 0,
+      scale: 1.5,
+      duration: 500,
+      onComplete: () => failText.destroy()
+    });
+
+    // 먹이 재배치
+    if (this.fusionFoodGraphics) {
+      this.fusionFoodGraphics.destroy();
+      this.fusionFoodGraphics = null;
+    }
+    this.fusionFood = null;
+  }
+
+  /**
+   * 융합 꼬임 (게임오버)
+   */
+  handleFusionTangle() {
+    this.showMultiverseDialogue("We tangled... We cannot exist as one...", 2000);
+    this.time.delayedCall(500, () => {
+      this.endGame();
+    });
+  }
+
+  /**
+   * 융합 자기 충돌
+   */
+  handleFusionSelfCollision() {
+    this.showMultiverseDialogue("We hurt ourselves...", 2000);
+    this.time.delayedCall(500, () => {
+      this.endGame();
+    });
+  }
+
+  /**
+   * 융합 뱀 렌더링
+   */
+  drawFusionSnake() {
+    if (!this.twoHeadedMode || !this.fusionGraphics) return;
+
+    const g = this.fusionGraphics;
+    const glow = this.fusionGlowGraphics;
+
+    g.clear();
+    glow.clear();
+
+    const len = this.fusionSnake.length;
+
+    // 글로우
+    this.fusionSnake.forEach((seg, i) => {
+      const x = seg.x * this.gridSize + this.gridSize / 2;
+      const y = seg.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+      const isHead = seg.headIndex === 0 || seg.headIndex === 1;
+      const glowRadius = isHead ? 15 : 8;
+      const glowAlpha = isHead ? 0.4 : 0.15;
+
+      const ratio = i / len;
+      const color = seg.headIndex === 0 ? 0x00ff00 :
+                    seg.headIndex === 1 ? this.doppelColor :
+                    Phaser.Display.Color.Interpolate.ColorWithColor(
+                      Phaser.Display.Color.ValueToColor(0x00ff00),
+                      Phaser.Display.Color.ValueToColor(this.doppelColor),
+                      100, ratio * 100
+                    );
+
+      glow.fillStyle(typeof color === 'object' ? Phaser.Display.Color.GetColor(color.r, color.g, color.b) : color, glowAlpha);
+      glow.fillCircle(x, y, glowRadius);
+    });
+
+    // 메인 바디
+    this.fusionSnake.forEach((seg, i) => {
+      const x = seg.x * this.gridSize;
+      const y = seg.y * this.gridSize + this.gameAreaY;
+
+      if (seg.headIndex === 0) {
+        // 첫 번째 머리 (초록)
+        g.fillStyle(0x00ff00, 1);
+        g.fillRect(x + 1, y + 1, this.gridSize - 2, this.gridSize - 2);
+        // 눈
+        g.fillStyle(0x000000, 1);
+        g.fillCircle(x + 6, y + this.gridSize / 2, 2);
+        g.fillCircle(x + 14, y + this.gridSize / 2, 2);
+      } else if (seg.headIndex === 1) {
+        // 두 번째 머리 (보라)
+        g.fillStyle(this.doppelColor, 1);
+        g.fillRect(x + 1, y + 1, this.gridSize - 2, this.gridSize - 2);
+        // 빨간 눈
+        g.fillStyle(0xff0000, 1);
+        g.fillCircle(x + 6, y + this.gridSize / 2, 2);
+        g.fillCircle(x + 14, y + this.gridSize / 2, 2);
+      } else {
+        // 몸통 (그라데이션)
+        const ratio = i / len;
+        const interpColor = Phaser.Display.Color.Interpolate.ColorWithColor(
+          Phaser.Display.Color.ValueToColor(0x00ff00),
+          Phaser.Display.Color.ValueToColor(this.doppelColor),
+          100, ratio * 100
+        );
+        g.fillStyle(Phaser.Display.Color.GetColor(interpColor.r, interpColor.g, interpColor.b), 0.8);
+        g.fillRect(x + 1, y + 1, this.gridSize - 2, this.gridSize - 2);
+      }
+    });
+  }
+
+  // ================================================================================
+  // ===== VICTORY =================================================================
+  // ================================================================================
+
+  /**
+   * Multiverse Collapse 승리!
+   */
+  showMultiverseCollapseVictory() {
+    console.log('🏆 Multiverse Collapse Victory!');
+
+    this.multiverseCollapsePhase = 'victory';
+    this.moveTimer.paused = true;
+
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    const victoryElements = [];
+
+    // === PHASE 1: 슬로우모션 + 줌 (0-1초) ===
+    this.time.timeScale = 0.2;
+    this.cameras.main.zoomTo(1.3, 1000);
+
+    // === PHASE 2: 융합 뱀 폭발 (1-2초) ===
+    this.time.delayedCall(1000, () => {
+      this.time.timeScale = 1;
+
+      // 융합 뱀 위치에서 무지개 폭발
+      this.fusionSnake.forEach((seg, i) => {
+        this.time.delayedCall(i * 30, () => {
+          const x = seg.x * this.gridSize + this.gridSize / 2;
+          const y = seg.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+          const color = this.universeColors[i % 6];
+          this.createExplosionEffect(x, y, color, 8);
+        });
+      });
+
+      // 융합 그래픽 숨김
+      if (this.fusionGraphics) this.fusionGraphics.setVisible(false);
+      if (this.fusionGlowGraphics) this.fusionGlowGraphics.setVisible(false);
+    });
+
+    // === PHASE 3: 화이트아웃 (2-3초) ===
+    this.time.delayedCall(2000, () => {
+      this.cameras.main.flash(800, 255, 255, 255);
+      this.cameras.main.zoomTo(1, 500);
+    });
+
+    // === PHASE 4: 타이틀 (3-5초) ===
+    this.time.delayedCall(3000, () => {
+      // 배경
+      const victoryBg = this.add.rectangle(centerX, centerY, width, height, 0x000000, 0.8);
+      victoryBg.setDepth(9500);
+      victoryElements.push(victoryBg);
+
+      // "YOU DEFEATED"
+      const title1 = this.add.text(centerX, centerY - 60, 'YOU DEFEATED', {
+        fontSize: '36px',
+        fill: '#ffffff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(9501).setAlpha(0);
+      victoryElements.push(title1);
+
+      // "YOURSELF"
+      const title2 = this.add.text(centerX, centerY, 'YOURSELF', {
+        fontSize: '64px',
+        fill: '#ffd700',
+        fontStyle: 'bold',
+        stroke: '#ff6600',
+        strokeThickness: 6
+      }).setOrigin(0.5).setDepth(9501).setAlpha(0);
+      victoryElements.push(title2);
+
+      // 등장
+      this.tweens.add({
+        targets: title1,
+        alpha: 1,
+        duration: 300
+      });
+
+      this.tweens.add({
+        targets: title2,
+        alpha: 1,
+        scale: { from: 0.5, to: 1 },
+        duration: 500,
+        delay: 200,
+        ease: 'Back.easeOut'
+      });
+
+      // 펄스
+      this.tweens.add({
+        targets: title2,
+        scale: 1.05,
+        duration: 500,
+        yoyo: true,
+        repeat: -1,
+        delay: 700
+      });
+    });
+
+    // === PHASE 5: 서브타이틀 (5-7초) ===
+    this.time.delayedCall(5000, () => {
+      const subTitle = this.add.text(centerX, centerY + 80, '', {
+        fontSize: '24px',
+        fill: '#00ffff',
+        fontStyle: 'italic'
+      }).setOrigin(0.5).setDepth(9501);
+      victoryElements.push(subTitle);
+
+      // 타이핑
+      const fullText = "The multiverse... is stable.";
+      let charIdx = 0;
+      const typeTimer = this.time.addEvent({
+        delay: 60,
+        callback: () => {
+          charIdx++;
+          subTitle.setText(fullText.substring(0, charIdx));
+          if (charIdx >= fullText.length) typeTimer.destroy();
+        },
+        repeat: fullText.length - 1
+      });
+    });
+
+    // === PHASE 6: 6개 우주 재등장 (7-10초) ===
+    this.time.delayedCall(7000, () => {
+      this.showUniverseRestoreSequence(victoryElements);
+    });
+
+    // === PHASE 7: 불꽃놀이 (9-14초) ===
+    this.time.delayedCall(9000, () => {
+      this.startVictoryFireworks(victoryElements);
+    });
+
+    // === PHASE 8: 최종 대사 (11초) ===
+    this.time.delayedCall(11000, () => {
+      const finalText = this.add.text(centerX, centerY + 140, '', {
+        fontSize: '20px',
+        fill: '#00ff00',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(9502);
+      victoryElements.push(finalText);
+
+      const finalWords = "I am whole. I am complete. I am... ME.";
+      let charIdx = 0;
+      const typeTimer = this.time.addEvent({
+        delay: 50,
+        callback: () => {
+          charIdx++;
+          finalText.setText(finalWords.substring(0, charIdx));
+          if (charIdx >= finalWords.length) typeTimer.destroy();
+        },
+        repeat: finalWords.length - 1
+      });
+    });
+
+    // === PHASE 9: 보너스 제거됨 - 엔딩 스테이지로 전환 예정 ===
+
+    // === PHASE 10: 마무리 (14초) ===
+    this.time.delayedCall(14000, () => {
+      // 모든 요소 페이드아웃
+      victoryElements.forEach(el => {
+        if (el && el.active) {
+          this.tweens.add({
+            targets: el,
+            alpha: 0,
+            duration: 1000
+          });
+        }
+      });
+
+      // 최종 플래시
+      this.cameras.main.flash(500, 255, 255, 255);
+    });
+
+    // === PHASE 11: 엔딩으로 이동 (16초) ===
+    this.time.delayedCall(16000, () => {
+      this.cleanupMultiverseCollapse();
+      // TODO: 엔딩 스테이지로 전환 (쿠키런 버전) - 현재는 clearStage
+      this.clearStage();
+    });
+  }
+
+  /**
+   * 우주 복원 시퀀스
+   */
+  showUniverseRestoreSequence(victoryElements) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2 - 50;
+    const radius = 80;
+
+    // 6개 우주를 육각형으로 배치
+    for (let i = 0; i < 6; i++) {
+      this.time.delayedCall(i * 200, () => {
+        const angle = (i / 6) * Math.PI * 2 - Math.PI / 2;
+        const targetX = centerX + Math.cos(angle) * radius;
+        const targetY = centerY + Math.sin(angle) * radius;
+
+        const universe = this.add.circle(centerX, centerY, 5, this.universeColors[i], 1);
+        universe.setDepth(9510);
+        victoryElements.push(universe);
+
+        this.tweens.add({
+          targets: universe,
+          x: targetX,
+          y: targetY,
+          radius: 20,
+          duration: 600,
+          ease: 'Back.easeOut',
+          onComplete: () => {
+            // 펄스
+            this.tweens.add({
+              targets: universe,
+              scale: 1.2,
+              alpha: 0.7,
+              duration: 500,
+              yoyo: true,
+              repeat: -1
+            });
+          }
+        });
+
+        // 연결선
+        if (i > 0) {
+          this.time.delayedCall(100, () => {
+            const prevAngle = ((i - 1) / 6) * Math.PI * 2 - Math.PI / 2;
+            const prevX = centerX + Math.cos(prevAngle) * radius;
+            const prevY = centerY + Math.sin(prevAngle) * radius;
+
+            const line = this.add.graphics().setDepth(9509);
+            line.lineStyle(2, 0xffffff, 0.5);
+            line.lineBetween(prevX, prevY, targetX, targetY);
+            victoryElements.push(line);
+          });
+        }
+
+        // 마지막 연결 (6→1)
+        if (i === 5) {
+          this.time.delayedCall(200, () => {
+            const firstAngle = -Math.PI / 2;
+            const firstX = centerX + Math.cos(firstAngle) * radius;
+            const firstY = centerY + Math.sin(firstAngle) * radius;
+
+            const line = this.add.graphics().setDepth(9509);
+            line.lineStyle(2, 0xffffff, 0.5);
+            line.lineBetween(targetX, targetY, firstX, firstY);
+            victoryElements.push(line);
+          });
+        }
+      });
+    }
+
+    // "SIX UNIVERSES STABILIZED" 텍스트
+    this.time.delayedCall(1500, () => {
+      const stableText = this.add.text(centerX, centerY + 120, 'SIX UNIVERSES STABILIZED', {
+        fontSize: '18px',
+        fill: '#00ffff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(9511).setAlpha(0);
+      victoryElements.push(stableText);
+
+      this.tweens.add({
+        targets: stableText,
+        alpha: 1,
+        duration: 500
+      });
+    });
+  }
+
+  /**
+   * 승리 불꽃놀이
+   */
+  startVictoryFireworks(victoryElements) {
+    const { width, height } = this.cameras.main;
+
+    // 5초간 불꽃놀이
+    const fireworkTimer = this.time.addEvent({
+      delay: 150,
+      callback: () => {
+        const x = Phaser.Math.Between(50, width - 50);
+        const y = Phaser.Math.Between(100, height - 150);
+        const color = Phaser.Utils.Array.GetRandom(this.universeColors);
+
+        // 중심 폭발
+        const core = this.add.circle(x, y, 3, 0xffffff, 1).setDepth(9520);
+        victoryElements.push(core);
+
+        this.tweens.add({
+          targets: core,
+          scale: 2,
+          alpha: 0,
+          duration: 200,
+          onComplete: () => core.destroy()
+        });
+
+        // 스파크
+        for (let i = 0; i < 10; i++) {
+          const angle = (i / 10) * Math.PI * 2;
+          const dist = 30 + Math.random() * 40;
+
+          const spark = this.add.circle(x, y, 2, color, 1).setDepth(9520);
+          victoryElements.push(spark);
+
+          this.tweens.add({
+            targets: spark,
+            x: x + Math.cos(angle) * dist,
+            y: y + Math.sin(angle) * dist,
+            alpha: 0,
+            scale: 0.3,
+            duration: 400,
+            ease: 'Power2.easeOut',
+            onComplete: () => spark.destroy()
+          });
+        }
+      },
+      repeat: 30
+    });
+  }
+
+  /**
+   * Multiverse Collapse 정리
+   */
+  cleanupMultiverseCollapse() {
+    console.log('🧹 Cleaning up Multiverse Collapse');
+
+    this.multiverseCollapseMode = false;
+    this.multiverseCollapsePhase = 'none';
+
+    // 애니메이션 타이머 정리
+    if (this.multiverseAnimTimer) {
+      this.multiverseAnimTimer.destroy();
+      this.multiverseAnimTimer = null;
+    }
+
+    // Phase 1 정리
+    this.cleanupGhostSnakes();
+
+    // Phase 2 정리 (Fourth Wall)
+    this.cleanupFourthWall();
+
+    // 레거시: Phase 2 정리 (Doppelganger)
+    this.cleanupDoppelganger();
+
+    // 레거시: Phase 3 정리
+    this.twoHeadedMode = false;
+    this.fusionSnake = [];
+    this.fusionFoodCount = 0;
+
+    if (this.fusionGraphics) {
+      this.fusionGraphics.destroy();
+      this.fusionGraphics = null;
+    }
+    if (this.fusionGlowGraphics) {
+      this.fusionGlowGraphics.destroy();
+      this.fusionGlowGraphics = null;
+    }
+    if (this.fusionFoodGraphics) {
+      this.fusionFoodGraphics.destroy();
+      this.fusionFoodGraphics = null;
+    }
+
+    // WASD 키 정리
+    if (this.fusionKeys) {
+      Object.values(this.fusionKeys).forEach(key => {
+        if (key && key.destroy) key.destroy();
+      });
+      this.fusionKeys = null;
+    }
+
+    // 보스 요소 정리
+    this.multiverseBossElements.forEach(el => {
+      if (el && el.destroy) el.destroy();
+    });
+    this.multiverseBossElements = [];
+
+    // Quantum Split 정리
+    if (this.quantumSplitMode) {
+      this.cleanupQuantumSplit();
+    }
+
+    // 뱀 원래대로 복원
+    this.snake = [
+      { x: 10, y: 15 },
+      { x: 9, y: 15 },
+      { x: 8, y: 15 }
+    ];
+    this.direction = 'RIGHT';
+    this.inputQueue = [];
+
+    // 그래픽 표시
+    if (this.graphics) {
+      this.graphics.setVisible(true);
     }
   }
 
