@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import TitleScene from './scenes/TitleScene.js';
 import SnakeGame from './scenes/SnakeGame.js';
 
 const config = {
@@ -7,7 +8,7 @@ const config = {
   height: 660,
   parent: 'game-container',
   backgroundColor: '#2d2d2d',
-  scene: [SnakeGame],
+  scene: [TitleScene, SnakeGame],
   pixelArt: true
 };
 
