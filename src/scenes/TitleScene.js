@@ -58,7 +58,7 @@ export default class TitleScene extends Phaser.Scene {
       }
     }).setOrigin(0.5);
 
-    this.add.text(width / 2, height / 2 - 40, 'Neon Survival Protocol', {
+    this.add.text(width / 2, height / 2 - 40, 'Pixel Storm', {
       fontFamily: 'Arial',
       fontSize: '16px',
       color: '#8cf7c8',
