@@ -648,6 +648,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.presenceTimer = null; // 존재감 증가 타이머
     this.lastAttackTime = 0; // 마지막 공격 시간
     this.attackCooldown = 8000; // 공격 쿨다운 (8초)
+    this.presenceAttackCount = 0; // 공격 횟수 (첫 공격은 회피 시간 10초)
     this.presencePulseTimer = null; // 브라우저 펄스 타이머
     this.playerDodged = false; // 플레이어가 닷지를 눌렀는지 (QTE)
     this.dodgeQTEActive = false; // QTE 닷지 활성화 상태
@@ -22632,8 +22633,7 @@ export default class SnakeGame extends Phaser.Scene {
       // 게임 재개
       this.moveTimer.paused = false;
 
-      // 조명탄 생성 시작
-      this.startFlareSpawning();
+      // 조명탄(빛의 조각)은 첫 회피 성공 후 생성됨 (handlePresenceDodgeSuccess에서 호출)
 
       // Shadow Strike 시작
       this.startShadowStrikePhase();
@@ -23442,11 +23442,12 @@ export default class SnakeGame extends Phaser.Scene {
   // 🆕 THE PRESENCE SYSTEM - 극한의 공포 (브라우저 전체 어둠)
   // ═══════════════════════════════════════════════════════════════════
 
-  // The Presence 시스템 시작
+  // The Presence 시작
   startPresenceSystem() {
     this.presenceActive = true;
     this.presenceLevel = 0;
     this.stalkingActive = true;
+    this.presenceAttackCount = 0; // 공격 횟수 리셋 (첫 공격 회피 시간 10초)
     const hitCount = this.fogBossHitCount;
 
     // 1. 브라우저 배경 어둠 오버레이 생성 (DOM)
@@ -24051,12 +24052,12 @@ export default class SnakeGame extends Phaser.Scene {
     this.browserPulse();
   }
 
-  // 🆕 대사 종료 후 호출 - 공격 시작 + 빛의 조각 스폰
+  // 🆕 대사 종료 후 호출 - 공격 시작
   onPresenceDialogueEnd() {
     this.presenceDialogueActive = false;
 
-    // 빛의 조각 스폰! (대사 후 첫 스폰)
-    this.spawnFlare();
+    // 빛의 조각은 첫 공격 완료 후 스폰됨
+    this.firstAttackCompleted = false;
 
     // 공격 스케줄링 시작
     this.schedulePresenceAttack();
@@ -24262,7 +24263,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.cameras.main.shake(1500, 0.03);
 
     // 경고 시간 후 공격 실행 (2초 - 회피 준비 시간)
+    const isFirstAttack = this.presenceAttackCount === 0;
     const warningTime = Math.max(1500, 2000 - this.fogBossHitCount * 200);
+    this.presenceAttackCount++;
 
     this.time.delayedCall(warningTime, () => {
       warningArrow.destroy();
@@ -24271,9 +24274,10 @@ export default class SnakeGame extends Phaser.Scene {
       this.executePresenceAttack(attackFrom);
     });
 
-    // 회피 창 활성화
+    // 회피 창 활성화 (첫 공격만 10초로 충분히 길게 - 게임 방식 학습용)
     this.dodgeWindowActive = true;
-    this.dodgeWindowTimer = this.time.delayedCall(warningTime + 500, () => {
+    const dodgeWindow = isFirstAttack ? 10000 : warningTime + 500;
+    this.dodgeWindowTimer = this.time.delayedCall(dodgeWindow, () => {
       this.dodgeWindowActive = false;
     });
   }
@@ -24415,17 +24419,20 @@ export default class SnakeGame extends Phaser.Scene {
     const attemptPenalty = this.dodgeAttemptCount * 15;  // 시도당 15ms 감소
     const dashDuration = Math.max(250, baseTime - hitPenalty - attemptPenalty);
 
-    // QTE 프롬프트 표시 (남은 시간도 전달)
-    this.showDodgeQTE(dashDuration);
+    // QTE 프롬프트 표시 (첫 공격은 10초로 충분히 길게 - 게임 방식 학습용)
+    const isFirstAttack = this.presenceAttackCount === 1;
+    const qteDuration = isFirstAttack ? 10000 : dashDuration;
+    this.showDodgeQTE(qteDuration);
 
-    // QTE 시간 (돌진 중에 눌러야 함)
-    const qteWindow = dashDuration + 100;
+    // QTE 시간 (첫 공격은 10초로 충분히 길게)
+    const qteWindow = isFirstAttack ? 10000 : dashDuration + 100;
+    const actualDashDuration = isFirstAttack ? 10000 : dashDuration;
 
     this.tweens.add({
       targets: this.fogBossElement,
       x: targetX,
       y: targetY,
-      duration: dashDuration,
+      duration: actualDashDuration,
       ease: 'Power2.easeIn',
       onUpdate: () => {
         // 돌진 중 잔상 효과
@@ -24805,6 +24812,12 @@ export default class SnakeGame extends Phaser.Scene {
   // 회피 성공 처리
   handlePresenceDodgeSuccess() {
     const { width, height } = this.cameras.main;
+
+    // 첫 공격 완료 후 빛의 조각 스폰 시작
+    if (!this.firstAttackCompleted) {
+      this.firstAttackCompleted = true;
+      this.startFlareSpawning();
+    }
 
     // "SURVIVED!" 표시
     const survivedText = this.add.text(width / 2, height / 2, 'SURVIVED!', {
@@ -26420,8 +26433,8 @@ export default class SnakeGame extends Phaser.Scene {
 
     const { width, height } = this.cameras.main;
 
-    // 히트 효과 (테스트용: 1 HIT 클리어, 원래는 4)
-    const hitText = this.add.text(width / 2, height / 2, `HIT ${this.fogBossHitCount}/1!`, {
+    // 히트 효과
+    const hitText = this.add.text(width / 2, height / 2, `HIT ${this.fogBossHitCount}/4!`, {
       fontSize: '48px',
       fill: '#ffff00',
       fontStyle: 'bold',
@@ -26449,8 +26462,8 @@ export default class SnakeGame extends Phaser.Scene {
     // 카메라 효과
     this.cameras.main.shake(300, 0.02);
 
-    // 다음 페이즈 체크 - 테스트: 1회 HIT으로 클리어 (원래는 4)
-    if (this.fogBossHitCount >= 1) {
+    // 다음 페이즈 체크 (4 HIT 클리어)
+    if (this.fogBossHitCount >= 4) {
       this.handleFogBossFinalHit();
     } else {
       // 보스 텔레포트 후 계속 Shadow Strike
@@ -27821,6 +27834,8 @@ export default class SnakeGame extends Phaser.Scene {
     if (isMultiverseCollapseStage(this.currentStage)) {
       this.food = { x: -100, y: -100 };
       this.moveTimer.paused = true;
+      // 🧪 개발자 모드에서 18탄 선택 시 러너 전환 테스트
+      this.testRunnerTransition = true;
       this.time.delayedCall(500, () => {
         this.startMultiverseCollapseBoss();
       });
@@ -30315,6 +30330,15 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.multiverseCollapseMode = true;
     this.moveTimer.paused = true;
+
+    // 🧪 테스트 모드: 바로 러너 전환 연출로 이동
+    if (this.testRunnerTransition) {
+      console.log('🧪 TEST MODE: Skipping to Runner Transition');
+      this.testRunnerTransition = false; // 1회용
+      this.multiverseCollapsePhase = 'runner';
+      this.startRunnerTransition();
+      return;
+    }
 
     // 17탄 Quantum Split에서 이어지는 경우 정리
     if (this.quantumSplitMode) {
@@ -34251,10 +34275,13 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   /**
-   * 뱀 떨어지는 연출
+   * 뱀 줌인 + 부드럽게 착지 연출
    */
   startSnakeFall() {
     const { width, height } = this.cameras.main;
+
+    // 지면 Y 위치 설정
+    this.runnerGroundY = height - 80;
 
     // 격자 페이드아웃
     if (this.gridGraphics) {
@@ -34265,28 +34292,72 @@ export default class SnakeGame extends Phaser.Scene {
       });
     }
 
-    // 중력 적용하여 떨어지기
-    let fallSpeed = 0;
-    const fallTimer = this.time.addEvent({
-      delay: 16,
-      callback: () => {
-        fallSpeed += 0.5; // 중력
-        this.runnerPlayerSnake.forEach(seg => {
-          seg.y += fallSpeed;
-        });
-        this.drawRunnerTransition();
+    // 뱀 머리 위치 계산
+    const headX = this.runnerPlayerSnake[0].x;
+    const headY = this.runnerPlayerSnake[0].y;
 
-        // 화면 아래로 떨어지면 러너 인트로 시작
-        if (this.runnerPlayerSnake[0].y > height + 100) {
-          fallTimer.destroy();
-          this.time.delayedCall(500, () => {
-            this.startRunnerIntro();
+    // 카메라 줌인 효과 (뱀 머리 중심)
+    this.cameras.main.pan(headX, headY, 800, 'Sine.easeInOut');
+    this.cameras.main.zoomTo(2.5, 800, 'Sine.easeInOut');
+
+    // 줌인 완료 후 부드럽게 착지
+    this.time.delayedCall(1000, () => {
+      // 목표 위치 계산 (러너 모드 시작 위치)
+      const targetX = 80;
+      const targetY = this.runnerGroundY;
+
+      // 뱀을 러너 형태로 재배치 (가로로 정렬)
+      const snakeLength = this.runnerPlayerSnake.length;
+      const targetPositions = [];
+      for (let i = 0; i < snakeLength; i++) {
+        targetPositions.push({
+          x: targetX - i * 12,
+          y: targetY
+        });
+      }
+
+      // 부드럽게 이동 (줌아웃과 함께)
+      let progress = 0;
+      const moveTimer = this.time.addEvent({
+        delay: 16,
+        callback: () => {
+          progress += 0.02;
+          if (progress >= 1) {
+            progress = 1;
+            moveTimer.destroy();
+
+            // 줌 리셋 후 러너 시작
+            this.cameras.main.pan(width / 2, height / 2, 500, 'Sine.easeInOut');
+            this.cameras.main.zoomTo(1, 500, 'Sine.easeInOut');
+
+            this.time.delayedCall(600, () => {
+              this.startRunnerIntroWithExistingSnake();
+            });
+          }
+
+          // Ease out 보간
+          const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+          this.runnerPlayerSnake.forEach((seg, i) => {
+            const startX = seg.startX || seg.x;
+            const startY = seg.startY || seg.y;
+
+            // 처음 한번만 시작 위치 저장
+            if (!seg.startX) {
+              seg.startX = seg.x;
+              seg.startY = seg.y;
+            }
+
+            seg.x = startX + (targetPositions[i].x - startX) * easeProgress;
+            seg.y = startY + (targetPositions[i].y - startY) * easeProgress;
           });
-        }
-      },
-      loop: true
+
+          this.drawRunnerTransition();
+        },
+        loop: true
+      });
+      this.runnerTimers.push(moveTimer);
     });
-    this.runnerTimers.push(fallTimer);
   }
 
   /**
@@ -34302,6 +34373,77 @@ export default class SnakeGame extends Phaser.Scene {
       this.runnerGraphics.fillStyle(seg.color, 1);
       this.runnerGraphics.fillRect(seg.x - size / 2, seg.y - size / 2, size, size);
     });
+  }
+
+  /**
+   * 기존 뱀을 유지한 채 러너 인트로 시작
+   */
+  startRunnerIntroWithExistingSnake() {
+    console.log('🏃 Starting Runner Intro with Existing Snake');
+
+    this.runnerPhase = 'intro';
+    const { width, height } = this.cameras.main;
+
+    // 지면 설정 (이미 설정되어 있을 수 있음)
+    if (!this.runnerGroundY) {
+      this.runnerGroundY = height - 80;
+    }
+    this.runnerY = this.runnerGroundY;
+
+    // 기존 뱀의 startX, startY 임시 속성 제거 (깔끔하게)
+    this.runnerPlayerSnake.forEach(seg => {
+      delete seg.startX;
+      delete seg.startY;
+    });
+
+    // 초기화 (뱀은 유지)
+    this.runnerObstacles = [];
+    this.runnerDeadSnakes = [];
+    this.runnerWhiteSnakes = [];
+    this.runnerDistance = 0;
+    this.runnerJumping = false;
+    this.runnerJumpVelocity = 0;
+    this.runnerIntroComplete = false;
+    this.runnerSpeed = 5;
+
+    // 배경 뱀들 생성
+    this.spawnBackgroundSnakes();
+
+    // "THE JOURNEY CONTINUES..." 텍스트
+    const journeyText = this.add.text(width / 2, height / 3, 'THE JOURNEY CONTINUES...', {
+      fontSize: '32px',
+      fill: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(9650).setAlpha(0);
+    this.runnerElements.push(journeyText);
+
+    this.tweens.add({
+      targets: journeyText,
+      alpha: 1,
+      duration: 500,
+      onComplete: () => {
+        this.time.delayedCall(2000, () => {
+          this.tweens.add({
+            targets: journeyText,
+            alpha: 0,
+            duration: 500
+          });
+        });
+      }
+    });
+
+    // 인트로 자동 플레이 시작
+    this.time.delayedCall(1000, () => {
+      this.startRunnerAutoPlay();
+    });
+
+    // 러너 업데이트 루프 시작
+    const runnerUpdateTimer = this.time.addEvent({
+      delay: 16,
+      callback: () => this.updateRunner(),
+      loop: true
+    });
+    this.runnerTimers.push(runnerUpdateTimer);
   }
 
   /**
@@ -34746,7 +34888,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.time.delayedCall(3000, () => {
       this.cleanupRunner();
       this.cleanupMultiverseCollapse();
-      this.clearStage();
+      this.stageClear();
     });
   }
 

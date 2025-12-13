@@ -340,6 +340,46 @@ console.log('Speed:', this.moveTimer.delay);
 
 ---
 
+## 테스트용 임시 설정 (원복 필요)
+
+> **주의**: 아래 설정들은 테스트용으로 변경된 상태. 정식 배포 전 원복 필요!
+
+| # | 설정 | 라인 | 현재값 | 정식값 | 설명 |
+|---|------|------|--------|--------|------|
+| 1 | 일반 스테이지 클리어 조건 | 1957 | **5개** | 20개 | `foodCount >= 5` → `>= 20` |
+| 2 | 16탄 Meta Universe 클리어 | 258 | **5개** | 20개 | `metaUniverseTargetFood = 5` → `20` |
+| 3 | 18탄 Phase1 HIT 표시 | 31407 | **1마리** | 5마리 | `totalGhostsRequired = 1` → `5` |
+| 4 | 18탄 Phase1→2 진행 조건 | 31415 | **1마리** | 5마리 | `ghostsRequiredForPhase2 = 1` → `5` |
+| 5 | 18탄 러너 테스트 플래그 | 27825 | 설정됨 | **삭제** | `this.testRunnerTransition = true;` 라인 삭제 |
+| 6 | 3탄 독개구리 보스 위치 | 14184-14189 | 중앙4군데 | 모서리4개 | `bossCorners` 배열 수정 |
+
+### 원복 코드 예시
+
+```javascript
+// #1: 라인 1957
+if (!this.bossMode && this.foodCount >= 20) {  // 5 → 20
+
+// #2: 라인 258
+this.metaUniverseTargetFood = 20;  // 5 → 20
+
+// #3, #4: 라인 31407, 31415
+const totalGhostsRequired = 5;      // 1 → 5
+const ghostsRequiredForPhase2 = 5;  // 1 → 5
+
+// #5: 라인 27825 (삭제)
+// this.testRunnerTransition = true;  ← 이 줄 삭제
+
+// #6: 라인 14184-14189 (모서리로 복원)
+this.bossCorners = [
+  { x: 0, y: 0 },
+  { x: this.cols - 1, y: 0 },
+  { x: 0, y: this.rows - 1 },
+  { x: this.cols - 1, y: this.rows - 1 }
+];
+```
+
+---
+
 ## 향후 개발 예정
 
 - [ ] **Stage 18 보스**: 자기 자신과의 대결 (시간의 잔상 or 미러 매치)
