@@ -255,7 +255,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.foodUniverse = 1; // 먹이가 있는 Universe
     this.wormholePassCount = 0; // 웜홀 통과 횟수
     this.metaUniverseFoodCount = 0; // 먹은 먹이 수
-    this.metaUniverseTargetFood = 5; // 테스트: 5개 (정식: 20개)
+    this.metaUniverseTargetFood = 20; // 클리어 조건: 20개
     this.universeTitle = null; // "Universe X" 타이틀 텍스트
     this.metaUniverseIntroShown = false; // 인트로 표시 여부
     this.comboDisabled = false; // 콤보 비활성화 여부
@@ -1954,8 +1954,7 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 스테이지 클리어 체크 - 보스전 중에는 비활성화
-      // TODO: 테스트용 임시 설정 (원래 20)
-      if (!this.bossMode && this.foodCount >= 5) {
+      if (!this.bossMode && this.foodCount >= 20) {
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -3921,8 +3920,11 @@ export default class SnakeGame extends Phaser.Scene {
   // =====================
 
   shouldPreserveSaws() {
-    // Stage 13 -> 14 전환 시 톱니 보존
-    return this.preserveSawsForNextStage;
+    // World 3 (Stage 10-12) 내에서는 톱니 보존
+    // resetStage 호출 시점에 currentStage는 이미 다음 스테이지
+    // Stage 11, 12로 전환될 때 톱니 유지 (10->11, 11->12)
+    const preserveOnStages = [11, 12];
+    return preserveOnStages.includes(this.currentStage) || this.preserveSawsForNextStage;
   }
 
   // =====================
@@ -4460,8 +4462,8 @@ export default class SnakeGame extends Phaser.Scene {
   // =====================
 
   isGearTitanStage() {
-    // Gear Titan 보스 비활성화 - Magnetar 보스로 대체됨
-    return false;
+    // Stage 12: 기어 타이탄 보스
+    return this.currentStage === 12;
   }
 
   cleanupGearTitan() {
@@ -8944,12 +8946,22 @@ export default class SnakeGame extends Phaser.Scene {
       this.cleanupGearTitan();
     }
 
-    // 톱니 보존 체크: Stage 13 -> 14 전환 시에만 톱니 유지
+    // 톱니 보존 체크: World 3 (Stage 10-12) 내에서 톱니 유지
     if (!this.shouldPreserveSaws()) {
       this.destroyAllSaws();
       this.destroyAllEnhancedSaws();
+    } else {
+      // 톱니 보존 시 움직임 재개
+      this.resumeAllSaws();
     }
     this.preserveSawsForNextStage = false; // 플래그 리셋
+
+    // Stage 11 시작: 강화 톱니 등장 연출
+    if (this.currentStage === 11 && this.saws.length > 0) {
+      this.time.delayedCall(500, () => {
+        this.startEnhancedSawHellStage();
+      });
+    }
 
     // 독가스 정리
     this.stopGasZone();
@@ -14180,13 +14192,12 @@ export default class SnakeGame extends Phaser.Scene {
     this.bossPhase = 'battle';
     this.bossHitCount = 0;
 
-    // TODO: 원래는 모서리 4개 - { x: 0, y: 0 }, { x: cols-1, y: 0 }, { x: 0, y: rows-1 }, { x: cols-1, y: rows-1 }
-    // 테스트용으로 중앙 부근 4군데로 변경
+    // 보스가 나타날 코너 위치 (모서리 4개)
     this.bossCorners = [
-      { x: Math.floor(this.cols / 3), y: Math.floor(this.rows / 3) }, // 좌상 중앙
-      { x: Math.floor(this.cols * 2 / 3), y: Math.floor(this.rows / 3) }, // 우상 중앙
-      { x: Math.floor(this.cols / 3), y: Math.floor(this.rows * 2 / 3) }, // 좌하 중앙
-      { x: Math.floor(this.cols * 2 / 3), y: Math.floor(this.rows * 2 / 3) } // 우하 중앙
+      { x: 0, y: 0 },                           // 좌상 모서리
+      { x: this.cols - 1, y: 0 },               // 우상 모서리
+      { x: 0, y: this.rows - 1 },               // 좌하 모서리
+      { x: this.cols - 1, y: this.rows - 1 }    // 우하 모서리
     ];
 
     // 배틀 시작 메시지
@@ -27834,8 +27845,6 @@ export default class SnakeGame extends Phaser.Scene {
     if (isMultiverseCollapseStage(this.currentStage)) {
       this.food = { x: -100, y: -100 };
       this.moveTimer.paused = true;
-      // 🧪 개발자 모드에서 18탄 선택 시 러너 전환 테스트
-      this.testRunnerTransition = true;
       this.time.delayedCall(500, () => {
         this.startMultiverseCollapseBoss();
       });
@@ -31416,16 +31425,14 @@ export default class SnakeGame extends Phaser.Scene {
     this.showGhostDefeatEffect(ghost, index);
 
     // HIT 텍스트
-    // TODO: 테스트용 임시 설정 - 원래는 /5
-    const totalGhostsRequired = 1; // TODO: 테스트 후 5로 복원
+    const totalGhostsRequired = 5;
     this.showMultiverseHitText(`SELF ${this.ghostSnakesDefeated}/${totalGhostsRequired} DEFEATED`, ghost.color);
 
     // 제거 대사
     this.showMultiverseDialogue("I remember now... I survived this.", 1500);
 
     // 모두 제거했으면 Phase 2 (Fourth Wall)
-    // TODO: 테스트용 임시 설정 - 원래는 5마리 (this.ghostSnakesDefeated >= 5)
-    const ghostsRequiredForPhase2 = 1; // TODO: 테스트 후 5로 복원
+    const ghostsRequiredForPhase2 = 5;
     if (this.ghostSnakesDefeated >= ghostsRequiredForPhase2) {
       this.time.delayedCall(2000, () => {
         this.startPhase2FourthWall();
