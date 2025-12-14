@@ -25,7 +25,9 @@
       "Bash(cmd /c \"pushd c:\\dev\\my-first-phaser-game && del /f /q nul && popd\")",
       "Bash(ls -la \"c:\\dev\\my-first-phaser-game\\src 2>/dev/null || ls -la /c/dev/my-first-phaser-game/src/ 2>/dev/null || pwd && find . -name SnakeGame.js -o -name main.js\")",
       "Bash(timeout 5 npm run dev:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(npx:*)",
+      "Bash(SUNO_API_TOKEN=e8cdc49e7b21538a27c438bb16a70348 timeout 5 npx:*)"
     ],
     "deny": [],
     "ask": []
