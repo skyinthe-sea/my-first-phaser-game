@@ -27,7 +27,10 @@
       "Bash(timeout 5 npm run dev:*)",
       "Bash(curl:*)",
       "Bash(npx:*)",
-      "Bash(SUNO_API_TOKEN=e8cdc49e7b21538a27c438bb16a70348 timeout 5 npx:*)"
+      "Bash(SUNO_API_TOKEN=e8cdc49e7b21538a27c438bb16a70348 timeout 5 npx:*)",
+      "mcp__suno__suno_get_credits",
+      "Bash(find:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

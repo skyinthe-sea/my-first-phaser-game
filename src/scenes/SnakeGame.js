@@ -11,6 +11,12 @@ export default class SnakeGame extends Phaser.Scene {
   preload() {
     // 배경음악 로드
     this.load.audio('bgm', 'assets/bgm/snake_bgm.mp3');
+    this.load.audio('boss3_bgm', 'assets/bgm/3_boss.mp3');
+    this.load.audio('boss6_bgm', 'assets/bgm/6_boss.mp3');
+    this.load.audio('boss9_bgm', 'assets/bgm/9_boss.mp3');
+    this.load.audio('boss12_bgm', 'assets/bgm/12_boss.mp3');
+    this.load.audio('boss15_bgm', 'assets/bgm/15_boss.mp3');
+    this.load.audio('boss18_bgm', 'assets/bgm/18_boss.mp3');
     // 이동 효과음 로드
     this.load.audio('moving', 'assets/sfx/moving.mp3');
     // 먹이 먹는 효과음 로드
@@ -39,6 +45,42 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 배경음악 설정 (첫 입력 후 재생)
     this.bgMusic = this.sound.add('bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 3탄 보스 배경음악
+    this.boss3Music = this.sound.add('boss3_bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 6탄 보스 배경음악 (총잡이)
+    this.boss6Music = this.sound.add('boss6_bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 9탄 보스 배경음악 (녹턴)
+    this.boss9Music = this.sound.add('boss9_bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 12탄 보스 배경음악 (기어 타이탄)
+    this.boss12Music = this.sound.add('boss12_bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 15탄 보스 배경음악 (NEXUS)
+    this.boss15Music = this.sound.add('boss15_bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 18탄 보스 배경음악 (Multiverse Collapse)
+    this.boss18Music = this.sound.add('boss18_bgm', {
       loop: true,
       volume: 0.8
     });
@@ -4596,6 +4638,14 @@ export default class SnakeGame extends Phaser.Scene {
       y: Math.floor(this.rows / 2)
     };
 
+    // 12탄 보스 BGM으로 변경
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.bgMusic.stop();
+    }
+    if (this.boss12Music) {
+      this.boss12Music.play();
+    }
+
     // 톱니들은 이미 날아갔으므로 바로 보스 등장 인트로 시작
     this.showGearTitanAppearIntro();
   }
@@ -7315,6 +7365,14 @@ export default class SnakeGame extends Phaser.Scene {
               this.canChargeDash = false;
               this.cleanupChargeUI();
 
+              // 12탄 보스 BGM 정지 후 기본 BGM으로 원복
+              if (this.boss12Music && this.boss12Music.isPlaying) {
+                this.boss12Music.stop();
+              }
+              if (this.bgMusic && !this.bgMusic.isPlaying) {
+                this.bgMusic.play();
+              }
+
               // 상점 오픈 (뱀 점프 애니메이션 포함)
               this.stageClear();
             });
@@ -8418,20 +8476,33 @@ export default class SnakeGame extends Phaser.Scene {
       fill: '#ffaa00'
     }).setOrigin(0.5);
 
-    this.add.text(width / 2, height / 2 + 160, 'Press SPACE to Restart', {
+    this.add.text(width / 2, height / 2 + 160, 'Press SPACE to Title', {
       fontSize: '24px',
       fill: '#aaa'
     }).setOrigin(0.5);
 
-    // 스페이스바로 재시작
+    // 스페이스바로 타이틀 화면으로 이동
     this.input.keyboard.once('keydown-SPACE', () => {
-      this.scene.restart();
+      this.stopAllBGM();
+      this.scene.start('TitleScene');
     });
 
-    // 클릭으로도 재시작 가능
+    // 클릭으로도 타이틀 화면으로 이동
     this.input.once('pointerdown', () => {
-      this.scene.restart();
+      this.stopAllBGM();
+      this.scene.start('TitleScene');
     });
+  }
+
+  // 모든 BGM 정지 (타이틀 화면 이동 시 사용)
+  stopAllBGM() {
+    if (this.bgMusic && this.bgMusic.isPlaying) this.bgMusic.stop();
+    if (this.boss3Music && this.boss3Music.isPlaying) this.boss3Music.stop();
+    if (this.boss6Music && this.boss6Music.isPlaying) this.boss6Music.stop();
+    if (this.boss9Music && this.boss9Music.isPlaying) this.boss9Music.stop();
+    if (this.boss12Music && this.boss12Music.isPlaying) this.boss12Music.stop();
+    if (this.boss15Music && this.boss15Music.isPlaying) this.boss15Music.stop();
+    if (this.boss18Music && this.boss18Music.isPlaying) this.boss18Music.stop();
   }
 
   // ========== 부활 시스템 ==========
@@ -14394,6 +14465,14 @@ export default class SnakeGame extends Phaser.Scene {
       }
     });
 
+    // 3탄 보스 BGM으로 변경
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.bgMusic.stop();
+    }
+    if (this.boss3Music) {
+      this.boss3Music.play();
+    }
+
     // 독 효과 시작
     this.bossPhase = 'poisoned';
     this.applyPoison();
@@ -14835,6 +14914,14 @@ export default class SnakeGame extends Phaser.Scene {
               this.snakePoisoned = false;
               this.bossMode = false;
               this.bossPhase = 'none';
+
+              // 3탄 보스 BGM 정지 후 기본 BGM으로 원복
+              if (this.boss3Music && this.boss3Music.isPlaying) {
+                this.boss3Music.stop();
+              }
+              if (this.bgMusic && !this.bgMusic.isPlaying) {
+                this.bgMusic.play();
+              }
 
               // 기존 스테이지 클리어 플로우 (상점 열기)
               if (this.currentStage >= 3) {
@@ -16649,6 +16736,14 @@ export default class SnakeGame extends Phaser.Scene {
     // 가스존 일시 정지
     if (this.gasZoneTimer) {
       this.gasZoneTimer.paused = true;
+    }
+
+    // 15탄 보스 BGM으로 변경
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.bgMusic.stop();
+    }
+    if (this.boss15Music) {
+      this.boss15Music.play();
     }
 
     // 인트로 시퀀스 시작
@@ -19069,6 +19164,14 @@ export default class SnakeGame extends Phaser.Scene {
                   firewallText.destroy();
                   bonusText.destroy();
 
+                  // 15탄 보스 BGM 정지 후 기본 BGM으로 원복
+                  if (this.boss15Music && this.boss15Music.isPlaying) {
+                    this.boss15Music.stop();
+                  }
+                  if (this.bgMusic && !this.bgMusic.isPlaying) {
+                    this.bgMusic.play();
+                  }
+
                   this.cleanupNexus();
                   this.nexusMode = false;
                   this.stageClear();
@@ -20916,6 +21019,14 @@ export default class SnakeGame extends Phaser.Scene {
     this.isInvincible = false;
     this.lastDodgeDirection = 'up';
 
+    // 6탄 보스 BGM으로 변경
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.bgMusic.stop();
+    }
+    if (this.boss6Music) {
+      this.boss6Music.play();
+    }
+
     // 인트로 연출 시작
     this.showBulletBossIntro();
   }
@@ -22448,6 +22559,14 @@ export default class SnakeGame extends Phaser.Scene {
       });
 
       this.time.delayedCall(800, () => {
+        // 6탄 보스 BGM 정지 후 기본 BGM으로 원복
+        if (this.boss6Music && this.boss6Music.isPlaying) {
+          this.boss6Music.stop();
+        }
+        if (this.bgMusic && !this.bgMusic.isPlaying) {
+          this.bgMusic.play();
+        }
+
         this.cleanupBulletBoss();
 
         // 상점 오픈 또는 다음 스테이지
@@ -22665,6 +22784,14 @@ export default class SnakeGame extends Phaser.Scene {
     this.food = { x: -100, y: -100 };
 
     this.moveTimer.paused = true;
+
+    // 9탄 보스 BGM으로 변경
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.bgMusic.stop();
+    }
+    if (this.boss9Music) {
+      this.boss9Music.play();
+    }
 
     this.showFogBossIntro();
   }
@@ -27832,10 +27959,18 @@ export default class SnakeGame extends Phaser.Scene {
         } catch (e) {}
       });
 
-      // 6-4. 보스 모드 종료
+      // 6-4. 9탄 보스 BGM 정지 후 기본 BGM으로 원복
+      if (this.boss9Music && this.boss9Music.isPlaying) {
+        this.boss9Music.stop();
+      }
+      if (this.bgMusic && !this.bgMusic.isPlaying) {
+        this.bgMusic.play();
+      }
+
+      // 6-5. 보스 모드 종료
       this.cleanupFogBoss();
 
-      // 6-5. 콤보/실드 복원
+      // 6-6. 콤보/실드 복원
       this.combo = this.savedFogBossCombo;
       this.comboShieldCount = this.savedFogBossShieldCount;
       this.updateItemStatusUI();
@@ -30800,6 +30935,14 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.multiverseCollapseMode = true;
     this.moveTimer.paused = true;
+
+    // 18탄 보스 BGM으로 변경
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.bgMusic.stop();
+    }
+    if (this.boss18Music) {
+      this.boss18Music.play();
+    }
 
     // 🧪 테스트 모드: 바로 러너 전환 연출로 이동
     if (this.testRunnerTransition) {
@@ -34458,6 +34601,14 @@ export default class SnakeGame extends Phaser.Scene {
       victoryElements.forEach(el => {
         if (el && el.destroy) el.destroy();
       });
+
+      // 18탄 보스 BGM 정지 후 기본 BGM으로 원복
+      if (this.boss18Music && this.boss18Music.isPlaying) {
+        this.boss18Music.stop();
+      }
+      if (this.bgMusic && !this.bgMusic.isPlaying) {
+        this.bgMusic.play();
+      }
 
       // 러너 모드 시작
       this.startRunnerTransition();
