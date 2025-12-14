@@ -380,17 +380,30 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogStageStart = 7;
     this.fogTestForceEnable = false; // stage 7부터 적용
     this.fogVisibleTiles = 4.0;
-    this.fogBaseAlpha = 0.94;
+    this.fogBaseAlpha = 1.0;
     this.fogFlashAlpha = 0.32;
     this.fogFlashDuration = 300;
     this.fogRenderTexture = null;
     this.fogLightSprite = null;
     this.fogLightTextureKey = 'fog_light_mask';
     this.fogFlashEndTime = 0;
+    this.fogFlashUpdateTimer = null;
     this.fogLastRenderKey = null;
     this.fogEnabled = false;
+    this.fogTorchEnabled = true; // 횃불(빛) 활성화 여부
     this.fogIntroShown = false;
     this.fogIntroPlaying = false;
+
+    // Stage 8: 횃불 블랙아웃 (먹이 10개부터)
+    this.stage8BlackoutCycleStarted = false;
+    this.stage8BlackoutActive = false;
+    this.stage8BlackoutTimer = null;
+    this.stage8BlackoutEndTimer = null;
+    this.stage8BlackoutSnakeGraphics = null;
+
+    // ESC 일시정지
+    this.isEscPaused = false;
+    this.escPauseElements = [];
 
     // 먹이
     this.food = this.generateFood();
@@ -463,6 +476,12 @@ export default class SnakeGame extends Phaser.Scene {
       fill: '#00aaff',
       fontStyle: 'bold'
     }).setOrigin(0.5, 0).setDepth(2001);
+
+    // ESC 일시정지 안내 (상점 제외)
+    this.pauseHintText = this.add.text(14, height - this.bottomUIHeight + 20, 'ESC: PAUSE', {
+      fontSize: '11px',
+      fill: '#666666'
+    }).setOrigin(0, 0.5).setDepth(2001);
 
     // 먹이 텔레포트 시스템 (21번째부터)
     this.foodTeleportEnabled = false;
@@ -560,6 +579,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.testBulletBossStage = 6; // Stage 6에서 탄막 보스
     this.bulletBossWaveCount = 0; // 현재 웨이브
     this.bulletBossVulnerableTimer = null; // vulnerable 상태 타이머
+    this.bulletBossTeleportStrikeTimers = []; // 텔레포트 후 추가 공격 타이머들
+    this.bulletBossTeleportStrikeEffects = []; // (호환/정리용) 텔레포트 연출 요소들
 
     // 총알 시스템
     this.bullets = []; // [{x, y, dx, dy, speed, graphics, trail}, ...]
@@ -798,6 +819,7 @@ export default class SnakeGame extends Phaser.Scene {
       if (this.gameOver) return;
       if (this.shopOpen || this.loanUIOpen) return;
       if (this.bossInputBlocked) return;
+      if (this.isEscPaused) return;
       // 튜토리얼 중에는 닷지 비활성화 (스킵만 됨)
       if (this.tutorialOpen) return;
 
@@ -814,6 +836,25 @@ export default class SnakeGame extends Phaser.Scene {
       if (this.fogBossMode && this.fogBossPhase === 'shadow') {
         this.handleDodge();
       }
+    });
+
+    // ESC 키 (인게임 일시정지 - 상점/대출 UI 제외)
+    this.input.keyboard.on('keydown-ESC', () => {
+      // 이미 일시정지 상태면 언제든 복귀
+      if (this.isEscPaused) {
+        this.resumeFromEscPause();
+        return;
+      }
+
+      if (this.devModeEnabled) return;
+      if (this.gameOver || this.isReviving) return;
+      if (this.shopOpen || this.loanUIOpen) return;
+      if (this.bossInputBlocked || this.fogBossInputBlocked) return;
+      if (this.tutorialOpen) return;
+      if (this.fogIntroPlaying) return;
+      if (this.isStageClearingAnimation) return;
+
+      this.pauseFromEsc();
     });
 
     // NEXUS v2: 대시 시스템 제거됨 - 바이너리 시퀀스로 대체
@@ -913,6 +954,7 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 입력 큐에 방향 추가
   addDirectionToQueue(newDirection) {
+    if (this.isEscPaused) return;
     // 큐가 비어있으면 현재 방향 기준으로 체크
     if (this.inputQueue.length === 0) {
       // 현재 방향과 반대 방향이면 무시
@@ -1789,6 +1831,7 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       this.foodCount++;
+      this.startStage8BlackoutCycleIfNeeded();
 
       // World 3 (Stage 10-12): 톱니 생성 (매 먹이마다 1개씩, 최대 5개)
       if (shouldHaveSaws(this.currentStage) && !this.bossMode) {
@@ -7771,6 +7814,7 @@ export default class SnakeGame extends Phaser.Scene {
     }
 
     this.updateFogOfWar();
+    this.updateStage8BlackoutSnakeOverlay();
   }
 
   shouldUseFog() {
@@ -7831,24 +7875,49 @@ export default class SnakeGame extends Phaser.Scene {
 
   triggerFogFlash() {
     if (!this.isFogOfWarActive()) return;
+    if (!this.fogTorchEnabled) return;
     this.fogFlashEndTime = this.time.now + this.fogFlashDuration;
+
+    // 이동이 멈춰있는 상황(인트로/연출)에서도 플래시 종료 후 다시 어두워지도록 보정
+    if (this.fogFlashUpdateTimer) {
+      if (this.fogFlashUpdateTimer.destroy) this.fogFlashUpdateTimer.destroy();
+      else if (this.fogFlashUpdateTimer.remove) this.fogFlashUpdateTimer.remove();
+      this.fogFlashUpdateTimer = null;
+    }
+
+    this.fogFlashUpdateTimer = this.time.delayedCall(this.fogFlashDuration + 30, () => {
+      this.fogFlashUpdateTimer = null;
+      if (!this.isFogOfWarActive()) return;
+      if (!this.fogTorchEnabled) return;
+      this.fogLastRenderKey = null;
+      this.updateFogOfWar();
+    });
   }
 
   startFogIntroIfNeeded() {
-    if (this.fogIntroShown || this.fogIntroPlaying || !this.shouldUseFog()) {
+    if (this.fogIntroPlaying) {
+      return;
+    }
+
+    if (this.fogIntroShown || !this.shouldUseFog()) {
       this.fogEnabled = this.shouldUseFog();
+      this.fogTorchEnabled = this.fogEnabled;
       if (this.fogEnabled) {
         this.draw(); // 뱀이 안보이는 버그 수정 - fog 활성화 후 다시 그리기
       }
       return;
     }
 
-    this.fogEnabled = false;
+    // 인트로 중에는 화면이 완전 어둡게 유지되도록, 안개(검정) 레이어를 먼저 깔아둔다
+    this.fogEnabled = true;
+    this.fogTorchEnabled = false;
     this.fogIntroPlaying = true;
     if (this.moveTimer) {
       this.moveTimer.paused = true;
     }
     this.resetFogOfWar();
+    this.ensureFogAssets();
+    this.updateFogOfWar();
 
     this.destroyAllSaws();
 
@@ -7951,8 +8020,8 @@ export default class SnakeGame extends Phaser.Scene {
             } else {
               // 마지막 점화 성공
               playSpark(1.2);
+              this.fogTorchEnabled = true;
               this.triggerFogFlash();
-              this.fogEnabled = true;
               this.fogLastRenderKey = null;
               this.updateFogOfWar();
               this.tweens.add({
@@ -8012,10 +8081,11 @@ export default class SnakeGame extends Phaser.Scene {
     const { width, height } = this.cameras.main;
     const fogHeight = Math.max(0, height - this.gameAreaY - this.bottomUIHeight);
 
+    const torchEnabled = !!this.fogTorchEnabled;
     let alpha = this.fogBaseAlpha;
     let scale = 1;
 
-    if (this.fogFlashEndTime > this.time.now) {
+    if (torchEnabled && this.fogFlashEndTime > this.time.now) {
       const remaining = this.fogFlashEndTime - this.time.now;
       const t = 1 - remaining / this.fogFlashDuration;
       const eased = Phaser.Math.Easing.Quadratic.InOut(Phaser.Math.Clamp(t, 0, 1));
@@ -8023,7 +8093,12 @@ export default class SnakeGame extends Phaser.Scene {
       scale = Phaser.Math.Linear(1.25, 1, eased);
     }
 
-    const renderKey = `${head.x},${head.y},${alpha.toFixed(3)},${scale.toFixed(2)}`;
+    if (!torchEnabled) {
+      alpha = 1;
+      scale = 1;
+    }
+
+    const renderKey = `${head.x},${head.y},${torchEnabled ? 1 : 0},${alpha.toFixed(3)},${scale.toFixed(2)}`;
     if (this.fogLastRenderKey === renderKey) {
       this.fogRenderTexture.setVisible(true);
       return;
@@ -8033,13 +8108,227 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogRenderTexture.clear();
     this.fogRenderTexture.fill(0x000000, alpha, 0, this.gameAreaY, width, fogHeight);
 
-    this.fogLightSprite.setScale(scale);
-    this.fogRenderTexture.erase(this.fogLightSprite, headPixelX, headPixelY);
+    if (torchEnabled) {
+      this.fogLightSprite.setScale(scale);
+      this.fogRenderTexture.erase(this.fogLightSprite, headPixelX, headPixelY);
+    }
     this.fogRenderTexture.setVisible(true);
+  }
+
+  // ===== Stage 8: Torch Blackout =====
+  startStage8BlackoutCycleIfNeeded() {
+    if (this.currentStage !== 8) return;
+    if (!this.shouldUseFog()) return;
+    if (this.foodCount < 10) return;
+    if (this.stage8BlackoutCycleStarted) return;
+
+    this.stage8BlackoutCycleStarted = true;
+    this.scheduleNextStage8Blackout();
+  }
+
+  stopStage8BlackoutCycle() {
+    this.stage8BlackoutCycleStarted = false;
+    this.stage8BlackoutActive = false;
+
+    if (this.stage8BlackoutTimer) {
+      if (this.stage8BlackoutTimer.destroy) this.stage8BlackoutTimer.destroy();
+      else if (this.stage8BlackoutTimer.remove) this.stage8BlackoutTimer.remove();
+      this.stage8BlackoutTimer = null;
+    }
+
+    if (this.stage8BlackoutEndTimer) {
+      if (this.stage8BlackoutEndTimer.destroy) this.stage8BlackoutEndTimer.destroy();
+      else if (this.stage8BlackoutEndTimer.remove) this.stage8BlackoutEndTimer.remove();
+      this.stage8BlackoutEndTimer = null;
+    }
+
+    if (this.stage8BlackoutSnakeGraphics) {
+      this.stage8BlackoutSnakeGraphics.clear();
+      this.stage8BlackoutSnakeGraphics.setVisible(false);
+    }
+
+    // 다음 스테이지/재시작을 위해 기본 복구
+    this.fogTorchEnabled = true;
+    this.fogLastRenderKey = null;
+  }
+
+  scheduleNextStage8Blackout() {
+    if (!this.stage8BlackoutCycleStarted) return;
+    if (this.currentStage !== 8) return;
+    if (this.gameOver) return;
+    if (this.stage8BlackoutActive) return;
+
+    const delay = Phaser.Math.Between(4000, 7000);
+    this.stage8BlackoutTimer = this.time.delayedCall(delay, () => {
+      this.beginStage8Blackout();
+    });
+  }
+
+  beginStage8Blackout() {
+    if (!this.stage8BlackoutCycleStarted) return;
+    if (this.currentStage !== 8) return;
+    if (this.gameOver) return;
+    if (this.stage8BlackoutActive) return;
+    if (!this.shouldUseFog()) return;
+
+    this.stage8BlackoutActive = true;
+    this.fogTorchEnabled = false;
+    this.fogFlashEndTime = 0;
+    this.fogLastRenderKey = null;
+    this.updateFogOfWar();
+    this.updateStage8BlackoutSnakeOverlay();
+
+    const duration = Phaser.Math.Between(2200, 3400);
+    this.stage8BlackoutEndTimer = this.time.delayedCall(duration, () => {
+      this.endStage8Blackout();
+    });
+  }
+
+  endStage8Blackout() {
+    if (!this.stage8BlackoutActive) return;
+    if (this.currentStage !== 8) return;
+    if (this.gameOver) return;
+
+    this.stage8BlackoutActive = false;
+    this.fogTorchEnabled = true;
+    this.fogLastRenderKey = null;
+    this.playStage8TorchReigniteEffect();
+    this.updateFogOfWar();
+    this.updateStage8BlackoutSnakeOverlay();
+
+    this.scheduleNextStage8Blackout();
+  }
+
+  playStage8TorchReigniteEffect() {
+    const head = this.snake && this.snake[0];
+    if (!head) return;
+
+    // 스파크 + 살짝 번쩍임 (게임은 멈추지 않음)
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    for (let i = 0; i < 6; i++) {
+      const jitter = this.gridSize * 0.25;
+      const spark = this.add.circle(
+        headX + Phaser.Math.FloatBetween(-jitter, jitter),
+        headY + Phaser.Math.FloatBetween(-jitter, jitter),
+        this.gridSize * 0.12,
+        0xffcc55,
+        1
+      ).setDepth(1305);
+      spark.setStrokeStyle(2, 0xff8800, 0.9);
+
+      this.tweens.add({
+        targets: spark,
+        scale: 1.6,
+        alpha: 0,
+        duration: 180 + i * 20,
+        ease: 'Cubic.easeOut',
+        onComplete: () => spark.destroy()
+      });
+    }
+
+    this.triggerFogFlash();
+  }
+
+  updateStage8BlackoutSnakeOverlay() {
+    const shouldShow = this.stage8BlackoutActive && this.currentStage === 8 && this.shouldUseFog();
+
+    if (!shouldShow) {
+      if (this.stage8BlackoutSnakeGraphics) {
+        this.stage8BlackoutSnakeGraphics.clear();
+        this.stage8BlackoutSnakeGraphics.setVisible(false);
+      }
+      return;
+    }
+
+    if (!this.stage8BlackoutSnakeGraphics) {
+      this.stage8BlackoutSnakeGraphics = this.add.graphics();
+      this.stage8BlackoutSnakeGraphics.setDepth(1301); // 안개(1200) 위, UI(2000) 아래
+    }
+
+    this.stage8BlackoutSnakeGraphics.setVisible(true);
+    this.stage8BlackoutSnakeGraphics.clear();
+
+    if (!this.snake || this.snake.length === 0) return;
+
+    this.snake.forEach((segment, index) => {
+      const color = index === 0 ? 0x666666 : 0x444444;
+      this.stage8BlackoutSnakeGraphics.fillStyle(color, 0.95);
+      this.stage8BlackoutSnakeGraphics.fillRect(
+        segment.x * this.gridSize + 1,
+        segment.y * this.gridSize + 1 + this.gameAreaY,
+        this.gridSize - 2,
+        this.gridSize - 2
+      );
+    });
+  }
+
+  // ===== ESC Pause =====
+  pauseFromEsc() {
+    if (this.isEscPaused) return;
+    this.isEscPaused = true;
+
+    const { width, height } = this.cameras.main;
+
+    const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.65)
+      .setOrigin(0, 0)
+      .setDepth(9000)
+      .setScrollFactor(0);
+
+    const title = this.add.text(width / 2, height / 2 - 40, 'PAUSED', {
+      fontSize: '56px',
+      fill: '#ffffff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 6
+    }).setOrigin(0.5).setDepth(9001).setScrollFactor(0);
+
+    const hint = this.add.text(width / 2, height / 2 + 20, 'Press ESC to resume', {
+      fontSize: '16px',
+      fill: '#cccccc'
+    }).setOrigin(0.5).setDepth(9001).setScrollFactor(0);
+
+    this.escPauseElements = [overlay, title, hint];
+
+    if (this.pauseHintText && this.pauseHintText.active) {
+      this.pauseHintText.setVisible(false);
+    }
+
+    // 타이머/트윈 일시정지
+    this.tweens.pauseAll();
+    this.time.paused = true;
+  }
+
+  resumeFromEscPause() {
+    if (!this.isEscPaused) return;
+
+    // 먼저 타이머/트윈 재개
+    this.time.paused = false;
+    this.tweens.resumeAll();
+
+    this.isEscPaused = false;
+
+    if (this.escPauseElements && this.escPauseElements.length > 0) {
+      for (const el of this.escPauseElements) {
+        if (el && el.active) el.destroy();
+      }
+    }
+    this.escPauseElements = [];
+
+    if (this.pauseHintText && this.pauseHintText.active) {
+      this.pauseHintText.setVisible(true);
+    }
+
+    // 즉시 화면 갱신 (안개/오버레이 포함)
+    this.draw();
   }
 
   endGame() {
     if (this.gameOver) return; // 중복 호출 방지
+
+    // Stage 8 블랙아웃 중이면 UI 방해 방지용 정리
+    this.stopStage8BlackoutCycle();
 
     // 부활 가능 여부 먼저 체크
     if (this.canRevive()) {
@@ -8150,6 +8439,8 @@ export default class SnakeGame extends Phaser.Scene {
   // 부활 성공 애니메이션
   showReviveSequence() {
     this.isReviving = true;
+    // Fog of War 레이어가 부활 UI를 가리지 않도록 즉시 숨김 (Stage 7-9)
+    this.resetFogOfWar();
     const { width, height } = this.cameras.main;
     const centerX = width / 2;
     const centerY = height / 2;
@@ -8316,6 +8607,8 @@ export default class SnakeGame extends Phaser.Scene {
   // 부활 실패 애니메이션 (빠른 버전)
   showReviveFailedSequence() {
     this.isReviving = true;
+    // Fog of War 레이어가 게임오버/부활 UI를 가리지 않도록 즉시 숨김 (Stage 7-9)
+    this.resetFogOfWar();
     const { width, height } = this.cameras.main;
     const centerX = width / 2;
     const centerY = height / 2;
@@ -8425,8 +8718,11 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
-  // 스테이지 재시작 (부활 시)
+    // 스테이지 재시작 (부활 시)
   restartCurrentStage() {
+    // Stage 8 블랙아웃 정리 (부활 시)
+    this.stopStage8BlackoutCycle();
+
     // World 4 (Stage 13-15): 자기장 리셋 (부활 시 처음부터 다시 시작)
     if (shouldHaveGasZone(this.currentStage)) {
       this.stopGasZone();
@@ -8438,6 +8734,25 @@ export default class SnakeGame extends Phaser.Scene {
     // 탄막보스 스테이지: 기존 보스 정리
     if (this.isBulletBossStage()) {
       this.cleanupBulletBoss();
+    }
+
+    // 독개구리 보스 스테이지: 기존 보스/독 상태 정리
+    if (this.isPoisonFrogBossStage && this.isPoisonFrogBossStage()) {
+      if (this.bossElement) {
+        this.bossElement.destroy();
+        this.bossElement = null;
+      }
+      if (this.bossHitText) {
+        this.tweens.killTweensOf(this.bossHitText);
+        this.bossHitText.destroy();
+        this.bossHitText = null;
+      }
+      this.bossHitCount = 0;
+      this.bossInputBlocked = false;
+      this.bossIntroMoveCount = undefined;
+      this.poisonGrowthActive = false;
+      this.poisonGrowthData = null;
+      this.snakePoisoned = false;
     }
 
     // 게임 상태 리셋 (스테이지는 유지)
@@ -8464,13 +8779,25 @@ export default class SnakeGame extends Phaser.Scene {
     this.currentFoodTeleportCount = 0;
     this.nextTeleportStep = 0;
 
-    // 탄막보스가 아닐 때만 먹이 생성 (보스전에서는 먹이 숨김)
-    if (!this.isBulletBossStage()) {
-      this.generateFood();
+    // 먹이/보스 오브젝트 리셋
+    if (this.isBulletBossStage()) {
+      // 탄막보스: 먹이 없음
+      this.food = { x: -100, y: -100 };
+    } else if (this.isPoisonFrogBossStage && this.isPoisonFrogBossStage()) {
+      // 독개구리: 인트로 스킵 → 함정(독)부터 시작
+      this.isBossStage = true;
+      this.bossMode = true;
+      this.bossPhase = 'trap';
+      const spawnPos = this.getPoisonFrogSpawnPosition ? this.getPoisonFrogSpawnPosition() : { x: this.cols - 9, y: 15 };
+      this.drawBoss(spawnPos.x, spawnPos.y);
+    } else {
+      // 일반 스테이지
+      this.food = this.generateFood();
     }
 
     // UI 업데이트
     this.scoreText.setText('0');
+    this.foodCountText.setText('0');
     this.updateMoneyDisplay();
 
     // 그래픽 다시 그리기
@@ -8930,6 +9257,7 @@ export default class SnakeGame extends Phaser.Scene {
     // 스피드 부스트 궤도 정리 (새로 생성하기 전에)
     this.cleanupSpeedBoostOrbitals();
     this.resetFogOfWar();
+    this.stopStage8BlackoutCycle();
 
     // Meta Universe 정리
     if (this.metaUniverseMode) {
@@ -9121,6 +9449,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.cleanupSpeedBoostOrbitals();
 
     this.shopOpen = true;
+    if (this.pauseHintText && this.pauseHintText.active) {
+      this.pauseHintText.setVisible(false);
+    }
     this.isPurchaseConfirmOpen = false;
     this.purchaseConfirmSelection = 'yes';
     this.pendingPurchaseIndex = null;
@@ -11574,6 +11905,9 @@ export default class SnakeGame extends Phaser.Scene {
   closeShop() {
     this.shopKeyboardEnabled = false;
     this.shopOpen = false;
+    if (this.pauseHintText && this.pauseHintText.active) {
+      this.pauseHintText.setVisible(true);
+    }
     this.lastShopFocusKey = null;
     this.closePurchaseConfirmOverlay(true);
 
@@ -13775,29 +14109,9 @@ export default class SnakeGame extends Phaser.Scene {
   showBossAppear() {
     const { width, height } = this.cameras.main;
 
-    // 보스 위치: 뱀과 같은 높이, 우측 벽에서 9칸 떨어진 위치
-    let bossX = this.cols - 9;
-    let bossY = 15; // 뱀 시작 위치와 동일한 y
-
-    // 데드존과 겹치면 옆으로 이동
-    const isOnDeadZone = this.deadZones.some(dz => dz.x === bossX && dz.y === bossY);
-    if (isOnDeadZone) {
-      const offsets = [
-        { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }
-      ];
-      for (const offset of offsets) {
-        const newX = bossX + offset.x;
-        const newY = bossY + offset.y;
-        if (newX >= 0 && newX < this.cols && newY >= 0 && newY < this.rows) {
-          const alsoOnDeadZone = this.deadZones.some(dz => dz.x === newX && dz.y === newY);
-          if (!alsoOnDeadZone) {
-            bossX = newX;
-            bossY = newY;
-            break;
-          }
-        }
-      }
-    }
+    const spawn = this.getPoisonFrogSpawnPosition();
+    let bossX = spawn.x;
+    let bossY = spawn.y;
 
     this.bossPosition = { x: bossX, y: bossY };
 
@@ -20185,6 +20499,22 @@ export default class SnakeGame extends Phaser.Scene {
     this.showBulletFireEffect(bossX, bossY);
   }
 
+  fireRadialBulletsFromPosition(pos, count = 8, speed = 3, type = 'plasma', angleOffset = 0) {
+    if (!pos) return;
+
+    const bossX = pos.x;
+    const bossY = pos.y;
+
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + angleOffset;
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+      this.createBullet(bossX, bossY, dx, dy, speed, type);
+    }
+
+    this.showBulletFireEffect(bossX, bossY);
+  }
+
   fireSpiralBullets(bulletCount = 16, rotationOffset = 0, speed = 2.5, type = 'spiral') {
     if (!this.bulletBossPosition) return;
 
@@ -20428,6 +20758,12 @@ export default class SnakeGame extends Phaser.Scene {
 
   destroyBullet(bullet) {
     if (bullet.graphics) {
+      // 무한 반복 트윈(글로우/펄스 등) 정리 - 파괴 후 TweenData 오류 방지
+      if (bullet.graphics.list && bullet.graphics.list.length > 0) {
+        this.tweens.killTweensOf(bullet.graphics.list);
+      }
+      this.tweens.killTweensOf(bullet.graphics);
+
       // === 타입별 폭발 색상 ===
       const explosionColors = {
         plasma: { flash: 0xff0066, core: 0xffff00, ring: 0xff0066, sparks: [0xff0066, 0xff00ff, 0xffff00, 0xffffff] },
@@ -20517,6 +20853,10 @@ export default class SnakeGame extends Phaser.Scene {
   clearAllBullets() {
     for (const bullet of this.bullets) {
       if (bullet.graphics) {
+        if (bullet.graphics.list && bullet.graphics.list.length > 0) {
+          this.tweens.killTweensOf(bullet.graphics.list);
+        }
+        this.tweens.killTweensOf(bullet.graphics);
         bullet.graphics.destroy();
       }
     }
@@ -20712,16 +21052,9 @@ export default class SnakeGame extends Phaser.Scene {
   showBulletBossAppear(darkOverlay) {
     const { width, height } = this.cameras.main;
 
-    // 보스 위치 결정 (랜덤)
-    let bossX, bossY;
-    let attempts = 0;
-    do {
-      bossX = 5 + Math.floor(Math.random() * (this.cols - 10));
-      bossY = 5 + Math.floor(Math.random() * (this.rows - 10));
-      attempts++;
-    } while (this.isPositionOccupied(bossX, bossY) && attempts < 50);
-
-    this.bulletBossPosition = { x: bossX, y: bossY };
+    // 보스 최초 위치: Stage 3 독개구리 독성 위치와 동일
+    const spawnPos = this.getPoisonFrogSpawnPosition ? this.getPoisonFrogSpawnPosition() : { x: this.cols - 9, y: 15 };
+    this.bulletBossPosition = { x: spawnPos.x, y: spawnPos.y };
 
     // 플래시 효과
     const flash = this.add.rectangle(0, 0, width, height, 0xff00ff, 0)
@@ -21449,6 +21782,7 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.bulletBossPhase !== 'vulnerable') return;
 
     this.bulletBossHitCount++;
+    this.bulletBossPhase = 'teleporting';
 
     // 타이머 취소
     if (this.bulletBossVulnerableTimer) {
@@ -21472,17 +21806,17 @@ export default class SnakeGame extends Phaser.Scene {
       const hitText = `HIT ${this.bulletBossHitCount}/4!`;
       this.showHitText(hitText);
 
-      // 보스 텔레포트 후 잠시 텀을 두고 다음 웨이브
-      this.time.delayedCall(1000, () => {
-        this.teleportBulletBoss();
-
-        // 새 위치에서 느낌표 경고 후 공격 시작
-        this.time.delayedCall(400, () => {
-          this.showBossWarningBeforeAttack(() => {
-            this.bulletBossPhase = 'shooting';
-            this.startBulletWave();
+      // HIT 후 즉시 사라졌다가 랜덤 위치로 생성
+      this.teleportBulletBoss({
+        onComplete: () => {
+          // 새 위치에서 느낌표 경고 후 공격 시작
+          this.time.delayedCall(400, () => {
+            this.showBossWarningBeforeAttack(() => {
+              this.bulletBossPhase = 'shooting';
+              this.startBulletWave();
+            });
           });
-        });
+        }
       });
     }
   }
@@ -21769,7 +22103,10 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
-  teleportBulletBoss() {
+  teleportBulletBoss(options = {}) {
+    const onComplete = typeof options.onComplete === 'function' ? options.onComplete : null;
+    const originPos = this.bulletBossPosition ? { x: this.bulletBossPosition.x, y: this.bulletBossPosition.y } : null;
+
     // 새 위치 결정
     let newX, newY;
     let attempts = 0;
@@ -21778,8 +22115,20 @@ export default class SnakeGame extends Phaser.Scene {
       newY = 5 + Math.floor(Math.random() * (this.rows - 10));
       attempts++;
     } while ((this.isPositionOccupied(newX, newY) ||
-             (newX === this.bulletBossPosition.x && newY === this.bulletBossPosition.y)) &&
+             (originPos && newX === originPos.x && newY === originPos.y)) &&
              attempts < 50);
+
+    const finalizeTeleport = () => {
+      this.bulletBossPosition = { x: newX, y: newY };
+      this.drawBulletBoss();
+
+      // 사라진 위치에서 1초 후 기존 보스 공격 1회 (난이도 업)
+      if (originPos) {
+        this.scheduleBulletBossTeleportStrike(originPos);
+      }
+
+      if (onComplete) onComplete();
+    };
 
     // 사라지는 이펙트
     if (this.bulletBossElement) {
@@ -21790,11 +22139,38 @@ export default class SnakeGame extends Phaser.Scene {
         duration: 200,
         onComplete: () => {
           this.bulletBossElement.destroy();
-          this.bulletBossPosition = { x: newX, y: newY };
-          this.drawBulletBoss();
+          this.bulletBossElement = null;
+          finalizeTeleport();
         }
       });
+    } else {
+      finalizeTeleport();
     }
+  }
+
+  scheduleBulletBossTeleportStrike(originPos) {
+    if (!originPos) return;
+    if (!this.bulletBossMode || this.bulletBossPhase === 'victory') return;
+
+    const timer = this.time.delayedCall(1000, () => {
+      if (!this.bulletBossMode || this.bulletBossPhase === 'victory') return;
+      if (this.gameOver) return;
+      this.spawnBulletBossTeleportStrike(originPos);
+    });
+
+    if (!this.bulletBossTeleportStrikeTimers) this.bulletBossTeleportStrikeTimers = [];
+    this.bulletBossTeleportStrikeTimers.push(timer);
+  }
+
+  spawnBulletBossTeleportStrike(originPos) {
+    if (!originPos) return;
+    if (!this.bulletBossMode || this.bulletBossPhase === 'victory') return;
+    if (this.gameOver) return;
+
+    // 기존 보스가 쏘던 패턴을 "사라진 위치"에서 1회 더 발사
+    const wave = Math.max(1, this.bulletBossWaveCount || 1);
+    const baseSpeed = 3.5 + wave * 0.3;
+    this.fireRadialBulletsFromPosition(originPos, 12, baseSpeed, 'plasma');
   }
 
   // ========== 승리 처리 ==========
@@ -22089,6 +22465,26 @@ export default class SnakeGame extends Phaser.Scene {
     this.bulletBossPhase = 'none';
     this.bulletBossPosition = null;
 
+    // 텔레포트 미사일 타이머 정리
+    if (this.bulletBossTeleportStrikeTimers && this.bulletBossTeleportStrikeTimers.length > 0) {
+      for (const t of this.bulletBossTeleportStrikeTimers) {
+        if (!t) continue;
+        if (t.destroy) t.destroy();
+        else if (t.remove) t.remove();
+      }
+      this.bulletBossTeleportStrikeTimers = [];
+    }
+
+    // 텔레포트 미사일 연출 요소 정리
+    if (this.bulletBossTeleportStrikeEffects && this.bulletBossTeleportStrikeEffects.length > 0) {
+      for (const el of this.bulletBossTeleportStrikeEffects) {
+        if (!el || !el.active) continue;
+        this.tweens.killTweensOf(el);
+        el.destroy();
+      }
+      this.bulletBossTeleportStrikeEffects = [];
+    }
+
     // 총알 정리
     this.clearAllBullets();
     this.stopBulletUpdateTimer();
@@ -22158,6 +22554,71 @@ export default class SnakeGame extends Phaser.Scene {
   // 안개 보스 스테이지 체크
   isFogBossStage() {
     return this.currentStage === this.testFogBossStage;
+  }
+
+  // 독개구리 보스 스테이지 체크 (Stage 3)
+  isPoisonFrogBossStage() {
+    const stage = this.currentStage;
+    if (this.isBulletBossStage()) return false;
+    if (this.isFogBossStage()) return false;
+    if (this.isGearTitanStage()) return false;
+    if (isMagnetarStage(stage)) return false;
+    if (isMultiverseCollapseStage(stage)) return false;
+
+    return stage === this.testBossStage ||
+      (stage > this.testBossStage && stage % this.bossStageInterval === 0);
+  }
+
+  // 독개구리 보스 등장 위치 (Stage 3 기준)
+  getPoisonFrogSpawnPosition() {
+    let bossX = this.cols - 9;
+    let bossY = 15;
+
+    bossX = Phaser.Math.Clamp(bossX, 0, Math.max(0, this.cols - 1));
+    bossY = Phaser.Math.Clamp(bossY, 0, Math.max(0, this.rows - 1));
+
+    // 데드존과 겹치면 인접 타일로 이동
+    const isOnDeadZone = this.deadZones.some(dz => dz.x === bossX && dz.y === bossY);
+    if (isOnDeadZone) {
+      const offsets = [
+        { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }
+      ];
+      for (const offset of offsets) {
+        const newX = bossX + offset.x;
+        const newY = bossY + offset.y;
+        if (newX >= 0 && newX < this.cols && newY >= 0 && newY < this.rows) {
+          const alsoOnDeadZone = this.deadZones.some(dz => dz.x === newX && dz.y === newY);
+          if (!alsoOnDeadZone) {
+            bossX = newX;
+            bossY = newY;
+            break;
+          }
+        }
+      }
+    }
+
+    // 뱀/데드존과 겹치면 주변에서 안전한 타일 탐색
+    if (this.isPositionOccupied && this.isPositionOccupied(bossX, bossY)) {
+      let found = false;
+      const maxRadius = 6;
+      for (let r = 1; r <= maxRadius && !found; r++) {
+        for (let dx = -r; dx <= r && !found; dx++) {
+          for (let dy = -r; dy <= r && !found; dy++) {
+            if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+            const nx = bossX + dx;
+            const ny = bossY + dy;
+            if (nx < 0 || nx >= this.cols || ny < 0 || ny >= this.rows) continue;
+            if (!this.isPositionOccupied(nx, ny)) {
+              bossX = nx;
+              bossY = ny;
+              found = true;
+            }
+          }
+        }
+      }
+    }
+
+    return { x: bossX, y: bossY };
   }
 
   // ========== 안개 보스 (Nocturn) 시스템 ==========
@@ -33465,6 +33926,7 @@ export default class SnakeGame extends Phaser.Scene {
    * 융합 입력 처리
    */
   handleFusionInput(headIndex, direction) {
+    if (this.isEscPaused) return;
     if (!this.twoHeadedMode || this.multiverseCollapsePhase !== 'becomeone') return;
 
     if (headIndex === 1) {
@@ -35100,6 +35562,7 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   update() {
+    if (this.isEscPaused) return;
     // 타이머 이벤트가 자동으로 moveSnake를 호출하므로
     // update에서는 아무것도 하지 않아도 됨
 
@@ -35109,6 +35572,3 @@ export default class SnakeGame extends Phaser.Scene {
     }
   }
 }
-
-
-
