@@ -956,6 +956,191 @@ export default class SnakeGame extends Phaser.Scene {
         this.startFogBoss();
       });
     }
+
+    // 스테이지 1 튜토리얼 표시
+    if (this.currentStage === 1) {
+      this.showInGameTutorial();
+    }
+  }
+
+  showInGameTutorial() {
+    // 이미 튜토리얼을 본 적이 있으면 스킵
+    if (localStorage.getItem('snake2026_tutorial_shown')) {
+      return;
+    }
+
+    // 튜토리얼 본 것으로 표시
+    localStorage.setItem('snake2026_tutorial_shown', 'true');
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = this.gameAreaY + (height - this.gameAreaY) / 2;
+
+    // 튜토리얼 요소들 저장
+    this.tutorialElements = [];
+
+    // 약간의 딜레이 후 튜토리얼 표시
+    this.time.delayedCall(400, () => {
+      // 컨테이너 생성
+      const container = this.add.container(0, 0).setDepth(8000);
+      this.tutorialElements.push(container);
+
+      // 패널 설정 (높이 증가)
+      const panelW = 320;
+      const panelH = 220;
+      const panelX = centerX;
+      const panelY = centerY;
+
+      // 외곽 글로우
+      const outerGlow = this.add.graphics();
+      outerGlow.fillStyle(0x00ff00, 0.04);
+      outerGlow.fillRoundedRect(panelX - panelW / 2 - 15, panelY - panelH / 2 - 15, panelW + 30, panelH + 30, 16);
+      outerGlow.setBlendMode(Phaser.BlendModes.ADD);
+      container.add(outerGlow);
+
+      // 메인 패널
+      const panelBg = this.add.graphics();
+      panelBg.fillStyle(0x0a0f14, 0.92);
+      panelBg.fillRoundedRect(panelX - panelW / 2, panelY - panelH / 2, panelW, panelH, 10);
+      panelBg.lineStyle(2, 0x00ff88, 0.9);
+      panelBg.strokeRoundedRect(panelX - panelW / 2, panelY - panelH / 2, panelW, panelH, 10);
+      container.add(panelBg);
+
+      // 코너 장식
+      const corners = this.add.graphics();
+      corners.lineStyle(2, 0x00ffff, 0.8);
+      const cs = 12;
+      const left = panelX - panelW / 2;
+      const right = panelX + panelW / 2;
+      const top = panelY - panelH / 2;
+      const bottom = panelY + panelH / 2;
+      corners.lineBetween(left, top + cs, left, top);
+      corners.lineBetween(left, top, left + cs, top);
+      corners.lineBetween(right - cs, top, right, top);
+      corners.lineBetween(right, top, right, top + cs);
+      corners.lineBetween(left, bottom - cs, left, bottom);
+      corners.lineBetween(left, bottom, left + cs, bottom);
+      corners.lineBetween(right - cs, bottom, right, bottom);
+      corners.lineBetween(right, bottom - cs, right, bottom);
+      container.add(corners);
+
+      // 헤더
+      const header = this.add.text(panelX, panelY - panelH / 2 + 28, 'HOW TO PLAY', {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        fontStyle: 'bold',
+        color: '#00ff88',
+        letterSpacing: 3
+      }).setOrigin(0.5);
+      container.add(header);
+
+      // 설명 텍스트 (위로 이동)
+      const desc = this.add.text(panelX, panelY - 50, 'Use arrow keys to move', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#ffffff'
+      }).setOrigin(0.5);
+      container.add(desc);
+
+      // 키캡 (아래로 이동)
+      const keyW = 36;
+      const keyH = 32;
+      const gap = 4;
+      const keysY = panelY + 20;
+
+      const makeKey = (x, y, direction) => {
+        const keyBg = this.add.graphics();
+        keyBg.fillStyle(0x1a2a1a, 1);
+        keyBg.fillRoundedRect(x - keyW / 2, y - keyH / 2 + 2, keyW, keyH, 4);
+        keyBg.fillStyle(0x0d1a0d, 1);
+        keyBg.fillRoundedRect(x - keyW / 2, y - keyH / 2, keyW, keyH - 2, 4);
+        keyBg.lineStyle(1, 0x00ff88, 0.7);
+        keyBg.strokeRoundedRect(x - keyW / 2, y - keyH / 2, keyW, keyH - 2, 4);
+        container.add(keyBg);
+
+        const arrow = this.add.graphics();
+        arrow.fillStyle(0x00ffff, 1);
+        const size = 8;
+        const cx = x, cy = y - 1;
+        if (direction === 'up') arrow.fillTriangle(cx, cy - size, cx - size, cy + size / 2, cx + size, cy + size / 2);
+        else if (direction === 'down') arrow.fillTriangle(cx, cy + size, cx - size, cy - size / 2, cx + size, cy - size / 2);
+        else if (direction === 'left') arrow.fillTriangle(cx - size, cy, cx + size / 2, cy - size, cx + size / 2, cy + size);
+        else if (direction === 'right') arrow.fillTriangle(cx + size, cy, cx - size / 2, cy - size, cx - size / 2, cy + size);
+        container.add(arrow);
+
+        return { keyBg, arrow };
+      };
+
+      makeKey(panelX, keysY - keyH - gap, 'up');
+      makeKey(panelX - keyW - gap, keysY, 'left');
+      makeKey(panelX, keysY, 'down');
+      makeKey(panelX + keyW + gap, keysY, 'right');
+
+      // 힌트
+      const hint = this.add.text(panelX, panelY + panelH / 2 - 24, '[ PRESS ANY KEY ]', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#00ff00',
+        letterSpacing: 1
+      }).setOrigin(0.5);
+      container.add(hint);
+
+      // 힌트 깜빡임
+      this.tweens.add({
+        targets: hint,
+        alpha: 0.4,
+        yoyo: true,
+        duration: 600,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+
+      // 글로우 펄스
+      this.tweens.add({
+        targets: outerGlow,
+        alpha: 0.6,
+        yoyo: true,
+        duration: 1200,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+
+      // 플로팅 등장 애니메이션
+      container.setAlpha(0);
+      container.y = 20;
+      this.tweens.add({
+        targets: container,
+        alpha: 1,
+        y: 0,
+        duration: 400,
+        ease: 'Back.easeOut'
+      });
+
+      // 아무 키나 누르면 튜토리얼 닫기
+      const closeTutorial = () => {
+        this.input.keyboard.off('keydown', closeTutorial);
+
+        // 페이드아웃 애니메이션
+        this.tweens.add({
+          targets: container,
+          alpha: 0,
+          y: -20,
+          duration: 250,
+          ease: 'Quad.easeIn',
+          onComplete: () => {
+            container.destroy();
+            this.tutorialElements = [];
+            // 게임 재개
+            this.moveTimer.paused = false;
+          }
+        });
+      };
+
+      this.input.keyboard.on('keydown', closeTutorial);
+    });
   }
 
   drawGrid() {
@@ -31550,14 +31735,106 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 페이즈 전환 타이틀
     this.showPhaseTitle('PHASE 1', 'THE FIVE SELVES', () => {
-      // 5개 고스트 뱀 생성
-      this.createGhostSnakes();
+      // 튜토리얼 알럿 표시
+      this.showPhase1Tutorial(() => {
+        // 5개 고스트 뱀 생성
+        this.createGhostSnakes();
 
-      // 게임 재개
-      this.moveTimer.paused = false;
+        // 게임 재개
+        this.moveTimer.paused = false;
 
-      // 60fps 애니메이션 시작
-      this.startMultiverseAnimLoop();
+        // 60fps 애니메이션 시작
+        this.startMultiverseAnimLoop();
+      });
+    });
+  }
+
+  /**
+   * Phase 1 튜토리얼 알럿
+   */
+  showPhase1Tutorial(callback) {
+    const { width, height } = this.cameras.main;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // 배경 오버레이
+    const overlay = this.add.rectangle(centerX, centerY, width, height, 0x000000, 0.85);
+    overlay.setDepth(9000);
+
+    // 튜토리얼 박스
+    const boxWidth = 500;
+    const boxHeight = 220;
+    const box = this.add.rectangle(centerX, centerY, boxWidth, boxHeight, 0x1a1a2e, 1);
+    box.setDepth(9001);
+    box.setStrokeStyle(3, 0x9932cc);
+
+    // 타이틀
+    const title = this.add.text(centerX, centerY - 70, '[ HOW TO FIGHT ]', {
+      fontSize: '24px',
+      fill: '#9932cc',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(9002);
+
+    // 규칙 1 - 머리로 몸통 공격
+    const rule1 = this.add.text(centerX, centerY - 20, 'Hit ghost BODY with your HEAD to defeat them', {
+      fontSize: '18px',
+      fill: '#00ff00'
+    }).setOrigin(0.5).setDepth(9002);
+
+    // 규칙 2 - 머리 충돌 금지
+    const rule2 = this.add.text(centerX, centerY + 20, 'HEAD vs HEAD collision = DEATH!', {
+      fontSize: '18px',
+      fill: '#ff4444',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(9002);
+
+    // 시작 안내
+    const startHint = this.add.text(centerX, centerY + 70, 'Press any key to start...', {
+      fontSize: '16px',
+      fill: '#888888',
+      fontStyle: 'italic'
+    }).setOrigin(0.5).setDepth(9002);
+
+    // 깜빡임 효과
+    this.tweens.add({
+      targets: startHint,
+      alpha: 0.3,
+      yoyo: true,
+      repeat: -1,
+      duration: 500
+    });
+
+    const elements = [overlay, box, title, rule1, rule2, startHint];
+
+    // 팝인 애니메이션
+    elements.forEach(el => el.setScale(0.8).setAlpha(0));
+    this.tweens.add({
+      targets: elements,
+      scale: 1,
+      alpha: 1,
+      duration: 300,
+      ease: 'Back.easeOut'
+    });
+
+    // 키 입력 대기
+    const closeHandler = () => {
+      this.input.keyboard.off('keydown', closeHandler);
+
+      // 페이드아웃
+      this.tweens.add({
+        targets: elements,
+        alpha: 0,
+        scale: 0.9,
+        duration: 200,
+        onComplete: () => {
+          elements.forEach(el => el.destroy());
+          if (callback) callback();
+        }
+      });
+    };
+
+    this.time.delayedCall(300, () => {
+      this.input.keyboard.on('keydown', closeHandler);
     });
   }
 
