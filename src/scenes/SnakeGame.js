@@ -30715,37 +30715,33 @@ export default class SnakeGame extends Phaser.Scene {
     // (18탄 인트로에서 뷰포트 병합 연출 진행)
     this.quantumClearForBoss = true; // 18탄에서 뷰포트 확인용 플래그
 
-    // 간단한 클리어 텍스트
-    const { width, height } = this.cameras.main;
-    const clearText = this.add.text(width / 2, height / 2, 'STAGE 17\nCLEAR!', {
-      fontSize: '32px',
-      fill: '#00ff00',
-      fontStyle: 'bold',
-      align: 'center',
-      stroke: '#000000',
-      strokeThickness: 4
-    }).setOrigin(0.5).setDepth(9999).setAlpha(0);
+    // 스테이지 클리어 플래그 설정
+    this.isStageClearingAnimation = true;
 
-    this.tweens.add({
-      targets: clearText,
-      alpha: 1,
-      scale: { from: 0.5, to: 1 },
-      duration: 300,
-      ease: 'Back.easeOut'
-    });
+    // 톱니 정지
+    this.pauseAllSaws();
 
-    this.time.delayedCall(1000, () => {
-      this.tweens.add({
-        targets: clearText,
-        alpha: 0,
-        duration: 200,
-        onComplete: () => {
-          clearText.destroy();
-          // 뷰포트 유지한 채로 스테이지 클리어 처리
-          this.stageClear();
-        }
-      });
-    });
+    // 먹이 그래픽 클리어
+    this.graphics.clear();
+
+    // 말풍선 제거
+    if (this.foodBubble) {
+      if (this.foodBubble.image) {
+        this.foodBubble.image.setVisible(false);
+        this.tweens.killTweensOf(this.foodBubble.image);
+        this.foodBubble.image.destroy();
+      }
+      if (this.foodBubble.text) {
+        this.foodBubble.text.setVisible(false);
+        this.tweens.killTweensOf(this.foodBubble.text);
+        this.foodBubble.text.destroy();
+      }
+      this.foodBubble = null;
+    }
+
+    // 17탄은 뱀 날아가는 애니메이션 없이 바로 상점으로
+    // hideSnakeGraphics() 호출하지 않음 - 뱀 그대로 유지
+    this.showStageClearText();
   }
 
   /**
@@ -31181,6 +31177,8 @@ export default class SnakeGame extends Phaser.Scene {
       console.log('🔄 Skipping intro (revival) - directly to Phase 1');
       this.multiverseCollapsePhase = 'fiveselves';
       this.ghostSnakesDefeated = 0;
+      this.quantumSplitMode = false;
+      this.isStageClearingAnimation = false;
 
       // 짧은 준비 시간 후 바로 시작
       const { width, height } = this.cameras.main;
@@ -31210,6 +31208,7 @@ export default class SnakeGame extends Phaser.Scene {
                 readyText.destroy();
                 this.createGhostSnakes();
                 this.startMultiverseAnimLoop();
+                this.showSnakeGraphics();
                 this.moveTimer.paused = false;
               }
             });
@@ -31427,7 +31426,7 @@ export default class SnakeGame extends Phaser.Scene {
       width,
       height - this.gameAreaY,
       0x0a0015
-    ).setDepth(0);
+    ).setDepth(-10);
     this.spaceBackgroundElements = [spaceBg];
 
     // 별 생성 (작은 점들)
@@ -31438,7 +31437,7 @@ export default class SnakeGame extends Phaser.Scene {
       const starAlpha = Phaser.Math.FloatBetween(0.3, 0.9);
 
       const star = this.add.circle(starX, starY, starSize, 0xffffff, starAlpha);
-      star.setDepth(1);
+      star.setDepth(-5);
       this.spaceBackgroundElements.push(star);
 
       // 별 반짝임
@@ -31460,7 +31459,7 @@ export default class SnakeGame extends Phaser.Scene {
       const nebSize = Phaser.Math.Between(80, 200);
 
       const nebula = this.add.circle(nebX, nebY, nebSize, nebulaColors[i % nebulaColors.length], 0.1);
-      nebula.setDepth(0);
+      nebula.setDepth(-10);
       this.spaceBackgroundElements.push(nebula);
 
       // 성운 서서히 움직임
@@ -31953,6 +31952,9 @@ export default class SnakeGame extends Phaser.Scene {
   startPhase1FiveSelves() {
     console.log('👻 Phase 1: The Five Selves');
 
+    // Quantum Split 모드 확실히 해제 (draw()에서 뱀 그리기 위해 필수)
+    this.quantumSplitMode = false;
+    this.isStageClearingAnimation = false;
     this.multiverseCollapsePhase = 'fiveselves';
     this.ghostSnakesDefeated = 0;
 
@@ -31963,6 +31965,8 @@ export default class SnakeGame extends Phaser.Scene {
         // 5개 고스트 뱀 생성
         this.createGhostSnakes();
 
+        // 플레이어 뱀 그래픽 복구 (stageClear에서 숨겨졌을 수 있음)
+        this.showSnakeGraphics();
         // 게임 재개
         this.moveTimer.paused = false;
 
