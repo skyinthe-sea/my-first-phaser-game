@@ -28445,6 +28445,41 @@ export default class SnakeGame extends Phaser.Scene {
     this.devStageButtons.push(phase2Btn);
     this.devModeElements.push(phase2Btn);
 
+    // 18탄 Runner Mode (엔딩)
+    const runnerLabel = this.selectedDevPhase === 'runner'
+      ? '> Stage 18 Runner Mode (Ending) <'
+      : 'Stage 18 Runner Mode (Ending)';
+    const runnerColor = this.selectedDevPhase === 'runner' ? '#00ffff' : '#00ff00';
+
+    const runnerBtn = this.add.text(80, contentStartY + (this.devStageButtons.length * itemHeight), runnerLabel, {
+      fontSize: '16px',
+      fill: runnerColor,
+      padding: { x: 8, y: 2 }
+    }).setDepth(9001).setInteractive();
+
+    runnerBtn.stageValue = 18;
+    runnerBtn.phaseValue = 'runner';
+    runnerBtn.originalColor = '#00ff00';
+
+    runnerBtn.on('pointerover', () => {
+      if (this.selectedDevPhase !== 'runner') {
+        runnerBtn.setFill('#ffff00');
+      }
+    });
+    runnerBtn.on('pointerout', () => {
+      if (this.selectedDevPhase !== 'runner') {
+        runnerBtn.setFill(runnerBtn.originalColor);
+      }
+    });
+    runnerBtn.on('pointerdown', () => {
+      this.selectedDevStage = 18;
+      this.selectedDevPhase = 'runner';
+      this.updateDevModeSelection();
+    });
+
+    this.devStageButtons.push(runnerBtn);
+    this.devModeElements.push(runnerBtn);
+
     // 안내 텍스트
     const helpText = this.add.text(width / 2, height - 60, [
       'Arrow Keys: Select    ENTER: Start Stage',
@@ -28657,6 +28692,11 @@ export default class SnakeGame extends Phaser.Scene {
       // Phase 2: Fourth Wall 직접 시작
       this.time.delayedCall(500, () => {
         this.startPhase2FourthWall();
+      });
+    } else if (phase === 'runner') {
+      // Runner Mode (엔딩) 직접 시작
+      this.time.delayedCall(500, () => {
+        this.startRunnerTransition();
       });
     }
   }
@@ -36132,6 +36172,16 @@ export default class SnakeGame extends Phaser.Scene {
     this.runnerIntroComplete = false;
     this.runnerSpeed = 5;
 
+    // 낑겨잡힘 시스템
+    this.runnerTrapped = false;           // 낑겨잡힘 상태
+    this.runnerTrappedEnemy = null;       // 잡은 적
+    this.runnerEscapeProgress = 0;        // 탈출 진행도 (0~100)
+    this.runnerEscapeRequired = 10;       // 탈출에 필요한 스페이스바 횟수
+    this.runnerObstaclesPassed = 0;       // 통과한 장애물 수
+    this.runnerClearTarget = 10;          // 클리어 조건
+    this.runnerClearStarted = false;      // 10개 통과 플래그
+    this.runnerClearSequenceStarted = false; // 클리어 시퀀스 실제 시작 여부
+
     // 배경 뱀들 생성
     this.spawnBackgroundSnakes();
 
@@ -36306,6 +36356,10 @@ export default class SnakeGame extends Phaser.Scene {
    * 장애물 스폰
    */
   spawnRunnerObstacle() {
+    // 10개 제한 체크
+    if (this.runnerObstaclesSpawned >= this.runnerClearTarget) return;
+    this.runnerObstaclesSpawned++;
+
     const { width, height } = this.cameras.main;
 
     const types = ['germ', 'saw', 'frog', 'nexus', 'ghost'];
@@ -36432,8 +36486,13 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 스페이스바 입력 등록
     this.input.keyboard.on('keydown-SPACE', () => {
-      if (this.runnerPhase === 'playing' && !this.runnerJumping) {
-        this.runnerJump();
+      if (this.runnerPhase === 'playing') {
+        // 낑겨잡힘 상태면 탈출 시도
+        if (this.runnerTrapped) {
+          this.tryEscapeRunner();
+        } else if (!this.runnerJumping) {
+          this.runnerJump();
+        }
       }
     });
 
@@ -36442,7 +36501,7 @@ export default class SnakeGame extends Phaser.Scene {
       delay: 1500,
       callback: () => {
         if (this.runnerPhase !== 'playing') return;
-        this.spawnRunnerObstacle();
+        this.spawnRunnerObstacle(); // 함수 내부에서 10개 제한 체크
       },
       loop: true
     });
@@ -36470,6 +36529,16 @@ export default class SnakeGame extends Phaser.Scene {
         this.runnerY = this.runnerGroundY;
         this.runnerJumping = false;
         this.runnerJumpVelocity = 0;
+
+        // 10개 통과 후 착지하면 클리어 시퀀스 시작
+        if (this.runnerClearStarted && !this.runnerClearSequenceStarted) {
+          this.runnerClearSequenceStarted = true;
+          console.log('🏃 Landed! Running alone for a while...');
+          // 3초간 더 달린 후 클리어 시퀀스 시작
+          this.time.delayedCall(3000, () => {
+            this.runnerStageClear();
+          });
+        }
       }
     }
 
@@ -36482,6 +36551,35 @@ export default class SnakeGame extends Phaser.Scene {
       const seg = this.runnerPlayerSnake[i];
       const prev = this.runnerPlayerSnake[i - 1];
       seg.y += (prev.y - seg.y) * 0.3;
+    }
+
+    // === 낑겨잡힘 상태일 때 ===
+    if (this.runnerTrapped) {
+      // 플레이어는 멈춤, 배경이 반대로 흐름 (날아가는 뱀들이 나를 앞지르는 느낌)
+      // 배경 흰 뱀들이 오른쪽으로 빠르게 이동 (플레이어 시점에서 뒤처지는 연출)
+      this.runnerWhiteSnakes.forEach(snake => {
+        snake.x += snake.speed * 3;  // 반대 방향으로 빠르게
+        snake.segments.forEach((seg, i) => {
+          seg.x = snake.x + i * 10;
+          seg.y = snake.y + Math.sin((this.runnerDistance + i * 20) * 0.02) * 5;
+        });
+        // 오른쪽으로 나가면 왼쪽에서 다시 등장
+        if (snake.x > width + 100) {
+          snake.x = -200 - Math.random() * 300;
+        }
+      });
+
+      // 거리는 계속 증가 (배경 효과용)
+      this.runnerDistance += this.runnerSpeed;
+
+      // 잡은 적은 플레이어와 함께 멈춤
+      if (this.runnerTrappedEnemy) {
+        this.runnerTrappedEnemy.x = head.x + 20;
+      }
+
+      // 그리기 (탈출 UI 포함)
+      this.drawRunner();
+      return;
     }
 
     // 장애물 이동 및 충돌 체크
@@ -36498,13 +36596,31 @@ export default class SnakeGame extends Phaser.Scene {
       // 충돌 체크 (플레이어블 모드에서만)
       if (this.runnerPhase === 'playing' && !obs.passed) {
         if (this.checkRunnerCollision(obs)) {
-          this.runnerGameOver();
+          // 게임오버 대신 낑겨잡힘 상태로
+          this.startRunnerTrapped(obs);
           return;
         }
 
         // 장애물 통과
         if (obs.x < head.x - obs.width / 2) {
           obs.passed = true;
+          this.runnerObstaclesPassed++;
+
+          // 10개 통과시 - 점프 중이 아니면 바로 시작, 점프 중이면 착지 후 시작
+          if (this.runnerObstaclesPassed >= this.runnerClearTarget && !this.runnerClearStarted) {
+            this.runnerClearStarted = true;
+
+            if (!this.runnerJumping) {
+              // 점프 중이 아니면 바로 시작
+              this.runnerClearSequenceStarted = true;
+              console.log('🏃 10 obstacles passed! Running alone for a while...');
+              this.time.delayedCall(3000, () => {
+                this.runnerStageClear();
+              });
+            } else {
+              console.log('🏃 10 obstacles passed! Waiting for landing...');
+            }
+          }
         }
       }
     }
@@ -36561,6 +36677,557 @@ export default class SnakeGame extends Phaser.Scene {
       playerBox.x + playerBox.width > obsBox.x &&
       playerBox.y < obsBox.y + obsBox.height &&
       playerBox.y + playerBox.height > obsBox.y;
+  }
+
+  /**
+   * 낑겨잡힘 상태 시작
+   */
+  startRunnerTrapped(enemy) {
+    console.log('🪤 Runner Trapped!');
+
+    this.runnerTrapped = true;
+    this.runnerTrappedEnemy = enemy;
+    this.runnerEscapeProgress = 0;
+
+    // 카메라 쉐이크
+    this.cameras.main.shake(200, 0.01);
+
+    // 위험 플래시
+    this.cameras.main.flash(100, 255, 100, 0, true);
+
+    // 탈출 UI 생성
+    const { width, height } = this.cameras.main;
+
+    // TRAPPED! 텍스트
+    this.runnerTrappedText = this.add.text(width / 2, height / 2 - 80, 'TRAPPED!', {
+      fontSize: '36px',
+      fill: '#ff0000',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(9700);
+    this.runnerElements.push(this.runnerTrappedText);
+
+    // 펄스 애니메이션
+    this.tweens.add({
+      targets: this.runnerTrappedText,
+      scale: { from: 0.8, to: 1.1 },
+      yoyo: true,
+      repeat: -1,
+      duration: 200
+    });
+
+    // 스페이스바 안내
+    this.runnerEscapeHint = this.add.text(width / 2, height / 2 - 40, 'PRESS SPACE TO ESCAPE!', {
+      fontSize: '20px',
+      fill: '#ffff00',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(9700);
+    this.runnerElements.push(this.runnerEscapeHint);
+
+    // 진행 바 배경
+    this.runnerEscapeBarBg = this.add.rectangle(width / 2, height / 2, 200, 20, 0x333333);
+    this.runnerEscapeBarBg.setDepth(9700).setStrokeStyle(2, 0xffffff);
+    this.runnerElements.push(this.runnerEscapeBarBg);
+
+    // 진행 바
+    this.runnerEscapeBar = this.add.rectangle(width / 2 - 98, height / 2, 4, 16, 0x00ff00);
+    this.runnerEscapeBar.setOrigin(0, 0.5).setDepth(9701);
+    this.runnerElements.push(this.runnerEscapeBar);
+  }
+
+  /**
+   * 탈출 시도 (스페이스바)
+   */
+  tryEscapeRunner() {
+    if (!this.runnerTrapped) return;
+
+    this.runnerEscapeProgress++;
+    console.log(`🔓 Escape progress: ${this.runnerEscapeProgress}/${this.runnerEscapeRequired}`);
+
+    // 진행 바 업데이트
+    const progress = this.runnerEscapeProgress / this.runnerEscapeRequired;
+    if (this.runnerEscapeBar) {
+      this.runnerEscapeBar.width = 196 * progress;
+
+      // 색상 변경 (초록 → 노랑 → 빨강)
+      if (progress > 0.7) {
+        this.runnerEscapeBar.setFillStyle(0x00ff00);
+      } else if (progress > 0.3) {
+        this.runnerEscapeBar.setFillStyle(0xffff00);
+      }
+    }
+
+    // 화면 흔들림
+    this.cameras.main.shake(50, 0.005);
+
+    // 플레이어 떨림 효과
+    const head = this.runnerPlayerSnake[0];
+    head.x += (Math.random() - 0.5) * 6;
+
+    // 탈출 성공!
+    if (this.runnerEscapeProgress >= this.runnerEscapeRequired) {
+      this.escapeRunner();
+    }
+  }
+
+  /**
+   * 탈출 성공
+   */
+  escapeRunner() {
+    console.log('🎉 Escaped!');
+
+    this.runnerTrapped = false;
+
+    // 적 제거 (화면 밖으로 날려버림)
+    if (this.runnerTrappedEnemy) {
+      this.runnerTrappedEnemy.passed = true;
+      this.runnerTrappedEnemy.x = -200;
+      this.runnerObstaclesPassed++;
+
+      // 10개 통과시 클리어 체크
+      if (this.runnerObstaclesPassed >= this.runnerClearTarget) {
+        this.cleanupTrappedUI();
+        this.runnerStageClear();
+        return;
+      }
+    }
+
+    this.runnerTrappedEnemy = null;
+
+    // UI 정리
+    this.cleanupTrappedUI();
+
+    // 탈출 성공 연출
+    const { width, height } = this.cameras.main;
+
+    const escapeText = this.add.text(width / 2, height / 2, 'ESCAPED!', {
+      fontSize: '32px',
+      fill: '#00ff00',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(9700).setAlpha(0);
+    this.runnerElements.push(escapeText);
+
+    this.tweens.add({
+      targets: escapeText,
+      alpha: 1,
+      scale: { from: 0.5, to: 1.2 },
+      duration: 300,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: escapeText,
+          alpha: 0,
+          y: height / 2 - 50,
+          duration: 500,
+          delay: 300
+        });
+      }
+    });
+
+    // 카메라 플래시 (성공)
+    this.cameras.main.flash(200, 0, 255, 0, true);
+  }
+
+  /**
+   * 낑겨잡힘 UI 정리
+   */
+  cleanupTrappedUI() {
+    if (this.runnerTrappedText) {
+      this.runnerTrappedText.destroy();
+      this.runnerTrappedText = null;
+    }
+    if (this.runnerEscapeHint) {
+      this.runnerEscapeHint.destroy();
+      this.runnerEscapeHint = null;
+    }
+    if (this.runnerEscapeBarBg) {
+      this.runnerEscapeBarBg.destroy();
+      this.runnerEscapeBarBg = null;
+    }
+    if (this.runnerEscapeBar) {
+      this.runnerEscapeBar.destroy();
+      this.runnerEscapeBar = null;
+    }
+  }
+
+  /**
+   * 러너 스테이지 클리어 - 정자와 난자 수정 엔딩 연출
+   */
+  runnerStageClear() {
+    console.log('🏆 Runner Stage Clear - Starting Fertilization Ending!');
+
+    this.runnerPhase = 'clear';
+    const { width, height } = this.cameras.main;
+
+    // 기존 장애물 제거 (뱀은 계속 달림)
+    this.runnerObstacles = [];
+
+    // 1단계: 배경 뱀들 서서히 사라짐 (혼자 달리는 모습)
+    this.runnerWhiteSnakes.forEach(snake => {
+      this.tweens.add({
+        targets: snake,
+        alpha: 0,
+        duration: 2000
+      });
+    });
+
+    // 2초 후 배경 뱀들 완전 제거 + 난자 등장 시작
+    this.time.delayedCall(2500, () => {
+      this.runnerWhiteSnakes = [];
+      this.startEggApproach();
+    });
+  }
+
+  /**
+   * 난자(빛 오브)가 오른쪽에서 서서히 다가옴
+   */
+  startEggApproach() {
+    console.log('🥚 Egg approaching from right...');
+
+    const { width, height } = this.cameras.main;
+
+    // 난자 시작 위치 (화면 오른쪽 밖)
+    const startX = width + 150;
+    const targetX = width - 200;
+    const orbY = this.runnerGroundY - 80;
+
+    // 난자 컨테이너 (9탄 디자인 기반, 6배 크기)
+    this.runnerEgg = this.add.container(startX, orbY).setDepth(9750);
+    this.runnerElements.push(this.runnerEgg);
+
+    // 외곽 글로우 (희미하게) - 6배 크기
+    const outerGlow = this.add.circle(0, 0, 360, 0xffffff, 0.1);
+    // 중간 글로우
+    const midGlow = this.add.circle(0, 0, 240, 0xffffaa, 0.2);
+    // 코어
+    const core = this.add.circle(0, 0, 120, 0xffffff, 0.6);
+
+    this.runnerEgg.add([outerGlow, midGlow, core]);
+    this.runnerEggCore = core;
+    this.runnerEggOuterGlow = outerGlow;
+
+    // 펄스 애니메이션 (9탄과 동일)
+    this.tweens.add({
+      targets: outerGlow,
+      alpha: { from: 0.1, to: 0.3 },
+      scaleX: { from: 1, to: 1.5 },
+      scaleY: { from: 1, to: 1.5 },
+      duration: 1000,
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.tweens.add({
+      targets: core,
+      alpha: { from: 0.6, to: 1 },
+      duration: 500,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // 난자가 서서히 다가옴
+    this.tweens.add({
+      targets: this.runnerEgg,
+      x: targetX,
+      duration: 5000,
+      ease: 'Sine.easeOut'
+    });
+
+    // 동시에 뱀 속도 점점 느려짐
+    this.startSnakeSlowdown();
+  }
+
+  /**
+   * 뱀 속도 점점 느려짐 + 헤엄치기 시작
+   */
+  startSnakeSlowdown() {
+    console.log('🐍 Snake slowing down...');
+
+    const { width } = this.cameras.main;
+    this.runnerPhase = 'swimming';
+
+    // 속도 감소 + 헤엄치기 애니메이션
+    let elapsed = 0;
+    const slowdownDuration = 4000;
+    const originalSpeed = this.runnerSpeed;
+
+    const slowdownTimer = this.time.addEvent({
+      delay: 16,
+      callback: () => {
+        elapsed += 16;
+        const progress = Math.min(elapsed / slowdownDuration, 1);
+
+        // 속도 점점 감소
+        this.runnerSpeed = originalSpeed * (1 - progress * 0.8);
+
+        // 뱀 물결 움직임 (헤엄치는 느낌)
+        const head = this.runnerPlayerSnake[0];
+        head.y = this.runnerGroundY + Math.sin(elapsed * 0.01) * 10;
+
+        // 몸통 물결
+        for (let i = 1; i < this.runnerPlayerSnake.length; i++) {
+          const seg = this.runnerPlayerSnake[i];
+          const prev = this.runnerPlayerSnake[i - 1];
+          seg.x += (prev.x - 12 - seg.x) * 0.1;
+          seg.y = this.runnerGroundY + Math.sin((elapsed * 0.01) - i * 0.5) * 8;
+        }
+
+        // 배경 별만 천천히 움직임
+        this.runnerDistance += this.runnerSpeed * 0.5;
+
+        this.drawRunner();
+
+        if (progress >= 1) {
+          slowdownTimer.destroy();
+          // 난자에 도달 후 수정 시작
+          this.time.delayedCall(1000, () => {
+            this.startFertilization();
+          });
+        }
+      },
+      loop: true
+    });
+  }
+
+  /**
+   * 수정 과정 - 정자가 난자로 진입
+   */
+  startFertilization() {
+    console.log('🧬 Starting fertilization...');
+
+    const { width, height } = this.cameras.main;
+    const head = this.runnerPlayerSnake[0];
+
+    // 난자 위치
+    const eggX = this.runnerEgg.x;
+    const eggY = this.runnerEgg.y;
+
+    // 뱀이 난자로 점프 + 빠르게 헤엄침
+    const startX = head.x;
+    const startY = head.y;
+    const duration = 1200;
+
+    this.runnerPhase = 'fertilizing';
+
+    let elapsed = 0;
+    const fertilizeTimer = this.time.addEvent({
+      delay: 16,
+      callback: () => {
+        elapsed += 16;
+        const progress = Math.min(elapsed / duration, 1);
+
+        // 포물선 점프 + 빠른 접근
+        const easeProgress = 1 - Math.pow(1 - progress, 3);
+        const jumpHeight = Math.sin(progress * Math.PI) * 80;
+
+        // 머리가 난자로 이동
+        head.x = startX + (eggX - startX) * easeProgress;
+        head.y = startY + (eggY - startY) * easeProgress - jumpHeight;
+
+        // 꼬리는 점점 뒤처짐 (정자 꼬리처럼)
+        for (let i = this.runnerPlayerSnake.length - 1; i > 0; i--) {
+          const seg = this.runnerPlayerSnake[i];
+          const prev = this.runnerPlayerSnake[i - 1];
+          const followSpeed = 0.08 - (i * 0.005); // 뒤로 갈수록 더 느리게
+          seg.x += (prev.x - seg.x) * Math.max(followSpeed, 0.02);
+          seg.y += (prev.y - seg.y) * Math.max(followSpeed, 0.02);
+
+          // 진입 직전 꼬리 떨어지기 시작
+          if (progress > 0.7) {
+            const detachProgress = (progress - 0.7) / 0.3;
+            seg.y += detachProgress * i * 3; // 아래로 떨어짐
+            seg.color = Phaser.Display.Color.Interpolate.ColorWithColor(
+              { r: 255, g: 255, b: 255 },
+              { r: 100, g: 100, b: 100 },
+              100,
+              detachProgress * 100
+            );
+            seg.color = (seg.color.r << 16) + (seg.color.g << 8) + seg.color.b;
+          }
+        }
+
+        // 난자 반응 (진동)
+        if (progress > 0.5) {
+          this.runnerEgg.x = eggX + (Math.random() - 0.5) * 4;
+          this.runnerEgg.y = eggY + (Math.random() - 0.5) * 4;
+        }
+
+        this.drawRunner();
+
+        if (progress >= 1) {
+          fertilizeTimer.destroy();
+          this.completeFerilization();
+        }
+      },
+      loop: true
+    });
+  }
+
+  /**
+   * 수정 완료 - 핵만 진입, 난자 빛남
+   */
+  completeFerilization() {
+    console.log('✨ Fertilization complete!');
+
+    const { width, height } = this.cameras.main;
+
+    // 머리(핵)만 흡수, 나머지는 떨어짐
+    const head = this.runnerPlayerSnake[0];
+    head.absorbed = true;
+
+    // 꼬리들 아래로 떨어지며 페이드아웃
+    for (let i = 1; i < this.runnerPlayerSnake.length; i++) {
+      const seg = this.runnerPlayerSnake[i];
+      this.tweens.add({
+        targets: seg,
+        y: seg.y + 200,
+        alpha: 0,
+        duration: 1000 + i * 100,
+        ease: 'Quad.easeIn',
+        onComplete: () => {
+          seg.absorbed = true;
+        }
+      });
+    }
+
+    // 난자가 불투명하게 밝아짐 (크기 변화 없음)
+    this.tweens.add({
+      targets: this.runnerEggCore,
+      alpha: 1,
+      duration: 1500
+    });
+
+    this.tweens.add({
+      targets: this.runnerEggOuterGlow,
+      alpha: 0.9,
+      duration: 2000
+    });
+
+    // 중간 글로우도 밝아짐
+    const midGlow = this.runnerEgg.list[1]; // midGlow
+    if (midGlow) {
+      this.tweens.add({
+        targets: midGlow,
+        alpha: 0.8,
+        duration: 1800
+      });
+    }
+
+    // 화면 서서히 밝아짐
+    const whiteOverlay = this.add.rectangle(width / 2, height / 2, width, height, 0xffffff, 0);
+    whiteOverlay.setDepth(9900);
+    this.runnerElements.push(whiteOverlay);
+
+    this.tweens.add({
+      targets: whiteOverlay,
+      alpha: 1,
+      duration: 3000,
+      delay: 1500,
+      onComplete: () => {
+        // 엔딩 화면으로
+        this.showRunnerEnding();
+      }
+    });
+  }
+
+  /**
+   * 러너 엔딩 화면 표시
+   */
+  showRunnerEnding() {
+    console.log('🎬 Showing Runner Ending Screen');
+
+    const { width, height } = this.cameras.main;
+
+    // 기존 요소 정리
+    if (this.runnerGraphics) {
+      this.runnerGraphics.clear();
+    }
+
+    // 검은 배경
+    const blackBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 1);
+    blackBg.setDepth(9950);
+    this.runnerElements.push(blackBg);
+
+    // 엔딩 텍스트들
+    const titleText = this.add.text(width / 2, height / 3 - 30, 'THE END', {
+      fontSize: '64px',
+      fill: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
+    this.runnerElements.push(titleText);
+
+    const subtitleText = this.add.text(width / 2, height / 3 + 40, 'A new life begins...', {
+      fontSize: '28px',
+      fill: '#ffffaa',
+      fontStyle: 'italic'
+    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
+    this.runnerElements.push(subtitleText);
+
+    const creditText = this.add.text(width / 2, height / 2 + 50, 'Snake Game\nA Journey Through 18 Stages', {
+      fontSize: '20px',
+      fill: '#888888',
+      align: 'center'
+    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
+    this.runnerElements.push(creditText);
+
+    const continueText = this.add.text(width / 2, height - 80, 'Press any key to continue...', {
+      fontSize: '18px',
+      fill: '#666666'
+    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
+    this.runnerElements.push(continueText);
+
+    // 순차적으로 페이드인
+    this.tweens.add({
+      targets: titleText,
+      alpha: 1,
+      y: height / 3 - 50,
+      duration: 1500,
+      ease: 'Sine.easeOut',
+      delay: 500
+    });
+
+    this.tweens.add({
+      targets: subtitleText,
+      alpha: 1,
+      duration: 1000,
+      delay: 1500
+    });
+
+    this.tweens.add({
+      targets: creditText,
+      alpha: 1,
+      duration: 1000,
+      delay: 2500
+    });
+
+    this.tweens.add({
+      targets: continueText,
+      alpha: { from: 0, to: 0.7 },
+      duration: 500,
+      delay: 4000,
+      onComplete: () => {
+        // 깜빡임 효과
+        this.tweens.add({
+          targets: continueText,
+          alpha: { from: 0.7, to: 0.3 },
+          duration: 800,
+          yoyo: true,
+          repeat: -1
+        });
+      }
+    });
+
+    // 아무 키나 누르면 진행
+    this.time.delayedCall(4000, () => {
+      this.input.keyboard.once('keydown', () => {
+        this.cleanupRunner();
+        this.cleanupMultiverseCollapse();
+        this.stageClear();
+      });
+    });
   }
 
   /**
@@ -36676,6 +37343,9 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 플레이어 뱀
     this.runnerPlayerSnake.forEach((seg, i) => {
+      // 흡수된 세그먼트는 그리지 않음
+      if (seg.absorbed) return;
+
       const size = i === 0 ? 18 : 14;
 
       // 글로우
@@ -36802,6 +37472,23 @@ export default class SnakeGame extends Phaser.Scene {
       this.runnerDistanceText = null;
     }
 
+    // 빛 오브 정리
+    if (this.runnerLightOrb) {
+      this.runnerLightOrb.destroy();
+      this.runnerLightOrb = null;
+    }
+
+    // 난자 정리
+    if (this.runnerEgg) {
+      this.runnerEgg.destroy();
+      this.runnerEgg = null;
+    }
+    this.runnerEggCore = null;
+    this.runnerEggOuterGlow = null;
+
+    // 낑겨잡힘 UI 정리
+    this.cleanupTrappedUI();
+
     // UI 요소 정리
     this.runnerElements.forEach(el => {
       if (el && el.destroy) el.destroy();
@@ -36813,6 +37500,15 @@ export default class SnakeGame extends Phaser.Scene {
     this.runnerDeadSnakes = [];
     this.runnerWhiteSnakes = [];
     this.runnerPlayerSnake = [];
+
+    // 낑겨잡힘 상태 초기화
+    this.runnerTrapped = false;
+    this.runnerTrappedEnemy = null;
+    this.runnerEscapeProgress = 0;
+    this.runnerObstaclesPassed = 0;
+    this.runnerClearStarted = false;
+    this.runnerClearSequenceStarted = false;
+    this.runnerObstaclesSpawned = 0;
 
     // 키보드 리스너 제거
     this.input.keyboard.off('keydown-SPACE');
