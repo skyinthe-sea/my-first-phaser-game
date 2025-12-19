@@ -443,6 +443,19 @@ export default class SnakeGame extends Phaser.Scene {
     this.stage8BlackoutEndTimer = null;
     this.stage8BlackoutSnakeGraphics = null;
 
+    // Stage 7-8: 어둠 찢어짐 연출 (먹이 10개부터)
+    this.darkCreepCycleStarted = false;
+    this.darkCreepTimer = null;
+    this.darkCreepInterval = 3000;
+    this.darkCreepEffects = [];
+
+    // Stage 8: 귀신 몹 스폰
+    this.stage8Ghosts = [];
+    this.stage8GhostSpawnTimer = null;
+    this.stage8GhostSpawnActive = false;
+    this.stage8GhostMax = 3;
+    this.stage8GhostLifetime = 3000;
+
     // ESC 일시정지
     this.isEscPaused = false;
     this.escPauseElements = [];
@@ -712,6 +725,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.lastAttackTime = 0; // 마지막 공격 시간
     this.attackCooldown = 8000; // 공격 쿨다운 (8초)
     this.presenceAttackCount = 0; // 공격 횟수 (첫 공격은 회피 시간 10초)
+    this.fogBossFirstDodgeGraceUsed = false; // 첫 회피 10초 유예 사용 여부
+    this.dodgeAttemptCount = 0; // QTE 회피 시도 횟수
     this.presencePulseTimer = null; // 브라우저 펄스 타이머
     this.playerDodged = false; // 플레이어가 닷지를 눌렀는지 (QTE)
     this.dodgeQTEActive = false; // QTE 닷지 활성화 상태
@@ -1870,6 +1885,9 @@ export default class SnakeGame extends Phaser.Scene {
     // 뱀 이동
     this.snake.unshift(newHead);
 
+    // Stage 8 귀신 몹 충돌 체크
+    this.checkStage8GhostCollision(newHead);
+
     // 탄막 보스 HIT 체크 (vulnerable 상태에서 보스 위치에 도달)
     if (this.bulletBossMode && this.bulletBossPosition &&
         newHead.x === this.bulletBossPosition.x && newHead.y === this.bulletBossPosition.y) {
@@ -2060,6 +2078,8 @@ export default class SnakeGame extends Phaser.Scene {
 
       this.foodCount++;
       this.startStage8BlackoutCycleIfNeeded();
+      this.startDarkCreepCycleIfNeeded();
+      this.startStage8GhostSpawnIfNeeded();
 
       // World 3 (Stage 10-12): 톱니 생성 (매 먹이마다 1개씩, 최대 5개)
       if (shouldHaveSaws(this.currentStage) && !this.bossMode) {
@@ -8515,6 +8535,416 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
+  // ===== Stage 7-8: 어둠 찢어짐 연출 =====
+  startDarkCreepCycleIfNeeded() {
+    if (this.darkCreepCycleStarted) return;
+    if (this.currentStage !== 7 && this.currentStage !== 8) return;
+    if (!this.shouldUseFog()) return;
+    if (this.foodCount < 10) return;
+
+    this.darkCreepCycleStarted = true;
+    this.spawnDarkCreepEffect();
+
+    this.darkCreepTimer = this.time.addEvent({
+      delay: this.darkCreepInterval,
+      callback: () => {
+        this.spawnDarkCreepEffect();
+      },
+      loop: true
+    });
+  }
+
+  stopDarkCreepCycle() {
+    this.darkCreepCycleStarted = false;
+
+    if (this.darkCreepTimer) {
+      this.darkCreepTimer.destroy();
+      this.darkCreepTimer = null;
+    }
+
+    if (this.darkCreepEffects && this.darkCreepEffects.length > 0) {
+      this.darkCreepEffects.forEach(effect => {
+        if (!effect) return;
+        if (effect.overlay) {
+          this.tweens.killTweensOf(effect.overlay);
+          effect.overlay.clearMask(true);
+          effect.overlay.destroy();
+        }
+        if (effect.maskGraphics) {
+          effect.maskGraphics.destroy();
+        }
+      });
+      this.darkCreepEffects = [];
+    }
+  }
+
+  spawnDarkCreepEffect() {
+    if (!this.darkCreepCycleStarted) return;
+    if (!this.isFogOfWarActive()) return;
+    if (this.gameOver) return;
+    if (this.shopOpen || this.loanUIOpen || this.isStageClearingAnimation) return;
+    if (!this.snake || this.snake.length === 0) return;
+
+    const { width, height } = this.cameras.main;
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+    const safeRadius = this.gridSize * (this.fogVisibleTiles + 0.8);
+    const left = 10;
+    const right = width - 10;
+    const top = this.gameAreaY + 10;
+    const bottom = height - this.bottomUIHeight - 10;
+
+    const overlay = this.add.graphics().setDepth(1250);
+    overlay.setAlpha(0);
+
+    const shapeCount = Phaser.Math.Between(5, 7);
+    for (let i = 0; i < shapeCount; i++) {
+      const baseRadius = Phaser.Math.Between(this.gridSize * 1.2, this.gridSize * 2.6);
+      let cx = Phaser.Math.Between(left, right);
+      let cy = Phaser.Math.Between(top, bottom);
+      let attempts = 0;
+
+      while (Phaser.Math.Distance.Between(cx, cy, headX, headY) < safeRadius + baseRadius && attempts < 12) {
+        cx = Phaser.Math.Between(left, right);
+        cy = Phaser.Math.Between(top, bottom);
+        attempts++;
+      }
+
+      overlay.fillStyle(0x120008, 0.55);
+      overlay.beginPath();
+      const sides = Phaser.Math.Between(6, 10);
+      for (let s = 0; s < sides; s++) {
+        const angle = (s / sides) * Math.PI * 2;
+        const radius = baseRadius * (0.5 + Math.random() * 0.6);
+        const px = cx + Math.cos(angle) * radius;
+        const py = cy + Math.sin(angle) * radius;
+        if (s === 0) {
+          overlay.moveTo(px, py);
+        } else {
+          overlay.lineTo(px, py);
+        }
+      }
+      overlay.closePath();
+      overlay.fillPath();
+
+      overlay.lineStyle(2, 0x1f000f, 0.8);
+      overlay.beginPath();
+      overlay.moveTo(
+        cx + Phaser.Math.Between(-baseRadius, baseRadius),
+        cy + Phaser.Math.Between(-baseRadius, baseRadius)
+      );
+      overlay.lineTo(
+        cx + Phaser.Math.Between(-baseRadius * 1.2, baseRadius * 1.2),
+        cy + Phaser.Math.Between(-baseRadius * 1.2, baseRadius * 1.2)
+      );
+      overlay.strokePath();
+    }
+
+    const maskGraphics = this.make.graphics({ x: 0, y: 0, add: false });
+    maskGraphics.fillStyle(0xffffff, 1);
+    maskGraphics.fillCircle(headX, headY, safeRadius);
+    const mask = maskGraphics.createGeometryMask();
+    mask.invertAlpha = true;
+    overlay.setMask(mask);
+
+    const effect = { overlay, maskGraphics };
+    this.darkCreepEffects.push(effect);
+
+    this.tweens.add({
+      targets: overlay,
+      alpha: 0.9,
+      duration: 250,
+      yoyo: true,
+      hold: 400,
+      onComplete: () => {
+        if (overlay && overlay.active) {
+          overlay.clearMask(true);
+          overlay.destroy();
+        }
+        if (maskGraphics) {
+          maskGraphics.destroy();
+        }
+        this.darkCreepEffects = this.darkCreepEffects.filter(entry => entry !== effect);
+      }
+    });
+  }
+
+  // ===== Stage 8: 귀신 몹 스폰 =====
+  startStage8GhostSpawnIfNeeded() {
+    if (this.stage8GhostSpawnActive) return;
+    if (this.currentStage !== 8) return;
+    if (!this.shouldUseFog()) return;
+    if (this.foodCount < 10) return;
+
+    this.stage8GhostSpawnActive = true;
+    this.scheduleStage8GhostSpawn();
+  }
+
+  stopStage8GhostSpawning() {
+    this.stage8GhostSpawnActive = false;
+
+    if (this.stage8GhostSpawnTimer) {
+      this.stage8GhostSpawnTimer.destroy();
+      this.stage8GhostSpawnTimer = null;
+    }
+
+    if (this.stage8Ghosts && this.stage8Ghosts.length > 0) {
+      this.stage8Ghosts.forEach(ghost => this.removeStage8Ghost(ghost, true));
+      this.stage8Ghosts = [];
+    }
+  }
+
+  scheduleStage8GhostSpawn() {
+    if (!this.stage8GhostSpawnActive) return;
+    if (this.gameOver) return;
+
+    const delay = Phaser.Math.Between(2500, 4200);
+    this.stage8GhostSpawnTimer = this.time.delayedCall(delay, () => {
+      if (!this.stage8GhostSpawnActive) return;
+      this.spawnStage8Ghost();
+      this.scheduleStage8GhostSpawn();
+    });
+  }
+
+  spawnStage8Ghost() {
+    if (!this.stage8GhostSpawnActive) return;
+    if (this.gameOver) return;
+    if (this.shopOpen || this.loanUIOpen || this.isStageClearingAnimation) return;
+    if (this.stage8Ghosts.length >= this.stage8GhostMax) return;
+
+    const spawnPos = this.findStage8GhostSpawnPosition();
+    if (!spawnPos) return;
+
+    const ghostTypes = ['wailer', 'mask', 'wisp'];
+    const ghostType = Phaser.Math.RND.pick(ghostTypes);
+    const ghost = this.createStage8Ghost(ghostType, spawnPos.x, spawnPos.y);
+    if (ghost) {
+      this.stage8Ghosts.push(ghost);
+    }
+  }
+
+  findStage8GhostSpawnPosition() {
+    if (!this.snake || this.snake.length === 0) return null;
+
+    const head = this.snake[0];
+    const minDistance = this.fogVisibleTiles + 1.2;
+    let attempts = 0;
+
+    while (attempts < 40) {
+      const tileX = Phaser.Math.Between(0, this.cols - 2);
+      const tileY = Phaser.Math.Between(0, this.rows - 2);
+      attempts++;
+
+      if (this.isStage8GhostOverlap(tileX, tileY)) continue;
+      if (this.isStage8GhostTileBlocked(tileX, tileY)) continue;
+
+      const ghostCenterX = tileX + 1;
+      const ghostCenterY = tileY + 1;
+      const dist = Phaser.Math.Distance.Between(ghostCenterX, ghostCenterY, head.x, head.y);
+      if (dist < minDistance) continue;
+
+      return { x: tileX, y: tileY };
+    }
+
+    return null;
+  }
+
+  isStage8GhostOverlap(tileX, tileY) {
+    return this.stage8Ghosts.some(ghost => {
+      return tileX <= ghost.tileX + 1 &&
+        tileX + 1 >= ghost.tileX &&
+        tileY <= ghost.tileY + 1 &&
+        tileY + 1 >= ghost.tileY;
+    });
+  }
+
+  isStage8GhostTileBlocked(tileX, tileY) {
+    for (let dx = 0; dx < 2; dx++) {
+      for (let dy = 0; dy < 2; dy++) {
+        const x = tileX + dx;
+        const y = tileY + dy;
+        if (this.isPositionOccupied(x, y)) return true;
+        if (this.food && this.food.x === x && this.food.y === y) return true;
+      }
+    }
+    return false;
+  }
+
+  createStage8Ghost(type, tileX, tileY) {
+    const pixelX = tileX * this.gridSize + this.gridSize;
+    const pixelY = tileY * this.gridSize + this.gridSize + this.gameAreaY;
+    const size = this.gridSize * 2;
+    const container = this.add.container(pixelX, pixelY).setDepth(1150).setAlpha(0);
+
+    if (type === 'wailer') {
+      const body = this.add.ellipse(0, -4, size * 0.75, size * 0.95, 0xdde8ff, 0.35);
+      const tail = this.add.triangle(0, size * 0.35, -size * 0.3, 0, size * 0.3, 0, 0, size * 0.55, 0xbcc8dd, 0.35);
+      const eye1 = this.add.circle(-size * 0.15, -size * 0.2, size * 0.08, 0x000000, 0.7);
+      const eye2 = this.add.circle(size * 0.15, -size * 0.2, size * 0.08, 0x000000, 0.7);
+      const mouth = this.add.ellipse(0, size * 0.05, size * 0.16, size * 0.25, 0x220011, 0.8);
+      container.add([body, tail, eye1, eye2, mouth]);
+    } else if (type === 'mask') {
+      const mask = this.add.ellipse(0, -4, size * 0.7, size * 0.9, 0xf1e1cf, 0.5);
+      const eyeLeft = this.add.ellipse(-size * 0.18, -size * 0.15, size * 0.18, size * 0.22, 0x1a000f, 0.9);
+      const eyeRight = this.add.ellipse(size * 0.18, -size * 0.15, size * 0.18, size * 0.22, 0x1a000f, 0.9);
+      const crack = this.add.line(0, 0, -size * 0.1, -size * 0.4, size * 0.25, size * 0.35, 0x5a2b2b, 0.8);
+      crack.setLineWidth(2);
+      container.add([mask, eyeLeft, eyeRight, crack]);
+    } else {
+      const core = this.add.circle(0, -size * 0.1, size * 0.28, 0x88ddff, 0.35);
+      const glow = this.add.circle(0, -size * 0.1, size * 0.45, 0x224466, 0.2);
+      const tail = this.add.ellipse(0, size * 0.35, size * 0.4, size * 0.6, 0x112233, 0.35);
+      const eye = this.add.circle(0, -size * 0.15, size * 0.08, 0x000000, 0.75);
+      container.add([glow, tail, core, eye]);
+    }
+
+    this.tweens.add({
+      targets: container,
+      alpha: 0.9,
+      duration: 200,
+      ease: 'Sine.easeOut'
+    });
+
+    const floatTween = this.tweens.add({
+      targets: container,
+      y: pixelY + this.gridSize * 0.2,
+      duration: 600,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    const ghost = {
+      tileX,
+      tileY,
+      container,
+      floatTween,
+      expireTimer: null,
+      type
+    };
+
+    ghost.expireTimer = this.time.delayedCall(this.stage8GhostLifetime, () => {
+      this.removeStage8Ghost(ghost);
+    });
+
+    return ghost;
+  }
+
+  removeStage8Ghost(ghost, silent = false) {
+    if (!ghost) return;
+
+    if (ghost.expireTimer) {
+      ghost.expireTimer.destroy();
+      ghost.expireTimer = null;
+    }
+
+    if (ghost.floatTween) {
+      ghost.floatTween.stop();
+      ghost.floatTween = null;
+    }
+
+    if (ghost.container) {
+      if (silent) {
+        ghost.container.destroy();
+      } else {
+        this.tweens.add({
+          targets: ghost.container,
+          alpha: 0,
+          scale: 0.6,
+          duration: 150,
+          onComplete: () => {
+            if (ghost.container) ghost.container.destroy();
+          }
+        });
+      }
+      ghost.container = null;
+    }
+
+    this.stage8Ghosts = this.stage8Ghosts.filter(entry => entry !== ghost);
+  }
+
+  checkStage8GhostCollision(head) {
+    if (this.currentStage !== 8) return;
+    if (!this.stage8Ghosts || this.stage8Ghosts.length === 0) return;
+    if (!head) return;
+
+    for (const ghost of [...this.stage8Ghosts]) {
+      if (head.x >= ghost.tileX && head.x <= ghost.tileX + 1 &&
+          head.y >= ghost.tileY && head.y <= ghost.tileY + 1) {
+        this.applyStage8GhostPenalty(1);
+        this.removeStage8Ghost(ghost);
+        break;
+      }
+    }
+  }
+
+  applyStage8GhostPenalty(amount = 1) {
+    if (this.foodCount <= 0) return;
+
+    this.foodCount = Math.max(0, this.foodCount - amount);
+    if (this.foodCountText) {
+      this.foodCountText.setText(this.foodCount.toString());
+      this.tweens.add({
+        targets: this.foodCountText,
+        scaleX: { from: 1, to: 1.8 },
+        scaleY: { from: 1, to: 1.8 },
+        duration: 120,
+        yoyo: true,
+        repeat: 2,
+        ease: 'Back.easeOut'
+      });
+      this.tweens.add({
+        targets: this.foodCountText,
+        tint: 0xff3333,
+        duration: 100,
+        yoyo: true,
+        repeat: 3,
+        onComplete: () => {
+          if (this.foodCountText) this.foodCountText.clearTint();
+        }
+      });
+    }
+
+    if (this.foodCountText) {
+      const penaltyText = this.add.text(
+        this.foodCountText.x + 18,
+        this.foodCountText.y + 4,
+        `-${amount}`,
+        {
+          fontSize: '18px',
+          fill: '#ff3333',
+          fontStyle: 'bold',
+          stroke: '#000000',
+          strokeThickness: 3
+        }
+      ).setOrigin(0, 0.5).setDepth(2501);
+
+      this.tweens.add({
+        targets: penaltyText,
+        y: penaltyText.y - 20,
+        alpha: 0,
+        duration: 600,
+        ease: 'Cubic.easeOut',
+        onComplete: () => penaltyText.destroy()
+      });
+    }
+
+    const head = this.snake && this.snake[0];
+    if (head) {
+      const headX = head.x * this.gridSize + this.gridSize / 2;
+      const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+      const burst = this.add.circle(headX, headY, this.gridSize * 0.9, 0x550011, 0.6).setDepth(1500);
+      this.tweens.add({
+        targets: burst,
+        alpha: 0,
+        scale: 1.6,
+        duration: 200,
+        onComplete: () => burst.destroy()
+      });
+    }
+  }
+
   // ===== ESC Pause =====
   pauseFromEsc() {
     if (this.isEscPaused) return;
@@ -8580,6 +9010,8 @@ export default class SnakeGame extends Phaser.Scene {
 
     // Stage 8 블랙아웃 중이면 UI 방해 방지용 정리
     this.stopStage8BlackoutCycle();
+    this.stopDarkCreepCycle();
+    this.stopStage8GhostSpawning();
 
     // 부활 가능 여부 먼저 체크
     if (this.canRevive()) {
@@ -9518,10 +9950,16 @@ export default class SnakeGame extends Phaser.Scene {
     // 스테이지 클리어 애니메이션 플래그 리셋
     this.isStageClearingAnimation = false;
 
+    if (this.gridGraphics) {
+      this.gridGraphics.setVisible(true);
+    }
+
     // 스피드 부스트 궤도 정리 (새로 생성하기 전에)
     this.cleanupSpeedBoostOrbitals();
     this.resetFogOfWar();
     this.stopStage8BlackoutCycle();
+    this.stopDarkCreepCycle();
+    this.stopStage8GhostSpawning();
 
     // Meta Universe 정리
     if (this.metaUniverseMode) {
@@ -22183,6 +22621,43 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
+  showTeleportStrikeWarning(originPos) {
+    if (!originPos) return;
+    if (!this.bulletBossMode || this.bulletBossPhase === 'victory') return;
+
+    const pixelX = originPos.x * this.gridSize + this.gridSize / 2;
+    const pixelY = originPos.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    const warningText = this.add.text(pixelX, pixelY - 35, '!', {
+      fontSize: '30px',
+      fontStyle: 'bold',
+      fill: '#ff0000',
+      stroke: '#ffff00',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(160).setAlpha(0);
+
+    if (this.bulletBossTeleportStrikeEffects) {
+      this.bulletBossTeleportStrikeEffects.push(warningText);
+    }
+
+    this.tweens.add({
+      targets: warningText,
+      alpha: 1,
+      scale: { from: 0.6, to: 1.4 },
+      duration: 140,
+      yoyo: true,
+      repeat: 2,
+      onComplete: () => {
+        if (warningText && warningText.active) {
+          warningText.destroy();
+        }
+        if (this.bulletBossTeleportStrikeEffects) {
+          this.bulletBossTeleportStrikeEffects = this.bulletBossTeleportStrikeEffects.filter(el => el !== warningText);
+        }
+      }
+    });
+  }
+
   // 탄막 보스 파이널 히트 - 울트라 슬로우모션 극적 연출 (짧게)
   handleBulletBossFinalHit() {
     const { width, height } = this.cameras.main;
@@ -22461,14 +22936,23 @@ export default class SnakeGame extends Phaser.Scene {
     if (!originPos) return;
     if (!this.bulletBossMode || this.bulletBossPhase === 'victory') return;
 
-    const timer = this.time.delayedCall(1000, () => {
+    const strikeDelay = 1000;
+    const warningLead = 350;
+
+    const warningTimer = this.time.delayedCall(Math.max(0, strikeDelay - warningLead), () => {
+      if (!this.bulletBossMode || this.bulletBossPhase === 'victory') return;
+      if (this.gameOver) return;
+      this.showTeleportStrikeWarning(originPos);
+    });
+
+    const strikeTimer = this.time.delayedCall(strikeDelay, () => {
       if (!this.bulletBossMode || this.bulletBossPhase === 'victory') return;
       if (this.gameOver) return;
       this.spawnBulletBossTeleportStrike(originPos);
     });
 
     if (!this.bulletBossTeleportStrikeTimers) this.bulletBossTeleportStrikeTimers = [];
-    this.bulletBossTeleportStrikeTimers.push(timer);
+    this.bulletBossTeleportStrikeTimers.push(warningTimer, strikeTimer);
   }
 
   spawnBulletBossTeleportStrike(originPos) {
@@ -22833,9 +23317,14 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 승리 연출용 게임 영역 클리어
   clearGameAreaForVictory() {
-    // 뱀 그래픽 숨기기
+    // 뱀/격자 그래픽 숨기기
+    this.hideSnakeGraphics();
+    if (this.gridGraphics) {
+      this.gridGraphics.setVisible(false);
+    }
     if (this.snakeGraphics) {
       this.snakeGraphics.clear();
+      this.snakeGraphics.setVisible(false);
     }
 
     // 먹이 그래픽 숨기기
@@ -22848,6 +23337,9 @@ export default class SnakeGame extends Phaser.Scene {
       this.deadZones.forEach(dz => {
         if (dz.rect) dz.rect.setVisible(false);
       });
+    }
+    if (this.deadZoneGraphics) {
+      this.deadZoneGraphics.clear();
     }
 
     // 톱니 숨기기
@@ -22958,6 +23450,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.flareCount = 0;
     this.flares = [];
     this.hallucinationFoods = [];
+    this.fogBossFirstDodgeGraceUsed = false;
+    this.dodgeAttemptCount = 0;
 
     if (this.moveTimer) {
       this.moveTimer.delay = 90;
@@ -23995,6 +24489,10 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.jumpScareActive || this.shadowStrikeWarningActive || this.fogBossVisible) {
       // 🆕 HIT 등록 대기 상태 (회피 실패보다 우선!)
       this.fogBossHitPending = true;
+      if (this.fogBossHitCount >= 3) {
+        if (this.moveTimer) this.moveTimer.paused = true;
+        this.fogBossInputBlocked = true;
+      }
 
       // 🆕 QTE가 활성화 중이면 즉시 취소 (HIT 우선!)
       if (this.dodgeQTEActive) {
@@ -24032,23 +24530,23 @@ export default class SnakeGame extends Phaser.Scene {
       this.fogVisibleTiles = originalVisibility;
 
       // 아직 클리어 전이면 숨김
-      if (this.fogBossPhase === 'shadow' && this.fogBossHitCount < 4) {
-        this.fogBossVisible = false;
-        if (this.fogBossElement) {
-          this.tweens.add({
-            targets: this.fogBossElement,
-            alpha: 0,
-            duration: 300
+        if (this.fogBossPhase === 'shadow' && this.fogBossHitCount < 4) {
+          this.fogBossVisible = false;
+          if (this.fogBossElement) {
+            this.tweens.add({
+              targets: this.fogBossElement,
+              alpha: 0,
+              duration: 300
+            });
+          }
+
+          // 다음 공격 예약
+          const delay = this.getShadowStrikeDelay();
+          this.shadowStrikeTimer = this.time.delayedCall(delay, () => {
+            this.showShadowStrikeWarning();
           });
         }
-
-        // 다음 공격 예약
-        const delay = Phaser.Math.Between(this.shadowStrikeInterval[0], this.shadowStrikeInterval[1]);
-        this.shadowStrikeTimer = this.time.delayedCall(delay, () => {
-          this.showShadowStrikeWarning();
-        });
-      }
-    });
+      });
   }
 
   // 빛 파동 효과
@@ -24938,8 +25436,9 @@ export default class SnakeGame extends Phaser.Scene {
     if (!this.fogBossMode || !this.presenceActive || this.gameOver) return;
 
     const hitCount = this.fogBossHitCount;
+    const attemptCount = Math.min(this.dodgeAttemptCount || 0, 10);
     // HIT 많을수록 공격 간격 짧아짐
-    const cooldown = Math.max(5000, this.attackCooldown - hitCount * 1000);
+    const cooldown = Math.max(2500, this.attackCooldown - hitCount * 1200 - attemptCount * 150);
 
     this.time.delayedCall(cooldown, () => {
       if (this.fogBossMode && this.presenceActive && !this.gameOver) {
@@ -25212,18 +25711,21 @@ export default class SnakeGame extends Phaser.Scene {
     // 돌진 속도 (HIT 많을수록 + 시도 횟수 많을수록 빨라짐!)
     // 초반: 700ms (여유) → 후반: 250ms (극한)
     const baseTime = 700;
-    const hitPenalty = this.fogBossHitCount * 80;  // HIT당 80ms 감소
-    const attemptPenalty = this.dodgeAttemptCount * 15;  // 시도당 15ms 감소
-    const dashDuration = Math.max(250, baseTime - hitPenalty - attemptPenalty);
+    const hitPenalty = this.fogBossHitCount * 90;  // HIT당 90ms 감소
+    const attemptPenalty = Math.max(0, this.dodgeAttemptCount - 1) * 60;  // 시도당 60ms 감소
+    const dashDuration = Math.max(180, baseTime - hitPenalty - attemptPenalty);
 
     // QTE 프롬프트 표시 (첫 공격은 10초로 충분히 길게 - 게임 방식 학습용)
-    const isFirstAttack = this.presenceAttackCount === 1;
-    const qteDuration = isFirstAttack ? 10000 : dashDuration;
+    const useGraceWindow = !this.fogBossFirstDodgeGraceUsed;
+    if (useGraceWindow) {
+      this.fogBossFirstDodgeGraceUsed = true;
+    }
+    const qteDuration = useGraceWindow ? 10000 : dashDuration;
     this.showDodgeQTE(qteDuration);
 
     // QTE 시간 (첫 공격은 10초로 충분히 길게)
-    const qteWindow = isFirstAttack ? 10000 : dashDuration + 100;
-    const actualDashDuration = isFirstAttack ? 10000 : dashDuration;
+    const qteWindow = useGraceWindow ? 10000 : dashDuration + 80;
+    const actualDashDuration = useGraceWindow ? 10000 : dashDuration;
 
     this.tweens.add({
       targets: this.fogBossElement,
@@ -25678,7 +26180,7 @@ export default class SnakeGame extends Phaser.Scene {
       this.time.delayedCall(500, () => {
         if (this.fogBossPhase === 'shadow') {
           // Shadow 페이즈면 shadowStrike 계속
-          const delay = Phaser.Math.Between(this.shadowStrikeInterval[0], this.shadowStrikeInterval[1]);
+          const delay = this.getShadowStrikeDelay();
           this.shadowStrikeTimer = this.time.delayedCall(delay, () => {
             this.showShadowStrikeWarning();
           });
@@ -27105,6 +27607,19 @@ export default class SnakeGame extends Phaser.Scene {
     this.rageModeActive = false;
   }
 
+  getShadowStrikeDelay() {
+    const hitCount = this.fogBossHitCount;
+    const attemptCount = Math.min(this.dodgeAttemptCount || 0, 8);
+    const minBase = this.shadowStrikeInterval[0];
+    const maxBase = this.shadowStrikeInterval[1];
+    const hitDrop = hitCount * 350;
+    const attemptDrop = attemptCount * 120;
+    const minDelay = Math.max(900, minBase - hitDrop - attemptDrop);
+    const maxDelay = Math.max(minDelay + 200, maxBase - hitDrop - attemptDrop);
+
+    return Phaser.Math.Between(minDelay, maxDelay);
+  }
+
   // Shadow Strike 경고
   showShadowStrikeWarning() {
     if (this.fogBossPhase !== 'shadow') return;
@@ -27281,10 +27796,7 @@ export default class SnakeGame extends Phaser.Scene {
         }
 
         // 다음 공격 예약 (더 빠르게)
-        const delay = Phaser.Math.Between(
-          this.shadowStrikeInterval[0] - this.fogBossHitCount * 300,
-          this.shadowStrikeInterval[1] - this.fogBossHitCount * 300
-        );
+        const delay = this.getShadowStrikeDelay();
         this.shadowStrikeTimer = this.time.delayedCall(Math.max(delay, 1500), () => {
           this.showShadowStrikeWarning();
         });
@@ -28186,6 +28698,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogBossPhase = 'none';
     this.fogBossVisible = false;
     this.fogBossHitCount = 0;
+    this.fogBossFirstDodgeGraceUsed = false;
+    this.dodgeAttemptCount = 0;
 
     // 타이머 정리
     if (this.shadowStrikeTimer) {
@@ -28810,6 +29324,8 @@ export default class SnakeGame extends Phaser.Scene {
     // 기존 상태 완전 정리
     this.cleanupSpeedBoostOrbitals();
     this.resetFogOfWar();
+    this.stopDarkCreepCycle();
+    this.stopStage8GhostSpawning();
     this.destroyAllSaws();
     this.stopGasZone();
 
