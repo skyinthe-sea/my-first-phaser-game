@@ -352,6 +352,7 @@ console.log('Speed:', this.moveTimer.delay);
 | 4 | 18탄 Phase1→2 진행 조건 | 31415 | **1마리** | 5마리 | `ghostsRequiredForPhase2 = 1` → `5` |
 | 5 | 18탄 러너 테스트 플래그 | 27825 | 설정됨 | **삭제** | `this.testRunnerTransition = true;` 라인 삭제 |
 | 6 | 3탄 독개구리 보스 위치 | 14184-14189 | 중앙4군데 | 모서리4개 | `bossCorners` 배열 수정 |
+| 7 | 먹이 먹을 때 속도 감소 | 2235, 30751 | **비활성화** | 활성화 | `if (false &&` → `if (` |
 
 ### 원복 코드 예시
 
@@ -376,6 +377,10 @@ this.bossCorners = [
   { x: 0, y: this.rows - 1 },
   { x: this.cols - 1, y: this.rows - 1 }
 ];
+
+// #7: 라인 2235, 30751 (속도 감소 활성화)
+// 변경 전: if (false && this.moveTimer.delay > 50) {
+// 변경 후: if (this.moveTimer.delay > 50) {
 ```
 
 ---

@@ -2230,8 +2230,9 @@ export default class SnakeGame extends Phaser.Scene {
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
 
-      // 속도 증가 (최대 속도 50ms)
-      if (this.moveTimer.delay > 50) {
+      // 속도 증가 (최대 속도 50ms) - 테스트용 임시 비활성화
+      // TODO: 테스트 완료 후 원복 필요
+      if (false && this.moveTimer.delay > 50) {
         this.moveTimer.delay -= 5;
 
         // 속도 UI 업데이트 + 애니메이션
@@ -14773,6 +14774,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   startBossBattle() {
+    if (this.gameOver || this.isReviving) return;
+    if (!this.bossMode || this.bossPhase !== 'poisoned') return;
+
     const { width, height } = this.cameras.main;
     this.bossPhase = 'battle';
     this.bossHitCount = 0;
@@ -14818,6 +14822,8 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   spawnBossAtCorner() {
+    if (this.gameOver || this.isReviving) return;
+    if (!this.bossMode || this.bossPhase !== 'battle') return;
     if (this.bossHitCount >= 4) return;
 
     // 코너에서 랜덤 선택 (순서대로)
@@ -30745,8 +30751,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.score += 10;
     this.scoreText.setText(this.score.toString());
 
-    // 속도 증가 (5ms씩, 최소 50ms)
-    if (this.moveTimer.delay > 50) {
+    // 속도 증가 (5ms씩, 최소 50ms) - 테스트용 임시 비활성화
+    // TODO: 테스트 완료 후 원복 필요
+    if (false && this.moveTimer.delay > 50) {
       this.moveTimer.delay -= 5;
       this.speedText.setText(this.moveTimer.delay + 'ms');
     }
