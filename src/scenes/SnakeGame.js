@@ -15690,6 +15690,14 @@ export default class SnakeGame extends Phaser.Scene {
         this.food = this.generateFood();
       }
 
+      // NEXUS 코드가 독가스에 잠기면 남은 코드 전체 재스폰
+      if (this.nexusMode && this.nexusBinaryNodes && this.nexusBinaryNodes.length > 0) {
+        const hasUnsafeNode = this.nexusBinaryNodes.some(node => !node.collected && this.isInGasZone(node.x, node.y));
+        if (hasUnsafeNode) {
+          this.respawnRemainingBinaryNodes();
+        }
+      }
+
       // 경고 표시
       if (this.gasZoneRadius <= this.gasZoneMinRadius + 3) {
         this.showGasZoneWarning('DANGER! GAS CLOSING IN!');
@@ -18428,6 +18436,31 @@ export default class SnakeGame extends Phaser.Scene {
       const value = this.nexusBinarySequence[i];
 
       const node = this.createBinaryNode(pos.x, pos.y, value, i);
+      this.nexusBinaryNodes.push(node);
+    }
+  }
+
+  respawnRemainingBinaryNodes() {
+    if (!this.nexusMode || !this.nexusBinaryNodes || this.nexusBinaryNodes.length === 0) return;
+
+    const remainingValues = this.nexusBinarySequence.slice(this.nexusBinaryCollected.length);
+    if (remainingValues.length === 0) return;
+
+    // 기존 남은 노드 제거 후 다시 스폰
+    this.nexusBinaryNodes.forEach(node => {
+      if (node.element) node.element.destroy();
+    });
+    this.nexusBinaryNodes = [];
+
+    const safePositions = this.getSafePositionsForNodes(remainingValues.length);
+
+    for (let i = 0; i < remainingValues.length; i++) {
+      const pos = safePositions[i];
+      if (!pos) break;
+      const value = remainingValues[i];
+      const index = i + this.nexusBinaryCollected.length;
+
+      const node = this.createBinaryNode(pos.x, pos.y, value, index);
       this.nexusBinaryNodes.push(node);
     }
   }
