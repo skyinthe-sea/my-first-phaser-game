@@ -2245,14 +2245,14 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 스테이지 클리어 체크 - 보스전 중에는 비활성화
-      if (!this.bossMode && this.foodCount >= 20) {
+      // TODO: 테스트 완료 후 20으로 원복
+      if (!this.bossMode && this.foodCount >= 5) {
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
 
-      // 속도 증가 (최대 속도 50ms) - 테스트용 임시 비활성화
-      // TODO: 테스트 완료 후 원복 필요
-      if (false && this.moveTimer.delay > 50) {
+      // 속도 증가 (최대 속도 50ms)
+      if (this.moveTimer.delay > 50) {
         this.moveTimer.delay -= 5;
 
         // 속도 UI 업데이트 + 애니메이션
@@ -5039,16 +5039,13 @@ export default class SnakeGame extends Phaser.Scene {
           this.time.delayedCall(800, () => {
             this.showGearTitanDialogue("I AM GEAR TITAN... FORGED FROM STEEL!", () => {
               this.showGearTitanDialogue("YOUR SAWS WERE MERE TOYS... NOW FACE ME!", () => {
-                // 뱀 반응 (말풍선)
-                this.showGearTitanSnakeBubble("Steel? I eat metal for breakfast!", () => {
-                  // 차지 대시 튜토리얼 후 전투 시작
-                  this.showChargeDashTutorial(() => {
-                    this.canChargeDash = true;
-                    this.gearTitanPhase = 'phase1';
-                    this.moveTimer.paused = false;
-                    this.showChargeUI();
-                    this.advanceGearTitanPhase();
-                  });
+                // 차지 대시 튜토리얼 후 전투 시작
+                this.showChargeDashTutorial(() => {
+                  this.canChargeDash = true;
+                  this.gearTitanPhase = 'phase1';
+                  this.moveTimer.paused = false;
+                  this.showChargeUI();
+                  this.advanceGearTitanPhase();
                 });
               });
             });
@@ -9479,6 +9476,9 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.isBulletBossStage()) {
       // 탄막보스: 먹이 없음
       this.food = { x: -100, y: -100 };
+    } else if (this.isGearTitanStage()) {
+      // 기어 타이탄: 먹이 없음 (보스가 먹이 역할)
+      this.food = { x: -100, y: -100 };
     } else if (this.isPoisonFrogBossStage && this.isPoisonFrogBossStage()) {
       // 독개구리: 인트로 스킵 → 함정(독)부터 시작
       this.isBossStage = true;
@@ -9514,6 +9514,13 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.isBulletBossStage()) {
       this.time.delayedCall(800, () => {
         this.startBulletBoss();
+      });
+    }
+
+    // 기어 타이탄 스테이지: 보스 시작
+    if (this.isGearTitanStage()) {
+      this.time.delayedCall(800, () => {
+        this.startGearTitan();
       });
     }
   }
@@ -9573,6 +9580,9 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 모든 톱니 정지 (일시정지만, 타이머 유지)
     this.pauseAllSaws();
+
+    // Stage 8 블랙아웃 모드 정리 (회색 뱀 잔상 방지)
+    this.stopStage8BlackoutCycle();
 
     // 뱀 그래픽 숨기기 (점프 애니메이션에서 별도 렉탱글로 표시)
     this.hideSnakeGraphics();
@@ -14864,7 +14874,7 @@ export default class SnakeGame extends Phaser.Scene {
 
       // 보스 대사
       this.time.delayedCall(1000, () => {
-        this.showBossDialogue("We are enemies... Take my poison!", () => {
+        this.showBossDialogue("Take my poison!", () => {
           // 대사 후 바로 게임 재개
           this.time.delayedCall(500, () => {
             this.bossPhase = 'trap';
@@ -23800,7 +23810,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogBossElements.push(titleText);
 
     // 부제
-    const subtitleText = this.add.text(width / 2, height / 2 - 85, '심연의 그림자', {
+    const subtitleText = this.add.text(width / 2, height / 2 - 85, 'Shadow of the Abyss', {
       fontSize: '16px',
       fill: '#aa0000',
       fontStyle: 'italic'
@@ -28733,6 +28743,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogBossHitCount = 0;
     this.fogBossFirstDodgeGraceUsed = false;
     this.dodgeAttemptCount = 0;
+    this.fogBossInputBlocked = false; // 입력 차단 해제
 
     // 타이머 정리
     if (this.shadowStrikeTimer) {
@@ -31300,9 +31311,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.score += 10;
     this.scoreText.setText(this.score.toString());
 
-    // 속도 증가 (5ms씩, 최소 50ms) - 테스트용 임시 비활성화
-    // TODO: 테스트 완료 후 원복 필요
-    if (false && this.moveTimer.delay > 50) {
+    // 속도 증가 (5ms씩, 최소 50ms)
+    if (this.moveTimer.delay > 50) {
       this.moveTimer.delay -= 5;
       this.speedText.setText(this.moveTimer.delay + 'ms');
     }
