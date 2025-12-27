@@ -34,6 +34,24 @@ export default class SnakeGame extends Phaser.Scene {
     this.load.audio('dash_effect', 'assets/sfx/spear_3.mp3');
     // 9탄 빛의조각 수집 효과음
     this.load.audio('flare_collect', 'assets/sfx/Gacha_impact_2.mp3');
+    // 10탄 톱니 이동 효과음
+    this.load.audio('saw_move', 'assets/sfx/10_effect.mp3');
+    // 11탄 강화 톱니 이동 효과음
+    this.load.audio('enhanced_saw_move', 'assets/sfx/11_effect.mp3');
+    // 13~15탄 자기장 축소 효과음
+    this.load.audio('shrink_effect', 'assets/sfx/13_effect.mp3');
+    // 15탄 해독코드 수집 효과음
+    this.load.audio('code_collect', 'assets/sfx/15_effect.mp3');
+    // 15탄 스캐너 효과음
+    this.load.audio('nexus_scan', 'assets/sfx/15_scan.mp3');
+    // 16탄 웜홀 효과음
+    this.load.audio('wormhole_effect', 'assets/sfx/16_effect.mp3');
+    // 16탄 맵 흔들림 효과음
+    this.load.audio('meta_shake', 'assets/sfx/16_shake.mp3');
+    // 16탄 콤보 깨짐 효과음
+    this.load.audio('meta_crush', 'assets/sfx/16_crush.mp3');
+    // 16탄 카운트다운 효과음
+    this.load.audio('meta_count', 'assets/sfx/16_count.mp3');
 
     // 뱀 머리 스프라이트 로드 (2개로 4방향 구현)
     this.load.image('snake_head_side', 'assets/sprite/snake_head_side.png'); // 좌우
@@ -273,7 +291,7 @@ export default class SnakeGame extends Phaser.Scene {
     ];
     this.laserRotationSpeed = 0.015; // 레이저 회전 속도 완화
     this.laserLength = 22; // 레이저 길이 (타일) 소폭 감소
-    this.laserFireInterval = 6000; // 발사 주기 완화
+    this.laserFireInterval = 8000; // 발사 주기 8초
     this.laserWarningDuration = 1500; // 경고 1.5초
     this.laserActiveDuration = 1500; // 레이저 활성 시간 단축
     this.laserAnimTimer = null; // 60fps 애니메이션 타이머
@@ -4170,6 +4188,8 @@ export default class SnakeGame extends Phaser.Scene {
       duration: Math.max(150, saw.moveDelay * 0.55),
       ease: 'Sine.easeInOut',
       onStart: () => {
+        // 톱니 이동 효과음
+        this.sound.play('saw_move', { volume: 0.15 });
         this.tweens.add({
           targets: saw.container,
           scaleX: 1.12,
@@ -4543,6 +4563,9 @@ export default class SnakeGame extends Phaser.Scene {
     // 이동 애니메이션 (더 빠름)
     const newPixelX = saw.x * this.gridSize + this.gridSize / 2;
     const newPixelY = saw.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 강화 톱니 이동 효과음 (11탄)
+    this.sound.play('enhanced_saw_move', { volume: 0.15 });
 
     this.tweens.add({
       targets: saw.container,
@@ -17306,6 +17329,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   showGasZoneExpandEffect() {
+    // 자기장 축소 효과음 (번쩍하면서 줄어들 때)
+    this.sound.play('shrink_effect', { volume: 0.25 });
+
     const { width, height } = this.cameras.main;
     const gs = this.gridSize;
 
@@ -18034,8 +18060,8 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   isTurretAtPosition(x, y) {
-    return this.magneticTurrets.some(t => t.x === x && t.y === y) ||
-           this.laserTurrets.some(t => t.x === x && t.y === y);
+    // 레이저 터렛(원)은 통과 가능 - 레이저만 맞으면 죽음
+    return this.magneticTurrets.some(t => t.x === x && t.y === y);
   }
 
   // =====================================================
@@ -19382,8 +19408,8 @@ export default class SnakeGame extends Phaser.Scene {
     const centerX = this.nexusPosition.x * this.gridSize + this.gridSize / 2;
     const centerY = this.nexusPosition.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
 
-    // 경고 텍스트
-    const warnText = this.add.text(width / 2, 90, '⚠ SCAN INCOMING ⚠', {
+    // 경고 텍스트 (화면 중앙에 표시)
+    const warnText = this.add.text(width / 2, height / 2, '⚠ SCAN INCOMING ⚠', {
       fontSize: '18px',
       fontFamily: 'monospace',
       color: '#ff0000'
@@ -19452,6 +19478,9 @@ export default class SnakeGame extends Phaser.Scene {
       laser.fillStyle(0xff00ff, 0.9);
       laser.fillRect(0, this.gameAreaY, 16, height - this.gameAreaY);
 
+      // 스캐너 효과음
+      this.sound.play('nexus_scan', { volume: 0.3 });
+
       this.nexusActiveLaser = { graphics: laser, type: 'vertical', x: 0 };
 
       // 이동 애니메이션
@@ -19488,6 +19517,9 @@ export default class SnakeGame extends Phaser.Scene {
       // 수평 레이저 (위에서 아래로 스캔)
       laser.fillStyle(0xff00ff, 0.9);
       laser.fillRect(0, this.gameAreaY, width, 16);
+
+      // 스캐너 효과음
+      this.sound.play('nexus_scan', { volume: 0.3 });
 
       this.nexusActiveLaser = { graphics: laser, type: 'horizontal', y: this.gameAreaY };
 
@@ -19536,8 +19568,8 @@ export default class SnakeGame extends Phaser.Scene {
     });
 
     // 생성 효과음 및 시각적 피드백
-    const { width } = this.cameras.main;
-    const scanText = this.add.text(width / 2, 100, '🔥 SCANNED! 🔥', {
+    const { width, height } = this.cameras.main;
+    const scanText = this.add.text(width / 2, height / 2, '🔥 SCANNED! 🔥', {
       fontSize: '20px',
       fontFamily: 'monospace',
       color: '#ff6600'
@@ -19546,8 +19578,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.tweens.add({
       targets: scanText,
       alpha: 0,
-      y: 80,
-      duration: 1500,
+      scale: 1.5,
+      duration: 1000,
       onComplete: () => scanText.destroy()
     });
 
@@ -19631,9 +19663,9 @@ export default class SnakeGame extends Phaser.Scene {
 
   // ========== NEXUS v2: 라운드 시스템 ==========
 
-  // 라운드별 노드 수: 1→1개, 2→3개, 3→5개, 4→8개
+  // 라운드별 노드 수: 1→3개, 2→5개, 3→8개, 4→10개
   getNodeCountForRound(roundNum) {
-    const nodeCounts = { 1: 1, 2: 3, 3: 5, 4: 8 };
+    const nodeCounts = { 1: 3, 2: 5, 3: 8, 4: 10 };
     return nodeCounts[roundNum] || roundNum;
   }
 
@@ -19976,6 +20008,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   collectBinaryNode(node) {
+    // 해독코드 수집 효과음
+    this.sound.play('code_collect', { volume: 0.3 });
+
     const expectedIndex = this.nexusBinaryCollected.length;
     const expectedValue = this.nexusBinarySequence[expectedIndex];
 
@@ -20322,8 +20357,8 @@ export default class SnakeGame extends Phaser.Scene {
   spawnDataBlocks() {
     const { width, height } = this.cameras.main;
 
-    // 경고
-    const warnText = this.add.text(width / 2, 90, '⚠ DATA INCOMING ⚠', {
+    // 경고 (화면 중앙에 표시)
+    const warnText = this.add.text(width / 2, height / 2, '⚠ DATA INCOMING ⚠', {
       fontSize: '18px',
       fontFamily: 'monospace',
       color: '#ff00ff'
@@ -20627,19 +20662,50 @@ export default class SnakeGame extends Phaser.Scene {
     const pixelX = x * this.gridSize + this.gridSize / 2;
     const pixelY = y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
 
-    // 지뢰 그래픽
+    // 지뢰 그래픽 - 더 위협적으로!
     const mine = this.add.container(pixelX, pixelY);
     mine.setDepth(85);
 
-    const mineBody = this.add.circle(0, 0, 8, 0xff0000);
-    mineBody.setStrokeStyle(2, 0xffff00);
+    // 외부 불길한 글로우
+    const outerGlow = this.add.circle(0, 0, 14, 0x660000, 0.4);
+    mine.add(outerGlow);
+
+    // 중간 위협 링
+    const middleRing = this.add.circle(0, 0, 11, 0x000000, 0);
+    middleRing.setStrokeStyle(2, 0xff0000);
+    mine.add(middleRing);
+
+    // 코어 (검은색 + 빨간 테두리)
+    const mineBody = this.add.circle(0, 0, 8, 0x220000);
+    mineBody.setStrokeStyle(2, 0xff0000);
     mine.add(mineBody);
 
-    // 카운트다운 텍스트
-    const countText = this.add.text(0, 0, '5', {
+    // 해골/위험 아이콘
+    const skullIcon = this.add.text(0, -1, '☠', {
       fontSize: '10px',
+      color: '#ff0000'
+    }).setOrigin(0.5);
+    mine.add(skullIcon);
+
+    // 스파이크 이펙트 (위험 표시)
+    const spikes = this.add.graphics();
+    spikes.lineStyle(1, 0xff0000, 0.8);
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const innerR = 9;
+      const outerR = 13;
+      spikes.moveTo(Math.cos(angle) * innerR, Math.sin(angle) * innerR);
+      spikes.lineTo(Math.cos(angle) * outerR, Math.sin(angle) * outerR);
+    }
+    spikes.strokePath();
+    mine.add(spikes);
+
+    // 카운트다운 텍스트 (아래쪽에 배치)
+    const countText = this.add.text(0, 18, '5', {
+      fontSize: '8px',
       fontFamily: 'monospace',
-      color: '#ffffff'
+      color: '#ff4444',
+      fontStyle: 'bold'
     }).setOrigin(0.5);
     mine.add(countText);
 
@@ -20651,12 +20717,31 @@ export default class SnakeGame extends Phaser.Scene {
     };
     this.nexusMines.push(mineObj);
 
-    // 펄스 애니메이션
+    // 펄스 애니메이션 - 더 위협적으로
     this.tweens.add({
       targets: mine,
-      scaleX: 1.2,
-      scaleY: 1.2,
-      duration: 300,
+      scaleX: 1.3,
+      scaleY: 1.3,
+      duration: 200,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    // 회전 애니메이션 (스파이크)
+    this.tweens.add({
+      targets: spikes,
+      angle: 360,
+      duration: 2000,
+      repeat: -1,
+      ease: 'Linear'
+    });
+
+    // 외부 글로우 깜빡임
+    this.tweens.add({
+      targets: outerGlow,
+      alpha: { from: 0.4, to: 0.8 },
+      duration: 400,
       yoyo: true,
       repeat: -1
     });
@@ -21005,6 +21090,12 @@ export default class SnakeGame extends Phaser.Scene {
 
     const { width, height } = this.cameras.main;
 
+    // === 난이도 증가: HIT마다 가스존 축소 속도 증가 ===
+    if (this.gasZoneEnabled && this.gasZoneTimer) {
+      const speedMultiplier = 1 - (this.nexusHitCount * 0.15); // HIT당 15% 빨라짐
+      this.gasZoneTimer.delay = Math.max(4000, this.gasZoneExpandInterval * speedMultiplier);
+    }
+
     // HP 바 업데이트
     if (this.nexusHPSegments && this.nexusHPSegments[4 - this.nexusHitCount]) {
       const segment = this.nexusHPSegments[4 - this.nexusHitCount];
@@ -21032,19 +21123,100 @@ export default class SnakeGame extends Phaser.Scene {
       onComplete: () => hitText.destroy()
     });
 
-    // 보스 피격 효과
-    this.cameras.main.shake(400, 0.025);
-    this.cameras.main.flash(200, 0, 255, 255);
+    // === 보스 미치광이 효과: HIT마다 점점 강해짐 ===
+    const intensity = this.nexusHitCount;
+
+    // 화면 흔들림 강도 증가
+    this.cameras.main.shake(400 + intensity * 100, 0.025 + intensity * 0.01);
+    this.cameras.main.flash(200, intensity * 50, 255 - intensity * 30, 255);
 
     if (this.nexusElement) {
+      // 피격 깜빡임
       this.tweens.add({
         targets: this.nexusElement,
         alpha: 0.2,
-        duration: 80,
+        duration: 60,
         yoyo: true,
-        repeat: 4
+        repeat: 4 + intensity
       });
+
+      // === 보스 광란 애니메이션 ===
+      // 1. 격렬한 흔들림
+      this.tweens.add({
+        targets: this.nexusElement,
+        x: this.nexusElement.x + Phaser.Math.Between(-15, 15) * intensity,
+        y: this.nexusElement.y + Phaser.Math.Between(-10, 10) * intensity,
+        duration: 100,
+        yoyo: true,
+        repeat: 3 + intensity,
+        ease: 'Sine.easeInOut'
+      });
+
+      // 2. 스케일 펄스 (미치광이 효과)
+      this.tweens.add({
+        targets: this.nexusElement,
+        scaleX: 1 + intensity * 0.1,
+        scaleY: 1 + intensity * 0.1,
+        duration: 150,
+        yoyo: true,
+        repeat: 2,
+        ease: 'Back.easeOut'
+      });
+
+      // 3. 색상 변화 효과 (분노 표현)
+      const rageColors = [0x00ffff, 0xff00ff, 0xff0000, 0xffff00];
+      for (let i = 0; i < intensity + 2; i++) {
+        this.time.delayedCall(i * 100, () => {
+          const spark = this.add.circle(
+            this.nexusElement.x + Phaser.Math.Between(-40, 40),
+            this.nexusElement.y + Phaser.Math.Between(-40, 40),
+            Phaser.Math.Between(5, 15),
+            rageColors[i % rageColors.length],
+            0.8
+          ).setDepth(299);
+
+          this.tweens.add({
+            targets: spark,
+            scale: 2,
+            alpha: 0,
+            duration: 300,
+            onComplete: () => spark.destroy()
+          });
+        });
+      }
+
+      // 4. 경고 텍스트 (HIT 3, 4에서)
+      if (this.nexusHitCount >= 3) {
+        const warningTexts = ['SYSTEM UNSTABLE!', 'CRITICAL ERROR!', 'OVERLOAD!'];
+        const warning = this.add.text(
+          this.nexusElement.x,
+          this.nexusElement.y - 80,
+          warningTexts[this.nexusHitCount - 3] || 'DANGER!',
+          {
+            fontSize: '20px',
+            fontFamily: 'monospace',
+            color: '#ff0000',
+            stroke: '#000000',
+            strokeThickness: 3
+          }
+        ).setOrigin(0.5).setDepth(300);
+
+        this.tweens.add({
+          targets: warning,
+          y: warning.y - 30,
+          alpha: 0,
+          duration: 1500,
+          onComplete: () => warning.destroy()
+        });
+      }
     }
+
+    // === HIT 시 스캔 빔 발사 (분노 반격) ===
+    this.time.delayedCall(500, () => {
+      if (this.nexusMode && this.nexusHitCount < 4) {
+        this.fireScanBeam(Math.random() < 0.5);
+      }
+    });
 
     // 코어 복원
     this.restoreNexusCore();
@@ -31088,6 +31260,9 @@ export default class SnakeGame extends Phaser.Scene {
     const comboY = this.comboText.y;
 
     // 1단계: 카메라 미세 진동 시작 (지진 전조)
+    // 맵 흔들림 효과음
+    this.sound.play('meta_shake', { volume: 0.3 });
+
     let earthquakeTimer = 0;
     const earthquakeEvent = this.time.addEvent({
       delay: 16,
@@ -31122,6 +31297,9 @@ export default class SnakeGame extends Phaser.Scene {
         // 지진 멈춤
         earthquakeEvent.destroy();
         this.cameras.main.setScroll(0, 0);
+
+        // 콤보 깨짐 효과음
+        this.sound.play('meta_crush', { volume: 0.3 });
 
         // 강력한 카메라 쉐이크!
         this.cameras.main.shake(300, 0.02);
@@ -31324,8 +31502,9 @@ export default class SnakeGame extends Phaser.Scene {
       strokeThickness: 4
     }).setOrigin(0.5).setDepth(5000);
 
-    // 카메라 쉐이크
+    // 카메라 쉐이크 + 카운트다운 효과음 (첫 번째 "3")
     this.cameras.main.shake(100, 0.005);
+    this.sound.play('meta_count', { volume: 0.3 });
 
     const countdownTimer = this.time.addEvent({
       delay: 600,
@@ -31334,6 +31513,7 @@ export default class SnakeGame extends Phaser.Scene {
         if (countdown > 0) {
           countdownText.setText(countdown.toString());
           this.cameras.main.shake(100, 0.005);
+          this.sound.play('meta_count', { volume: 0.3 });
           // 스케일 펀치 효과
           this.tweens.add({
             targets: countdownText,
@@ -31346,6 +31526,7 @@ export default class SnakeGame extends Phaser.Scene {
           countdownText.setText('GO!');
           countdownText.setColor('#ffff00');
           this.cameras.main.shake(200, 0.01);
+          this.sound.play('meta_count', { volume: 0.35 });
         } else {
           countdownText.destroy();
           countdownTimer.destroy();
@@ -31554,6 +31735,9 @@ export default class SnakeGame extends Phaser.Scene {
   startUniverseTransition(targetUniverse, entryX, entryY) {
     if (this.isUniverseTransitioning) return;
     this.isUniverseTransitioning = true;
+
+    // 웜홀 진입 효과음
+    this.sound.play('wormhole_effect', { volume: 0.25 });
 
     // 게임 일시정지
     this.moveTimer.paused = true;
@@ -31880,7 +32064,7 @@ export default class SnakeGame extends Phaser.Scene {
         flashCount++;
         if (flashCount % 2 === 1) flashHint();
         else hintGraphics.clear();
-        if (flashCount >= 6) {
+        if (flashCount >= 12) {  // 6 → 12 (720ms로 2배 연장)
           hintFlashEvent.destroy();
           hintGraphics.destroy();
         }
