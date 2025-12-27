@@ -32,7 +32,9 @@
       "Bash(find:*)",
       "Bash(cat:*)",
       "Bash(wc:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(chmod:*)",
+      "Bash(./clean-start.sh)"
     ],
     "deny": [],
     "ask": []

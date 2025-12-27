@@ -168,21 +168,34 @@ export default class SnakeGame extends Phaser.Scene {
     this.gearTitanVulnerable = false;
     this.gearTitanStunEndTime = 0;
 
-    // Charge Dash System (기어 타이탄 보스용)
+    // Steam Overheat System (기어 타이탄 보스용)
     this.isCharging = false;
     this.chargeStartTime = 0;
-    this.chargeDuration = 1000; // 1초 차지
+    this.steamGaugeDuration = 2500; // 게이지가 완전히 차는 시간 (2.5초)
     this.chargeReady = false;
-    this.dashCooldown = 3000; // 3초 쿨다운
+    this.dashCooldown = 2000; // 2초 쿨다운
     this.lastDashTime = 0;
     this.isDashing = false;
-    this.dashDistance = 5; // 5칸 돌진
+    this.dashingHideSnake = false; // 대시 애니메이션 중 뱀 숨기기
+    this.dashDistance = 6; // 6칸 돌진
     this.chargeUI = null;
     this.chargeGaugeUI = null;
     this.canChargeDash = false; // 기어 타이탄 보스에서만 활성화
     this.chargeEffectParticles = []; // 차지 에너지 파티클들
     this.chargeEffectTimer = null; // 차지 에너지 업데이트 타이머
     this.chargeAuraGraphics = null; // 차지 오라 그래픽
+    this.chargeCompressionGraphics = null; // 압축 효과 그래픽
+    this.chargeCompressionFactor = 0; // 압축 정도 (0~0.5)
+
+    // Steam Overheat 전용 변수
+    this.steamPerfectZoneStart = 0.35; // 퍼펙트 존 시작 (35%)
+    this.steamPerfectZoneEnd = 0.55;   // 퍼펙트 존 끝 (55%)
+    this.steamDangerZoneStart = 0.75;  // 위험 구간 시작 (75%)
+    this.steamOverheatThreshold = 0.95; // 오버히트 발동 (95%)
+    this.isOverheated = false;
+    this.overheatStunDuration = 1500; // 오버히트 시 1.5초 기절
+    this.overheatEndTime = 0;
+    this.steamDashPower = 'weak'; // 'weak' | 'perfect' | 'strong'
 
     // 확산형 독가스 시스템 (배틀로얄 자기장) - 원형
     this.gasZoneEnabled = false;
@@ -4807,9 +4820,36 @@ export default class SnakeGame extends Phaser.Scene {
     this.isCharging = false;
     this.chargeReady = false;
     this.isDashing = false;
+    this.dashingHideSnake = false;
+
+    // Steam Overheat 상태 리셋
+    this.isOverheated = false;
+    this.overheatEndTime = 0;
+    this.steamDashPower = 'weak';
+    this.steamPerfectPulsing = false;
+
+    // HIT 텍스트 정리
+    if (this.gearTitanHitText && this.gearTitanHitText.active) {
+      this.gearTitanHitText.destroy();
+      this.gearTitanHitText = null;
+    }
+
+    // SPACE 키 레퍼런스 정리
+    if (this.chargeSpaceKey) {
+      this.input.keyboard.removeKey(this.chargeSpaceKey);
+      this.chargeSpaceKey = null;
+    }
   }
 
   cleanupChargeUI() {
+    // Steam 펄스 이펙트 정리
+    if (this.steamPerfectPulsing) {
+      this.steamPerfectPulsing = false;
+      if (this.steamPerfectZoneGraphic) {
+        this.tweens.killTweensOf(this.steamPerfectZoneGraphic);
+      }
+    }
+
     if (this.chargeUI) {
       this.chargeUI.destroy();
       this.chargeUI = null;
@@ -4818,6 +4858,9 @@ export default class SnakeGame extends Phaser.Scene {
       this.chargeGaugeUI.destroy();
       this.chargeGaugeUI = null;
     }
+
+    this.steamPerfectZoneGraphic = null;
+
     // 차지 에너지 이펙트도 정리
     this.cleanupChargeEnergyEffect();
   }
@@ -4839,6 +4882,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.isCharging = false;
     this.chargeReady = false;
     this.isDashing = false;
+    this.dashingHideSnake = false;
 
     // 보스 위치 설정 (맵 중앙)
     this.gearTitanPosition = {
@@ -4846,7 +4890,35 @@ export default class SnakeGame extends Phaser.Scene {
       y: Math.floor(this.rows / 2)
     };
 
-    // 12탄 보스 BGM으로 변경
+    // 톱니들은 이미 날아갔으므로 바로 보스 등장 인트로 시작
+    this.showGearTitanAppearIntro();
+  }
+
+  // 기어 타이탄 보스 직접 전투 시작 (개발자 모드용 - 인트로 스킵)
+  startGearTitanDirectBattle() {
+    this.gearTitanMode = true;
+    this.gearTitanPhase = 'phase1';
+    this.lastAttackPhase = 'phase3'; // phase1부터 시작하도록 phase3으로 초기화
+    this.gearTitanHitCount = 0;
+    this.gearTitanVulnerable = false;
+    this.gearTitanStunEndTime = 0;
+
+    // 차지 대시 활성화
+    this.canChargeDash = true;
+    this.lastDashTime = 0;
+    this.isCharging = false;
+    this.chargeReady = false;
+    this.isDashing = false;
+    this.dashingHideSnake = false;
+    this.isInvincible = false;
+
+    // 보스 위치 설정 (맵 중앙)
+    this.gearTitanPosition = {
+      x: Math.floor(this.cols / 2),
+      y: Math.floor(this.rows / 2)
+    };
+
+    // 12탄 보스 BGM 재생
     if (this.bgMusic && this.bgMusic.isPlaying) {
       this.bgMusic.stop();
     }
@@ -4854,8 +4926,21 @@ export default class SnakeGame extends Phaser.Scene {
       this.boss12Music.play();
     }
 
-    // 톱니들은 이미 날아갔으므로 바로 보스 등장 인트로 시작
-    this.showGearTitanAppearIntro();
+    // 보스 스프라이트 생성
+    this.drawGearTitan();
+
+    // 차지 UI 표시
+    this.showChargeUI();
+
+    // 게임 타이머 시작
+    if (this.moveTimer) {
+      this.moveTimer.paused = false;
+    }
+
+    // 잠시 후 첫 공격 시작
+    this.time.delayedCall(1500, () => {
+      this.gearTitanPhase1Attack();
+    });
   }
 
   // 기어 타이탄 등장 인트로 (톱니 날아간 후)
@@ -4953,6 +5038,14 @@ export default class SnakeGame extends Phaser.Scene {
       duration: 400
     });
 
+    // 12탄 보스 BGM으로 변경 (WARNING! 등장 시점)
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.bgMusic.stop();
+    }
+    if (this.boss12Music) {
+      this.boss12Music.play();
+    }
+
     // WARNING 텍스트
     const warningText = this.add.text(width / 2, height / 2 - 100, 'WARNING!', {
       fontSize: '72px',
@@ -5043,6 +5136,7 @@ export default class SnakeGame extends Phaser.Scene {
                 this.showChargeDashTutorial(() => {
                   this.canChargeDash = true;
                   this.gearTitanPhase = 'phase1';
+                  this.lastAttackPhase = 'phase3'; // phase1부터 시작
                   this.moveTimer.paused = false;
                   this.showChargeUI();
                   this.advanceGearTitanPhase();
@@ -5277,6 +5371,7 @@ export default class SnakeGame extends Phaser.Scene {
               this.showChargeDashTutorial(() => {
                 this.canChargeDash = true;
                 this.gearTitanPhase = 'phase1';
+                this.lastAttackPhase = 'phase3'; // phase1부터 시작
                 this.moveTimer.paused = false;
                 this.showChargeUI();
                 this.advanceGearTitanPhase();
@@ -5472,6 +5567,7 @@ export default class SnakeGame extends Phaser.Scene {
                     this.showChargeUI();
                     // 첫 번째 공격 패턴 시작
                     this.gearTitanPhase = 'phase1';
+                    this.lastAttackPhase = 'phase1'; // 현재 공격 패턴 저장
                     this.moveTimer.paused = false;
                     this.time.delayedCall(2000, () => {
                       this.gearTitanPhase1Attack();
@@ -5598,21 +5694,63 @@ export default class SnakeGame extends Phaser.Scene {
   showChargeDashTutorial(callback) {
     const { width, height } = this.cameras.main;
 
-    const tutorialBg = this.add.rectangle(width / 2, height / 2 + 50, 400, 150, 0x000000, 0.8);
-    tutorialBg.setDepth(5002);
-    tutorialBg.setStrokeStyle(3, 0xffcc00);
+    // 튜토리얼 컨테이너
+    const tutorialContainer = this.add.container(width / 2, height / 2 + 30).setDepth(5002);
 
-    const tutorialText = this.add.text(width / 2, height / 2 + 30, 'HOLD SPACE to CHARGE\nRELEASE to DASH!', {
-      fontSize: '24px',
+    // 배경
+    const tutorialBg = this.add.rectangle(0, 0, 450, 200, 0x000000, 0.9);
+    tutorialBg.setStrokeStyle(3, 0xff8800);
+    tutorialContainer.add(tutorialBg);
+
+    // 타이틀
+    const titleText = this.add.text(0, -70, '🔥 STEAM OVERHEAT SYSTEM 🔥', {
+      fontSize: '22px',
+      fill: '#ff8800',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    tutorialContainer.add(titleText);
+
+    // 설명
+    const tutorialText = this.add.text(0, -20,
+      'HOLD SPACE to charge the Steam Gauge\n' +
+      'Release in the GREEN ZONE for a PERFECT DASH!\n' +
+      '⚠️ Don\'t overheat or you\'ll be STUNNED!', {
+      fontSize: '16px',
       fill: '#ffffff',
       fontStyle: 'bold',
-      align: 'center'
-    }).setOrigin(0.5).setDepth(5003);
+      align: 'center',
+      lineSpacing: 8
+    }).setOrigin(0.5);
+    tutorialContainer.add(tutorialText);
 
-    const skipText = this.add.text(width / 2, height / 2 + 100, 'Press ENTER to continue', {
-      fontSize: '16px',
+    // 컬러 가이드
+    const guideY = 50;
+    const colorGuide = this.add.text(-180, guideY, '🟡 Weak', {
+      fontSize: '12px', fill: '#ffcc00'
+    });
+    tutorialContainer.add(colorGuide);
+
+    const perfectGuide = this.add.text(-60, guideY, '🟢 PERFECT!', {
+      fontSize: '12px', fill: '#00ff00', fontStyle: 'bold'
+    });
+    tutorialContainer.add(perfectGuide);
+
+    const strongGuide = this.add.text(50, guideY, '🟠 Strong', {
+      fontSize: '12px', fill: '#ff8800'
+    });
+    tutorialContainer.add(strongGuide);
+
+    const dangerGuide = this.add.text(130, guideY, '🔴 DANGER!', {
+      fontSize: '12px', fill: '#ff0000'
+    });
+    tutorialContainer.add(dangerGuide);
+
+    // 스킵 텍스트
+    const skipText = this.add.text(0, 85, 'Press ENTER to continue', {
+      fontSize: '14px',
       fill: '#888888'
-    }).setOrigin(0.5).setDepth(5003);
+    }).setOrigin(0.5);
+    tutorialContainer.add(skipText);
 
     // 깜빡임 애니메이션
     this.tweens.add({
@@ -5625,18 +5763,14 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 엔터 키 대기
     const enterHandler = this.input.keyboard.once('keydown-ENTER', () => {
-      tutorialBg.destroy();
-      tutorialText.destroy();
-      skipText.destroy();
+      tutorialContainer.destroy();
       if (callback) callback();
     });
 
-    // 자동 스킵 (5초 후)
-    this.time.delayedCall(5000, () => {
-      if (tutorialBg.active) {
-        tutorialBg.destroy();
-        tutorialText.destroy();
-        skipText.destroy();
+    // 자동 스킵 (6초 후)
+    this.time.delayedCall(6000, () => {
+      if (tutorialContainer.active) {
+        tutorialContainer.destroy();
         if (callback) callback();
       }
     });
@@ -5645,81 +5779,332 @@ export default class SnakeGame extends Phaser.Scene {
   showChargeUI() {
     const { width, height } = this.cameras.main;
 
-    // 차지 게이지 배경
-    this.chargeUI = this.add.container(width - 100, height - 50);
+    // SPACE 키 레퍼런스 생성 (한 번만)
+    if (!this.chargeSpaceKey) {
+      this.chargeSpaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+      // 네이티브 키 상태 추적 (Phaser 대신)
+      this.nativeSpaceDown = false;
+
+      // Phaser keyup
+      this.chargeSpaceKey.on('up', () => {
+        if (this.isCharging && this.canChargeDash && !this.isDashing) {
+          this.releaseCharge();
+        }
+      });
+
+      // 네이티브 keydown
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+          this.nativeSpaceDown = true;
+        }
+      });
+
+      // 네이티브 keyup (백업)
+      window.addEventListener('keyup', (e) => {
+        if (e.code === 'Space') {
+          this.nativeSpaceDown = false;
+          if (this.isCharging && this.canChargeDash && !this.isDashing && this.gearTitanMode) {
+            this.releaseCharge();
+          }
+        }
+      });
+    }
+
+    // Steam Overheat 게이지 UI
+    this.chargeUI = this.add.container(width / 2, height - 60);
     this.chargeUI.setDepth(1000);
 
-    const gaugeBg = this.add.rectangle(0, 0, 80, 20, 0x333333, 0.8);
-    gaugeBg.setStrokeStyle(2, 0x666666);
+    const gaugeWidth = 200;
+    const gaugeHeight = 24;
+
+    // 게이지 배경 (검정)
+    const gaugeBg = this.add.rectangle(0, 0, gaugeWidth, gaugeHeight, 0x222222, 0.95);
+    gaugeBg.setStrokeStyle(3, 0x444444);
     this.chargeUI.add(gaugeBg);
 
-    // 차지 게이지 바
-    this.chargeGaugeUI = this.add.rectangle(-38, 0, 0, 16, 0x00ff00, 1);
+    // 난이도에 따른 존 크기 계산
+    const difficulty = this.getSteamDashDifficulty();
+
+    // 존 영역 표시 (배경에 색상 구간)
+    // 약한 구간 (빨강)
+    const weakZone = this.add.rectangle(
+      -gaugeWidth/2 + gaugeWidth * this.steamPerfectZoneStart / 2,
+      0,
+      gaugeWidth * this.steamPerfectZoneStart,
+      gaugeHeight - 4,
+      0x993333, 0.6
+    );
+    this.chargeUI.add(weakZone);
+
+    // 퍼펙트 존 (초록) - 여기서 놓으면 성공!
+    const perfectZoneWidth = gaugeWidth * (this.steamPerfectZoneEnd - this.steamPerfectZoneStart);
+    const perfectZone = this.add.rectangle(
+      -gaugeWidth/2 + gaugeWidth * this.steamPerfectZoneStart + perfectZoneWidth / 2,
+      0,
+      perfectZoneWidth,
+      gaugeHeight - 4,
+      0x00aa00, 0.8
+    );
+    this.chargeUI.add(perfectZone);
+    this.steamPerfectZoneGraphic = perfectZone;
+
+    // 강한 구간 (주황)
+    const strongZoneWidth = gaugeWidth * (this.steamDangerZoneStart - this.steamPerfectZoneEnd);
+    const strongZone = this.add.rectangle(
+      -gaugeWidth/2 + gaugeWidth * this.steamPerfectZoneEnd + strongZoneWidth / 2,
+      0,
+      strongZoneWidth,
+      gaugeHeight - 4,
+      0xcc6600, 0.6
+    );
+    this.chargeUI.add(strongZone);
+
+    // 위험 구간 (빨강 + 빗금)
+    const dangerZoneWidth = gaugeWidth * (this.steamOverheatThreshold - this.steamDangerZoneStart);
+    const dangerZone = this.add.rectangle(
+      -gaugeWidth/2 + gaugeWidth * this.steamDangerZoneStart + dangerZoneWidth / 2,
+      0,
+      dangerZoneWidth,
+      gaugeHeight - 4,
+      0xcc0000, 0.7
+    );
+    this.chargeUI.add(dangerZone);
+
+    // 오버히트 구간 (검빨)
+    const overheatZoneWidth = gaugeWidth * (1 - this.steamOverheatThreshold);
+    const overheatZone = this.add.rectangle(
+      -gaugeWidth/2 + gaugeWidth * this.steamOverheatThreshold + overheatZoneWidth / 2,
+      0,
+      overheatZoneWidth,
+      gaugeHeight - 4,
+      0x660000, 0.9
+    );
+    this.chargeUI.add(overheatZone);
+
+    // 게이지 채우기 바 (실제 진행)
+    this.chargeGaugeUI = this.add.rectangle(-gaugeWidth/2 + 2, 0, 0, gaugeHeight - 8, 0xffffff, 0.9);
     this.chargeGaugeUI.setOrigin(0, 0.5);
     this.chargeUI.add(this.chargeGaugeUI);
 
+    // 게이지 프레임 (위에 올림)
+    const gaugeFrame = this.add.rectangle(0, 0, gaugeWidth, gaugeHeight);
+    gaugeFrame.setStrokeStyle(3, 0x888888);
+    gaugeFrame.setFillStyle(0x000000, 0);
+    this.chargeUI.add(gaugeFrame);
+
     // 라벨
-    const label = this.add.text(0, -20, 'CHARGE', {
-      fontSize: '12px',
-      fill: '#ffffff'
+    const label = this.add.text(0, -25, '🔥 STEAM GAUGE 🔥', {
+      fontSize: '14px',
+      fill: '#ff8800',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
     }).setOrigin(0.5);
     this.chargeUI.add(label);
 
-    // 쿨다운 텍스트
-    this.chargeCooldownText = this.add.text(0, 20, '', {
-      fontSize: '10px',
-      fill: '#ffcc00'
+    // PERFECT 라벨 (퍼펙트 존 위)
+    const perfectLabel = this.add.text(
+      -gaugeWidth/2 + gaugeWidth * (this.steamPerfectZoneStart + this.steamPerfectZoneEnd) / 2,
+      -42,
+      '⬇ PERFECT ⬇',
+      {
+        fontSize: '10px',
+        fill: '#00ff00',
+        fontStyle: 'bold'
+      }
+    ).setOrigin(0.5);
+    this.chargeUI.add(perfectLabel);
+
+    // 힌트 텍스트
+    const hintText = this.add.text(0, 22, 'HOLD SPACE - Release in GREEN!', {
+      fontSize: '11px',
+      fill: '#aaaaaa'
+    }).setOrigin(0.5);
+    this.chargeUI.add(hintText);
+
+    // 쿨다운/상태 텍스트
+    this.chargeCooldownText = this.add.text(0, 38, '', {
+      fontSize: '12px',
+      fill: '#ffcc00',
+      fontStyle: 'bold'
     }).setOrigin(0.5);
     this.chargeUI.add(this.chargeCooldownText);
+
+    // 저장
+    this.steamGaugeWidth = gaugeWidth;
   }
 
   updateChargeUI(progress) {
-    if (!this.chargeGaugeUI) return;
+    if (!this.chargeGaugeUI || !this.chargeGaugeUI.active) return;
 
-    const maxWidth = 76;
+    const maxWidth = this.steamGaugeWidth - 4;
     this.chargeGaugeUI.width = maxWidth * progress;
 
-    // 색상 변경 (차지 완료 시 노란색)
-    if (progress >= 1) {
-      this.chargeGaugeUI.fillColor = 0xffff00;
-    } else {
+    // 구간에 따른 색상 변경
+    if (progress >= this.steamOverheatThreshold) {
+      // 오버히트 임박 - 빨간색 깜빡임
+      this.chargeGaugeUI.fillColor = (Date.now() % 200 < 100) ? 0xff0000 : 0xff4444;
+    } else if (progress >= this.steamDangerZoneStart) {
+      // 위험 구간 - 빨간색
+      this.chargeGaugeUI.fillColor = 0xff3300;
+    } else if (progress >= this.steamPerfectZoneEnd) {
+      // 강한 구간 - 주황색
+      this.chargeGaugeUI.fillColor = 0xff8800;
+    } else if (progress >= this.steamPerfectZoneStart) {
+      // 퍼펙트 존 - 초록색 + 글로우
       this.chargeGaugeUI.fillColor = 0x00ff00;
+      // 퍼펙트 존에서는 펄스 효과
+      if (this.steamPerfectZoneGraphic && !this.steamPerfectPulsing) {
+        this.steamPerfectPulsing = true;
+        this.tweens.add({
+          targets: this.steamPerfectZoneGraphic,
+          scaleY: 1.2,
+          duration: 150,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        });
+      }
+    } else {
+      // 약한 구간 - 노란색
+      this.chargeGaugeUI.fillColor = 0xffcc00;
+      // 펄스 중지
+      if (this.steamPerfectPulsing) {
+        this.steamPerfectPulsing = false;
+        this.tweens.killTweensOf(this.steamPerfectZoneGraphic);
+        if (this.steamPerfectZoneGraphic) this.steamPerfectZoneGraphic.setScale(1);
+      }
     }
+  }
+
+  // 난이도에 따른 존 크기 조정 (HIT 수가 올라갈수록 어려워짐)
+  getSteamDashDifficulty() {
+    const hitCount = this.gearTitanHitCount || 0;
+
+    // 기본값
+    let perfectStart = 0.35;
+    let perfectEnd = 0.55;
+    let dangerStart = 0.75;
+    let overheatThreshold = 0.95;
+    let gaugeDuration = 2500;
+
+    // 히트 수에 따라 점점 어려워짐
+    if (hitCount >= 1) {
+      perfectStart = 0.38;
+      perfectEnd = 0.52;
+      dangerStart = 0.72;
+      gaugeDuration = 2200;
+    }
+    if (hitCount >= 2) {
+      perfectStart = 0.40;
+      perfectEnd = 0.50;
+      dangerStart = 0.68;
+      gaugeDuration = 2000;
+    }
+    if (hitCount >= 3) {
+      perfectStart = 0.42;
+      perfectEnd = 0.48;
+      dangerStart = 0.65;
+      overheatThreshold = 0.90;
+      gaugeDuration = 1800;
+    }
+    if (hitCount >= 4) {
+      perfectStart = 0.43;
+      perfectEnd = 0.47;
+      dangerStart = 0.62;
+      overheatThreshold = 0.88;
+      gaugeDuration = 1600;
+    }
+    if (hitCount >= 5) {
+      perfectStart = 0.44;
+      perfectEnd = 0.46;
+      dangerStart = 0.60;
+      overheatThreshold = 0.85;
+      gaugeDuration = 1400;
+    }
+
+    // 값 업데이트
+    this.steamPerfectZoneStart = perfectStart;
+    this.steamPerfectZoneEnd = perfectEnd;
+    this.steamDangerZoneStart = dangerStart;
+    this.steamOverheatThreshold = overheatThreshold;
+    this.steamGaugeDuration = gaugeDuration;
+
+    return { perfectStart, perfectEnd, dangerStart, overheatThreshold, gaugeDuration, hitCount };
   }
 
   handleChargeInput() {
     if (!this.canChargeDash || !this.gearTitanMode || this.gameOver) return;
-
-    // chargeUI가 아직 생성되지 않았거나 파괴된 경우 스킵
     if (!this.chargeUI || !this.chargeUI.active) return;
+    if (!this.chargeSpaceKey) return;
 
-    const spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    const spaceKey = this.chargeSpaceKey;
     const now = Date.now();
+
+    // 오버히트 상태 체크 (기절 중)
+    if (this.isOverheated) {
+      if (now < this.overheatEndTime) {
+        const remaining = Math.ceil((this.overheatEndTime - now) / 1000 * 10) / 10;
+        if (this.chargeCooldownText && this.chargeCooldownText.active) {
+          this.chargeCooldownText.setText(`🔥 OVERHEATED! ${remaining.toFixed(1)}s`);
+          this.chargeCooldownText.setColor('#ff0000');
+        }
+        return;
+      } else {
+        // 오버히트 종료
+        this.isOverheated = false;
+        this.overheatEndTime = 0;
+        if (this.chargeCooldownText && this.chargeCooldownText.active) {
+          this.chargeCooldownText.setText('');
+          this.chargeCooldownText.setColor('#ffcc00');
+        }
+        // 뱀 색상 복원
+        this.draw();
+      }
+    }
 
     // 쿨다운 체크
     if (now - this.lastDashTime < this.dashCooldown) {
       const remaining = Math.ceil((this.dashCooldown - (now - this.lastDashTime)) / 1000);
       if (this.chargeCooldownText && this.chargeCooldownText.active) {
-        this.chargeCooldownText.setText(`CD: ${remaining}s`);
+        this.chargeCooldownText.setText(`COOLING... ${remaining}s`);
+        this.chargeCooldownText.setColor('#00ccff');
       }
       return;
     } else {
-      if (this.chargeCooldownText && this.chargeCooldownText.active) {
-        this.chargeCooldownText.setText('');
+      if (this.chargeCooldownText && this.chargeCooldownText.active && !this.isCharging) {
+        this.chargeCooldownText.setText('READY!');
+        this.chargeCooldownText.setColor('#00ff00');
       }
     }
 
-    // 차지 시작/유지
-    if (spaceKey.isDown && !this.isDashing) {
-      if (!this.isCharging) {
-        this.startCharging();
-      } else {
-        this.updateCharge();
-      }
+    // 네이티브 키 상태 사용
+    const currentSpaceDown = this.nativeSpaceDown || false;
+    const wasSpaceDown = this.prevSpaceDown || false;
+
+    // 키 누름 감지 (false -> true)
+    const spacePressed = !wasSpaceDown && currentSpaceDown;
+    // 키 떼기 감지 (true -> false)
+    const spaceReleased = wasSpaceDown && !currentSpaceDown;
+
+    // 이전 상태 저장 (대시 중이 아닐 때만)
+    if (!this.isDashing) {
+      this.prevSpaceDown = currentSpaceDown;
+    }
+
+    // 차지 시작
+    if (spacePressed && !this.isDashing && !this.isOverheated && !this.isCharging) {
+      this.startCharging();
+    }
+
+    // 차지 유지
+    if (currentSpaceDown && this.isCharging && !this.isDashing) {
+      this.updateCharge();
     }
 
     // 차지 해제 (대시 실행)
-    if (spaceKey.isUp && this.isCharging) {
+    if (spaceReleased && this.isCharging) {
       this.releaseCharge();
     }
   }
@@ -5728,20 +6113,249 @@ export default class SnakeGame extends Phaser.Scene {
     this.isCharging = true;
     this.chargeStartTime = Date.now();
     this.chargeReady = false;
+    this.steamDashPower = 'none';
+
+    // 고무줄 압축 효과 초기화
+    this.chargeCompressionFactor = 1.0;
+    this.chargeCompressionGraphics = this.add.graphics().setDepth(101);
+
+    // 난이도 업데이트 (매 차지마다 갱신)
+    this.getSteamDashDifficulty();
 
     // 차지 시작 효과
     if (this.chargeUI) {
       this.tweens.add({
         targets: this.chargeUI,
-        scaleX: 1.1,
-        scaleY: 1.1,
+        scaleX: 1.05,
+        scaleY: 1.05,
         duration: 100,
         yoyo: true
       });
     }
 
+    // 상태 텍스트
+    if (this.chargeCooldownText && this.chargeCooldownText.active) {
+      this.chargeCooldownText.setText('CHARGING...');
+      this.chargeCooldownText.setColor('#ffff00');
+    }
+
     // 에너지 모으는 이펙트 시작
-    this.startChargeEnergyEffect();
+    this.startSteamChargeEffect();
+  }
+
+  // Steam 차지 이펙트 (기존보다 더 불같은 느낌)
+  startSteamChargeEffect() {
+    // 기존 이펙트 정리
+    this.cleanupChargeEnergyEffect();
+
+    // 스팀 파티클 생성
+    this.chargeEffectParticles = [];
+    const particleCount = 16;
+
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (i / particleCount) * Math.PI * 2;
+      const particle = {
+        graphics: this.add.graphics().setDepth(98),
+        angle: angle,
+        radius: 50 + Phaser.Math.Between(0, 25),
+        speed: 0.04 + Math.random() * 0.03,
+        size: Phaser.Math.Between(3, 7),
+        color: Phaser.Math.RND.pick([0xff6600, 0xff8800, 0xffaa00, 0xff4400, 0xffcc00]),
+        alpha: 0.85,
+        trail: []
+      };
+      this.chargeEffectParticles.push(particle);
+    }
+
+    // 오라 그래픽 생성
+    this.chargeAuraGraphics = this.add.graphics().setDepth(97);
+
+    // 60fps 업데이트 타이머
+    this.chargeEffectTimer = this.time.addEvent({
+      delay: 16,
+      loop: true,
+      callback: () => this.updateSteamChargeEffect()
+    });
+  }
+
+  // Steam 차지 이펙트 업데이트
+  updateSteamChargeEffect() {
+    if (!this.isCharging || this.chargeEffectParticles.length === 0) {
+      this.cleanupChargeEnergyEffect();
+      return;
+    }
+
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    const elapsed = Date.now() - this.chargeStartTime;
+    const progress = Math.min(elapsed / this.steamGaugeDuration, 1);
+
+    // ====== 고무줄 압축 효과 (뱀이 굵고 짧아짐) ======
+    if (this.chargeCompressionGraphics && this.chargeCompressionGraphics.active) {
+      this.chargeCompressionGraphics.clear();
+
+      // 압축 정도 계산 (progress에 따라 점점 압축됨)
+      // 퍼펙트 존에서 최대 압축
+      let compressionAmount;
+      if (progress < this.steamPerfectZoneStart) {
+        compressionAmount = progress / this.steamPerfectZoneStart * 0.4; // 0 ~ 0.4
+      } else if (progress < this.steamPerfectZoneEnd) {
+        compressionAmount = 0.4 + ((progress - this.steamPerfectZoneStart) / (this.steamPerfectZoneEnd - this.steamPerfectZoneStart)) * 0.1; // 0.4 ~ 0.5 (최대)
+      } else {
+        compressionAmount = 0.5 - ((progress - this.steamPerfectZoneEnd) / (1 - this.steamPerfectZoneEnd)) * 0.1; // 조금 줄어듦
+      }
+
+      this.chargeCompressionFactor = compressionAmount;
+
+      // 뱀 방향
+      const dir = this.direction;
+      const isHorizontal = (dir === 'LEFT' || dir === 'RIGHT');
+
+      // 압축된 뱀 그리기 (원래 뱀 위에 덮어씌움)
+      const segmentCount = Math.min(this.snake.length, 6);
+      const baseSize = this.gridSize - 2;
+
+      // 압축 시 두께 증가, 길이 감소
+      const thicknessMultiplier = 1 + compressionAmount * 1.2; // 최대 1.6배 두꺼워짐
+      const lengthMultiplier = 1 - compressionAmount * 0.6; // 최대 0.7배로 짧아짐
+
+      // 떨림 효과 (에너지 축적 느낌)
+      const shakeAmount = compressionAmount * 2;
+      const shakeX = (Math.random() - 0.5) * shakeAmount;
+      const shakeY = (Math.random() - 0.5) * shakeAmount;
+
+      // 뱀 세그먼트들을 압축된 형태로 그리기
+      for (let i = segmentCount - 1; i >= 0; i--) {
+        const seg = this.snake[i];
+        if (!seg) continue;
+
+        const segX = seg.x * this.gridSize + this.gridSize / 2 + shakeX;
+        const segY = seg.y * this.gridSize + this.gridSize / 2 + 60 + shakeY;
+
+        // 색상 (머리는 밝은 초록)
+        const segColor = i === 0 ? 0x00ff00 : 0x00aa00;
+        const segAlpha = 1;
+
+        // 압축된 크기 계산
+        let width, height;
+        if (isHorizontal) {
+          // 가로 방향: 가로로 짧아지고 세로로 굵어짐
+          width = baseSize * lengthMultiplier;
+          height = baseSize * thicknessMultiplier;
+        } else {
+          // 세로 방향: 세로로 짧아지고 가로로 굵어짐
+          width = baseSize * thicknessMultiplier;
+          height = baseSize * lengthMultiplier;
+        }
+
+        // 글로우 효과 (에너지 축적)
+        const glowColor = progress >= this.steamPerfectZoneStart && progress < this.steamPerfectZoneEnd
+          ? 0x00ff00 : 0xff8800;
+        const glowSize = baseSize * (1 + compressionAmount * 0.5);
+        this.chargeCompressionGraphics.fillStyle(glowColor, 0.3 * compressionAmount);
+        this.chargeCompressionGraphics.fillCircle(segX, segY, glowSize);
+
+        // 메인 세그먼트
+        this.chargeCompressionGraphics.fillStyle(segColor, segAlpha);
+        this.chargeCompressionGraphics.fillEllipse(segX, segY, width, height);
+
+        // 머리는 추가 강조
+        if (i === 0) {
+          this.chargeCompressionGraphics.lineStyle(2, 0xffffff, 0.8);
+          this.chargeCompressionGraphics.strokeEllipse(segX, segY, width + 2, height + 2);
+        }
+      }
+    }
+
+    // 오라 그리기 (구간에 따라 색상 변경)
+    if (this.chargeAuraGraphics && this.chargeAuraGraphics.active) {
+      this.chargeAuraGraphics.clear();
+
+      let auraColor = 0xff8800; // 기본 주황
+      let glowIntensity = 0.2 + progress * 0.4;
+
+      if (progress >= this.steamOverheatThreshold) {
+        // 오버히트 임박 - 강렬한 빨강 + 깜빡임
+        auraColor = (Date.now() % 150 < 75) ? 0xff0000 : 0xff4400;
+        glowIntensity = 0.6;
+      } else if (progress >= this.steamDangerZoneStart) {
+        // 위험 - 빨간색
+        auraColor = 0xff3300;
+        glowIntensity = 0.45;
+      } else if (progress >= this.steamPerfectZoneStart && progress < this.steamPerfectZoneEnd) {
+        // 퍼펙트 존 - 밝은 초록
+        auraColor = 0x00ff00;
+        glowIntensity = 0.5;
+      }
+
+      const auraSize = this.gridSize * (1 + progress * 0.6);
+      this.chargeAuraGraphics.fillStyle(auraColor, glowIntensity);
+      this.chargeAuraGraphics.fillCircle(headX, headY, auraSize);
+
+      // 내부 코어
+      this.chargeAuraGraphics.fillStyle(0xffffff, glowIntensity * 0.4);
+      this.chargeAuraGraphics.fillCircle(headX, headY, auraSize * 0.5);
+
+      // 퍼펙트 존에서는 추가 링
+      if (progress >= this.steamPerfectZoneStart && progress < this.steamPerfectZoneEnd) {
+        const pulseSize = auraSize * 1.3 + Math.sin(Date.now() * 0.015) * 5;
+        this.chargeAuraGraphics.lineStyle(3, 0x00ff00, 0.7);
+        this.chargeAuraGraphics.strokeCircle(headX, headY, pulseSize);
+      }
+
+      // 위험 구간에서는 경고 펄스
+      if (progress >= this.steamDangerZoneStart) {
+        const warningPulse = auraSize * 1.5 + Math.sin(Date.now() * 0.02) * 8;
+        this.chargeAuraGraphics.lineStyle(2, 0xff0000, 0.5);
+        this.chargeAuraGraphics.strokeCircle(headX, headY, warningPulse);
+      }
+    }
+
+    // 파티클 업데이트
+    this.chargeEffectParticles.forEach((particle, index) => {
+      if (!particle.graphics || !particle.graphics.active) return;
+
+      particle.graphics.clear();
+
+      // 반경이 점점 줄어듦
+      const targetRadius = 55 * (1 - progress * 0.85);
+      particle.radius = Phaser.Math.Linear(particle.radius, targetRadius, 0.06);
+
+      // 회전 속도 증가
+      particle.angle += particle.speed * (1 + progress * 3);
+
+      // 파티클 위치
+      const px = headX + Math.cos(particle.angle) * particle.radius;
+      const py = headY + Math.sin(particle.angle) * particle.radius;
+
+      // 위험 구간에서는 파티클 색상 변경
+      let particleColor = particle.color;
+      if (progress >= this.steamDangerZoneStart) {
+        particleColor = Phaser.Math.RND.pick([0xff0000, 0xff2200, 0xff4400]);
+      } else if (progress >= this.steamPerfectZoneStart && progress < this.steamPerfectZoneEnd) {
+        particleColor = Phaser.Math.RND.pick([0x00ff00, 0x00ff88, 0x88ff00]);
+      }
+
+      // 트레일 기록
+      particle.trail.push({ x: px, y: py, color: particleColor });
+      if (particle.trail.length > 10) {
+        particle.trail.shift();
+      }
+
+      // 트레일 그리기
+      particle.trail.forEach((point, i) => {
+        const trailAlpha = (i / particle.trail.length) * particle.alpha * 0.5;
+        const trailSize = particle.size * (i / particle.trail.length);
+        particle.graphics.fillStyle(point.color, trailAlpha);
+        particle.graphics.fillCircle(point.x, point.y, trailSize);
+      });
+
+      // 메인 파티클
+      particle.graphics.fillStyle(particleColor, particle.alpha);
+      particle.graphics.fillCircle(px, py, particle.size);
+    });
   }
 
   // 차지 에너지 이펙트 시작
@@ -5886,19 +6500,40 @@ export default class SnakeGame extends Phaser.Scene {
       this.chargeAuraGraphics.destroy();
       this.chargeAuraGraphics = null;
     }
+
+    // 압축 그래픽 정리
+    if (this.chargeCompressionGraphics && this.chargeCompressionGraphics.active) {
+      this.chargeCompressionGraphics.destroy();
+      this.chargeCompressionGraphics = null;
+    }
+    this.chargeCompressionFactor = 0;
   }
 
   updateCharge() {
     if (!this.isCharging) return;
 
     const elapsed = Date.now() - this.chargeStartTime;
-    const progress = Math.min(elapsed / this.chargeDuration, 1);
+    const progress = Math.min(elapsed / this.steamGaugeDuration, 1);
     this.updateChargeUI(progress);
 
-    // 차지 완료
-    if (progress >= 1 && !this.chargeReady) {
+    // 현재 구간 결정
+    if (progress >= this.steamPerfectZoneStart && progress < this.steamPerfectZoneEnd) {
+      this.steamDashPower = 'perfect';
       this.chargeReady = true;
-      this.showChargeReadyEffect();
+    } else if (progress >= this.steamPerfectZoneEnd && progress < this.steamDangerZoneStart) {
+      this.steamDashPower = 'strong';
+      this.chargeReady = true;
+    } else if (progress >= this.steamDangerZoneStart && progress < this.steamOverheatThreshold) {
+      this.steamDashPower = 'weak'; // 위험 구간에서는 약한 대시
+      this.chargeReady = true;
+    } else if (progress < this.steamPerfectZoneStart) {
+      this.steamDashPower = 'weak';
+      this.chargeReady = true;
+    }
+
+    // 오버히트 체크 (게이지가 끝까지 찼을 때)
+    if (progress >= 1) {
+      this.triggerOverheat();
     }
   }
 
@@ -5970,16 +6605,690 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   releaseCharge() {
-    if (this.chargeReady) {
-      this.performChargeDash();
+    // 오버히트 상태면 차지 해제만
+    if (this.isOverheated) {
+      this.isCharging = false;
+      this.chargeReady = false;
+      this.steamDashPower = 'none';
+      this.updateChargeUI(0);
+      this.cleanupChargeEnergyEffect();
+      return;
+    }
+
+    const elapsed = Date.now() - this.chargeStartTime;
+    const progress = Math.min(elapsed / this.steamGaugeDuration, 1);
+
+    // 구간별 처리
+    if (progress >= this.steamPerfectZoneStart && progress < this.steamPerfectZoneEnd) {
+      // 퍼펙트 존에서 놓음! - 강력한 Steam Dash!
+      this.steamDashPower = 'perfect';
+      this.showPerfectReleaseEffect();
+      this.performSteamDash('perfect');
+    } else if (progress >= this.steamPerfectZoneEnd && progress < this.steamDangerZoneStart) {
+      // 강한 구간 - 괜찮은 대시
+      this.steamDashPower = 'strong';
+      this.showStrongReleaseEffect();
+      this.performSteamDash('strong');
+    } else if (progress >= this.steamDangerZoneStart) {
+      // 위험 구간 - 약한 대시 (오버히트 직전에 놓은 것)
+      this.steamDashPower = 'weak';
+      this.showWeakReleaseEffect();
+      this.performSteamDash('weak');
+    } else if (progress >= 0.1) {
+      // 너무 일찍 놓음 - 아주 약한 대시
+      this.steamDashPower = 'weak';
+      this.showWeakReleaseEffect();
+      this.performSteamDash('weak');
+    } else {
+      // 거의 안 눌렀음 - 대시 실패
+      this.showDashFailedEffect();
     }
 
     this.isCharging = false;
     this.chargeReady = false;
     this.updateChargeUI(0);
 
+    // 펄스 이펙트 정리
+    if (this.steamPerfectPulsing) {
+      this.steamPerfectPulsing = false;
+      this.tweens.killTweensOf(this.steamPerfectZoneGraphic);
+      if (this.steamPerfectZoneGraphic) this.steamPerfectZoneGraphic.setScale(1);
+    }
+
     // 에너지 이펙트 정리
     this.cleanupChargeEnergyEffect();
+  }
+
+  // 오버히트 발동!
+  triggerOverheat() {
+    if (this.isOverheated) return; // 이미 오버히트 상태
+
+    this.isOverheated = true;
+    this.overheatEndTime = Date.now() + this.overheatStunDuration;
+    this.isCharging = false;
+    this.chargeReady = false;
+    this.steamDashPower = 'none';
+
+    const { width, height } = this.cameras.main;
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 화면 빨간 플래시
+    this.cameras.main.flash(300, 255, 0, 0, true);
+    this.cameras.main.shake(500, 0.03);
+
+    // OVERHEAT! 텍스트
+    const overheatText = this.add.text(headX, headY - 50, '🔥 OVERHEAT! 🔥', {
+      fontSize: '24px',
+      fill: '#ff0000',
+      fontStyle: 'bold',
+      stroke: '#660000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5010);
+
+    this.tweens.add({
+      targets: overheatText,
+      y: headY - 80,
+      alpha: { from: 1, to: 0 },
+      scaleX: 1.5,
+      scaleY: 1.5,
+      duration: 1000,
+      ease: 'Power2',
+      onComplete: () => overheatText.destroy()
+    });
+
+    // 폭발 이펙트
+    for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2;
+      const spark = this.add.graphics().setDepth(99);
+      spark.fillStyle(Phaser.Math.RND.pick([0xff0000, 0xff4400, 0xff8800]), 1);
+      spark.fillCircle(0, 0, Phaser.Math.Between(4, 8));
+      spark.x = headX;
+      spark.y = headY;
+
+      this.tweens.add({
+        targets: spark,
+        x: headX + Math.cos(angle) * Phaser.Math.Between(40, 80),
+        y: headY + Math.sin(angle) * Phaser.Math.Between(40, 80),
+        alpha: 0,
+        duration: 500,
+        ease: 'Power2',
+        onComplete: () => spark.destroy()
+      });
+    }
+
+    // 뱀 속도 일시적 저하 (느려짐)
+    if (this.moveTimer) {
+      const originalDelay = this.moveTimer.delay;
+      this.moveTimer.delay = originalDelay * 1.5; // 50% 느려짐
+
+      // 오버히트 종료 후 복구
+      this.time.delayedCall(this.overheatStunDuration, () => {
+        if (this.moveTimer) {
+          this.moveTimer.delay = originalDelay;
+        }
+      });
+    }
+
+    // UI 업데이트
+    this.updateChargeUI(0);
+    this.cleanupChargeEnergyEffect();
+  }
+
+  // 퍼펙트 릴리즈 이펙트
+  showPerfectReleaseEffect() {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 초록색 폭발 링
+    for (let i = 0; i < 3; i++) {
+      const ring = this.add.graphics().setDepth(100);
+      ring.lineStyle(4 - i, 0x00ff00, 1);
+      ring.strokeCircle(headX, headY, 10);
+
+      this.tweens.add({
+        targets: ring,
+        scaleX: 5 + i * 2,
+        scaleY: 5 + i * 2,
+        alpha: 0,
+        duration: 400,
+        delay: i * 80,
+        onComplete: () => ring.destroy()
+      });
+    }
+
+    // PERFECT! 텍스트
+    const perfectText = this.add.text(headX, headY - 50, '⚡ PERFECT! ⚡', {
+      fontSize: '22px',
+      fill: '#00ff00',
+      fontStyle: 'bold',
+      stroke: '#004400',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5010);
+
+    this.tweens.add({
+      targets: perfectText,
+      y: headY - 80,
+      alpha: { from: 1, to: 0 },
+      scaleX: 1.3,
+      scaleY: 1.3,
+      duration: 800,
+      ease: 'Power2',
+      onComplete: () => perfectText.destroy()
+    });
+
+    // 카메라 효과
+    this.cameras.main.flash(100, 0, 255, 0, true);
+  }
+
+  // 강한 릴리즈 이펙트
+  showStrongReleaseEffect() {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 주황색 링
+    const ring = this.add.graphics().setDepth(100);
+    ring.lineStyle(3, 0xff8800, 1);
+    ring.strokeCircle(headX, headY, 10);
+
+    this.tweens.add({
+      targets: ring,
+      scaleX: 4,
+      scaleY: 4,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => ring.destroy()
+    });
+
+    // GOOD! 텍스트
+    const goodText = this.add.text(headX, headY - 40, 'GOOD!', {
+      fontSize: '18px',
+      fill: '#ff8800',
+      fontStyle: 'bold',
+      stroke: '#442200',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(5010);
+
+    this.tweens.add({
+      targets: goodText,
+      y: headY - 60,
+      alpha: 0,
+      duration: 600,
+      onComplete: () => goodText.destroy()
+    });
+  }
+
+  // 약한 릴리즈 이펙트
+  showWeakReleaseEffect() {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    // 작은 회색 링
+    const ring = this.add.graphics().setDepth(100);
+    ring.lineStyle(2, 0x888888, 0.7);
+    ring.strokeCircle(headX, headY, 8);
+
+    this.tweens.add({
+      targets: ring,
+      scaleX: 2,
+      scaleY: 2,
+      alpha: 0,
+      duration: 200,
+      onComplete: () => ring.destroy()
+    });
+
+    // WEAK 텍스트
+    const weakText = this.add.text(headX, headY - 35, 'WEAK...', {
+      fontSize: '14px',
+      fill: '#888888',
+      fontStyle: 'italic'
+    }).setOrigin(0.5).setDepth(5010);
+
+    this.tweens.add({
+      targets: weakText,
+      y: headY - 50,
+      alpha: 0,
+      duration: 400,
+      onComplete: () => weakText.destroy()
+    });
+  }
+
+  // 대시 실패 이펙트
+  showDashFailedEffect() {
+    const head = this.snake[0];
+    const headX = head.x * this.gridSize + this.gridSize / 2;
+    const headY = head.y * this.gridSize + this.gridSize / 2 + 60;
+
+    const failText = this.add.text(headX, headY - 30, 'TOO SHORT!', {
+      fontSize: '12px',
+      fill: '#ff4444'
+    }).setOrigin(0.5).setDepth(5010);
+
+    this.tweens.add({
+      targets: failText,
+      alpha: 0,
+      y: headY - 45,
+      duration: 400,
+      onComplete: () => failText.destroy()
+    });
+  }
+
+  // Steam Dash 실행 (파워 레벨에 따라 다른 효과)
+  performSteamDash(power) {
+    if (this.isDashing) return;
+
+    this.isDashing = true;
+    this.isInvincible = true;
+    this.lastDashTime = Date.now();
+
+    const head = this.snake[0];
+    const dir = this.direction;
+    const startPos = { x: head.x, y: head.y };
+
+    // 파워에 따른 대시 거리 및 속도
+    let dashDist, canHitBoss, dashDuration;
+    switch (power) {
+      case 'perfect':
+        dashDist = 8;
+        canHitBoss = true;
+        dashDuration = 100; // 빠름!
+        break;
+      case 'strong':
+        dashDist = 6;
+        canHitBoss = true;
+        dashDuration = 130;
+        break;
+      case 'weak':
+      default:
+        dashDist = 3;
+        canHitBoss = false;
+        dashDuration = 160;
+        break;
+    }
+
+    // 방향 벡터
+    const dirVectors = {
+      'UP': { dx: 0, dy: -1 },
+      'DOWN': { dx: 0, dy: 1 },
+      'LEFT': { dx: -1, dy: 0 },
+      'RIGHT': { dx: 1, dy: 0 }
+    };
+    const vec = dirVectors[dir];
+    const isHorizontal = (dir === 'LEFT' || dir === 'RIGHT');
+
+    const oppositeDir = {
+      'UP': 'DOWN',
+      'DOWN': 'UP',
+      'LEFT': 'RIGHT',
+      'RIGHT': 'LEFT'
+    };
+
+    // 대시 경로 계산
+    const maxSteps = this.gearTitanMode && this.gearTitanPosition
+      ? Math.max(dashDist, Math.abs(head.x - this.gearTitanPosition.x) + Math.abs(head.y - this.gearTitanPosition.y))
+      : dashDist;
+
+    const pathPositions = [];
+    let maxTravel = 0;
+    for (let i = 1; i <= maxSteps; i++) {
+      const testX = head.x + vec.dx * i;
+      const testY = head.y + vec.dy * i;
+      if (testX < 0 || testX >= this.cols || testY < 0 || testY >= this.rows) break;
+      pathPositions.push({ x: testX, y: testY });
+      maxTravel = i;
+    }
+
+    if (maxTravel <= 0) {
+      this.isDashing = false;
+      this.isInvincible = false;
+      return;
+    }
+
+    const actualDashDist = Math.min(dashDist, maxTravel);
+
+    // 보스 충돌 판정
+    const alignedWithCore = this.gearTitanMode && this.gearTitanPosition && (
+      (vec.dx !== 0 && head.y === this.gearTitanPosition.y) ||
+      (vec.dy !== 0 && head.x === this.gearTitanPosition.x)
+    );
+    let hitBoss = false;
+    if (this.gearTitanMode && this.gearTitanPosition && canHitBoss) {
+      const distToCore = Math.abs(head.x - this.gearTitanPosition.x) + Math.abs(head.y - this.gearTitanPosition.y);
+      if (alignedWithCore && distToCore <= actualDashDist) hitBoss = true;
+    }
+
+    // 게임 틱 멈춤
+    if (this.moveTimer) this.moveTimer.paused = true;
+
+    // 좌표 계산
+    const startPixelX = head.x * this.gridSize + this.gridSize / 2;
+    const startPixelY = head.y * this.gridSize + this.gridSize / 2 + 60;
+    const newHead = pathPositions[actualDashDist - 1];
+    const endPixelX = newHead.x * this.gridSize + this.gridSize / 2;
+    const endPixelY = newHead.y * this.gridSize + this.gridSize / 2 + 60;
+    const returnDir = oppositeDir[dir];
+
+    // 파워별 색상
+    let dashColor;
+    switch (power) {
+      case 'perfect': dashColor = 0x00ff00; break;
+      case 'strong': dashColor = 0xff8800; break;
+      default: dashColor = 0xaaaaaa;
+    }
+
+    // 원래 뱀 숨기기
+    this.dashingHideSnake = true;
+    this.draw();
+
+    // ====== 고무줄 튕김 대시 애니메이션 ======
+    const dashGraphics = this.add.graphics().setDepth(200);
+    const trailGraphics = this.add.graphics().setDepth(199);
+
+    // 뱀 세그먼트 수 (시각적으로 표현할 개수)
+    const segmentCount = Math.min(this.snake.length, 8);
+    const segSize = this.gridSize - 2;
+
+    // 애니메이션 상태
+    const anim = {
+      progress: 0,
+      stretch: 0  // 늘어남 정도
+    };
+
+    // 카메라 쉐이크
+    const shakeIntensity = power === 'perfect' ? 0.025 : (power === 'strong' ? 0.018 : 0.01);
+    this.cameras.main.shake(80, shakeIntensity);
+
+    // 고무줄 튕김 그리기 함수
+    const drawRubberBandSnake = () => {
+      dashGraphics.clear();
+      trailGraphics.clear();
+
+      const t = anim.progress;
+
+      // 현재 머리 위치 (시작 → 끝으로 이동)
+      const currentX = startPixelX + (endPixelX - startPixelX) * t;
+      const currentY = startPixelY + (endPixelY - startPixelY) * t;
+
+      // 늘어남 효과: 초반에 늘어났다가 도착 시 복구
+      // 0~0.3: 빠르게 늘어남, 0.3~1.0: 점점 복구
+      let stretchFactor;
+      if (t < 0.3) {
+        stretchFactor = 1 + (t / 0.3) * 2.5; // 최대 3.5배까지 늘어남
+      } else {
+        stretchFactor = 3.5 - ((t - 0.3) / 0.7) * 2.5; // 다시 1배로 복구
+      }
+
+      // 두께 효과: 늘어날수록 가늘어짐
+      const thicknessFactor = 1 / Math.sqrt(stretchFactor);
+
+      // 트레일 효과 (잔상)
+      const trailCount = 6;
+      for (let i = 0; i < trailCount; i++) {
+        const trailT = Math.max(0, t - (i * 0.08));
+        const trailX = startPixelX + (endPixelX - startPixelX) * trailT;
+        const trailY = startPixelY + (endPixelY - startPixelY) * trailT;
+        const trailAlpha = (1 - i / trailCount) * 0.3;
+        const trailSize = segSize * thicknessFactor * (1 - i * 0.1);
+
+        trailGraphics.fillStyle(dashColor, trailAlpha);
+        if (isHorizontal) {
+          trailGraphics.fillEllipse(trailX, trailY, trailSize * 1.5, trailSize * 0.7);
+        } else {
+          trailGraphics.fillEllipse(trailX, trailY, trailSize * 0.7, trailSize * 1.5);
+        }
+      }
+
+      // 뱀 몸통 그리기 (늘어난 형태)
+      for (let i = segmentCount - 1; i >= 0; i--) {
+        // 각 세그먼트 위치 계산 (뒤쪽은 시작점에 가깝게, 앞쪽은 현재 위치에 가깝게)
+        const segT = i / segmentCount;
+        const lagFactor = Math.pow(segT, 0.5); // 뒤쪽 세그먼트는 더 늦게 따라옴
+
+        const segProgress = Math.max(0, t - lagFactor * 0.3);
+        const segX = startPixelX + (endPixelX - startPixelX) * segProgress;
+        const segY = startPixelY + (endPixelY - startPixelY) * segProgress;
+
+        // 세그먼트 크기 (앞쪽이 더 크고, 늘어날수록 가늘어짐)
+        const sizeMultiplier = 1 - (i * 0.08);
+        const segWidth = segSize * thicknessFactor * sizeMultiplier;
+        const segHeight = segSize * thicknessFactor * sizeMultiplier;
+
+        // 색상 (머리는 밝은 초록, 뒤로 갈수록 어두워짐)
+        const brightness = 1 - (i * 0.1);
+        const segColor = i === 0 ? 0x00ff00 : Phaser.Display.Color.ValueToColor(0x00aa00).darken(i * 8).color;
+
+        dashGraphics.fillStyle(segColor, 1);
+
+        // 방향에 따라 늘어난 타원형으로 그리기
+        if (isHorizontal) {
+          // 가로 방향: 가로로 길게 늘어남
+          const stretchedWidth = segWidth * (1 + (stretchFactor - 1) * 0.5);
+          const stretchedHeight = segHeight * thicknessFactor;
+          dashGraphics.fillEllipse(segX, segY, stretchedWidth, stretchedHeight);
+        } else {
+          // 세로 방향: 세로로 길게 늘어남
+          const stretchedWidth = segWidth * thicknessFactor;
+          const stretchedHeight = segHeight * (1 + (stretchFactor - 1) * 0.5);
+          dashGraphics.fillEllipse(segX, segY, stretchedWidth, stretchedHeight);
+        }
+      }
+
+      // 머리 강조 (화살표 + 글로우)
+      const headGlowSize = segSize * 1.5;
+      dashGraphics.fillStyle(dashColor, 0.4);
+      dashGraphics.fillCircle(currentX, currentY, headGlowSize);
+
+      // 머리 화살표
+      dashGraphics.fillStyle(0x00ff00, 1);
+      const arrowSize = segSize * 0.6;
+      dashGraphics.beginPath();
+      switch (dir) {
+        case 'RIGHT':
+          dashGraphics.moveTo(currentX + arrowSize, currentY);
+          dashGraphics.lineTo(currentX - arrowSize * 0.5, currentY - arrowSize * 0.8);
+          dashGraphics.lineTo(currentX - arrowSize * 0.5, currentY + arrowSize * 0.8);
+          break;
+        case 'LEFT':
+          dashGraphics.moveTo(currentX - arrowSize, currentY);
+          dashGraphics.lineTo(currentX + arrowSize * 0.5, currentY - arrowSize * 0.8);
+          dashGraphics.lineTo(currentX + arrowSize * 0.5, currentY + arrowSize * 0.8);
+          break;
+        case 'UP':
+          dashGraphics.moveTo(currentX, currentY - arrowSize);
+          dashGraphics.lineTo(currentX - arrowSize * 0.8, currentY + arrowSize * 0.5);
+          dashGraphics.lineTo(currentX + arrowSize * 0.8, currentY + arrowSize * 0.5);
+          break;
+        case 'DOWN':
+          dashGraphics.moveTo(currentX, currentY + arrowSize);
+          dashGraphics.lineTo(currentX - arrowSize * 0.8, currentY - arrowSize * 0.5);
+          dashGraphics.lineTo(currentX + arrowSize * 0.8, currentY - arrowSize * 0.5);
+          break;
+      }
+      dashGraphics.closePath();
+      dashGraphics.fill();
+
+      // 흰색 테두리
+      dashGraphics.lineStyle(2, 0xffffff, 0.9);
+      dashGraphics.stroke();
+
+      // 스피드 라인 (진행 중)
+      if (t > 0.1 && t < 0.9) {
+        const lineCount = 4;
+        for (let i = 0; i < lineCount; i++) {
+          const offset = (i - lineCount / 2) * 8;
+          const lineLength = 30 * stretchFactor;
+
+          dashGraphics.lineStyle(2, dashColor, 0.6 - i * 0.1);
+          dashGraphics.beginPath();
+
+          if (isHorizontal) {
+            const lineX = currentX - vec.dx * lineLength;
+            dashGraphics.moveTo(lineX, currentY + offset);
+            dashGraphics.lineTo(currentX - vec.dx * 10, currentY + offset);
+          } else {
+            const lineY = currentY - vec.dy * lineLength;
+            dashGraphics.moveTo(currentX + offset, lineY);
+            dashGraphics.lineTo(currentX + offset, currentY - vec.dy * 10);
+          }
+          dashGraphics.stroke();
+        }
+      }
+    };
+
+    // 60fps 애니메이션 타이머
+    const animTimer = this.time.addEvent({
+      delay: 16, // ~60fps
+      loop: true,
+      callback: () => {
+        anim.progress += 16 / dashDuration;
+        if (anim.progress >= 1) {
+          anim.progress = 1;
+          animTimer.destroy();
+        }
+        drawRubberBandSnake();
+      }
+    });
+
+    // 대시 완료 처리
+    this.time.delayedCall(dashDuration + 20, () => {
+      // 그래픽 정리
+      dashGraphics.destroy();
+      trailGraphics.destroy();
+
+      // 뱀 전체 이동 (대시 거리만큼)
+      const dx = newHead.x - head.x;
+      const dy = newHead.y - head.y;
+      for (let i = 0; i < this.snake.length; i++) {
+        this.snake[i].x += dx;
+        this.snake[i].y += dy;
+      }
+      this.dashingHideSnake = false;
+      this.draw();
+
+      // 도착 임팩트 이펙트
+      const impactGraphics = this.add.graphics().setDepth(198);
+
+      // 임팩트 링 여러 개
+      for (let i = 0; i < 3; i++) {
+        this.time.delayedCall(i * 30, () => {
+          const ring = this.add.graphics().setDepth(198 - i);
+          ring.lineStyle(3 - i, dashColor, 1);
+          ring.strokeCircle(endPixelX, endPixelY, 8);
+
+          this.tweens.add({
+            targets: ring,
+            scaleX: 2.5 + i * 0.5,
+            scaleY: 2.5 + i * 0.5,
+            alpha: 0,
+            duration: 150,
+            ease: 'Quad.easeOut',
+            onComplete: () => ring.destroy()
+          });
+        });
+      }
+
+      // 스파크 파티클
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        const spark = this.add.graphics().setDepth(197);
+        spark.fillStyle(dashColor, 1);
+        spark.fillCircle(0, 0, 3);
+        spark.x = endPixelX;
+        spark.y = endPixelY;
+
+        this.tweens.add({
+          targets: spark,
+          x: endPixelX + Math.cos(angle) * 25,
+          y: endPixelY + Math.sin(angle) * 25,
+          alpha: 0,
+          scaleX: 0.3,
+          scaleY: 0.3,
+          duration: 120,
+          ease: 'Quad.easeOut',
+          onComplete: () => spark.destroy()
+        });
+      }
+
+      // 보스 충돌 판정
+      if (hitBoss && this.gearTitanMode) {
+        this.time.delayedCall(30, () => {
+          this.performBossImpact(newHead, startPos, returnDir);
+        });
+      } else {
+        this.time.delayedCall(50, () => {
+          this.isDashing = false;
+          this.isInvincible = false;
+          if (this.moveTimer) this.moveTimer.paused = false;
+          this.draw();
+        });
+      }
+    });
+  }
+
+  // Steam Dash 잔상
+  createSteamDashGhost(gridX, gridY, delay, color) {
+    this.time.delayedCall(delay, () => {
+      const x = gridX * this.gridSize + this.gridSize / 2;
+      const y = gridY * this.gridSize + this.gridSize / 2 + 60;
+
+      const ghost = this.add.graphics().setDepth(98);
+      ghost.fillStyle(color, 0.6);
+      ghost.fillRect(
+        x - this.gridSize / 2 + 1,
+        y - this.gridSize / 2 + 1,
+        this.gridSize - 2,
+        this.gridSize - 2
+      );
+
+      this.tweens.add({
+        targets: ghost,
+        alpha: 0,
+        scaleX: 0.5,
+        scaleY: 0.5,
+        duration: 200,
+        onComplete: () => ghost.destroy()
+      });
+    });
+  }
+
+  // Steam 스피드 라인
+  showSteamSpeedLines(startX, startY, endX, endY, dir, color) {
+    const lineCount = 10;
+    for (let i = 0; i < lineCount; i++) {
+      const line = this.add.graphics().setDepth(99);
+      const offset = (i - lineCount / 2) * 5;
+
+      let lineStartX = startX;
+      let lineStartY = startY;
+      let lineEndX = endX;
+      let lineEndY = endY;
+
+      if (dir === 'LEFT' || dir === 'RIGHT') {
+        lineStartY += offset;
+        lineEndY += offset;
+      } else {
+        lineStartX += offset;
+        lineEndX += offset;
+      }
+
+      line.lineStyle(2, color, 0.7);
+      line.beginPath();
+      line.moveTo(lineStartX, lineStartY);
+      line.lineTo(lineEndX, lineEndY);
+      line.stroke();
+
+      this.tweens.add({
+        targets: line,
+        alpha: 0,
+        duration: 150,
+        delay: i * 8,
+        onComplete: () => line.destroy()
+      });
+    }
   }
 
   performChargeDash() {
@@ -7079,15 +8388,15 @@ export default class SnakeGame extends Phaser.Scene {
 
     const { width, height } = this.cameras.main;
 
-    // HIT ME! 텍스트
-    const hitMeText = this.add.text(width / 2, 100, 'HIT ME!', {
+    // HIT 텍스트
+    this.gearTitanHitText = this.add.text(width / 2, 100, 'HIT', {
       fontSize: '48px',
       fill: '#00ff00',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(5000);
 
     this.tweens.add({
-      targets: hitMeText,
+      targets: this.gearTitanHitText,
       alpha: { from: 1, to: 0.5 },
       scaleX: { from: 1, to: 1.2 },
       scaleY: { from: 1, to: 1.2 },
@@ -7111,7 +8420,10 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 짧은 취약 창 (더 어려운 난이도)
     this.time.delayedCall(1800, () => {
-      if (hitMeText.active) hitMeText.destroy();
+      if (this.gearTitanHitText && this.gearTitanHitText.active) {
+        this.gearTitanHitText.destroy();
+        this.gearTitanHitText = null;
+      }
 
       if (this.gearTitanMode && !this.gameOver) {
         this.gearTitanVulnerable = false;
@@ -7155,11 +8467,20 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
-    // 패턴 순환
+    // 패턴 순환 (vulnerable에서도 마지막 공격 패턴 기억)
     const patterns = ['phase1', 'phase2', 'phase3'];
-    const currentIdx = patterns.indexOf(this.gearTitanPhase);
+
+    // 현재 페이즈가 vulnerable이면 마지막 공격 페이즈 기준으로 다음 패턴 선택
+    let currentIdx;
+    if (this.gearTitanPhase === 'vulnerable' || this.gearTitanPhase === 'none') {
+      currentIdx = patterns.indexOf(this.lastAttackPhase || 'phase3'); // 마지막 공격 기준
+    } else {
+      currentIdx = patterns.indexOf(this.gearTitanPhase);
+    }
+
     const nextIdx = (currentIdx + 1) % patterns.length;
     this.gearTitanPhase = patterns[nextIdx];
+    this.lastAttackPhase = this.gearTitanPhase; // 마지막 공격 패턴 저장
 
     this.time.delayedCall(700, () => {
       switch (this.gearTitanPhase) {
@@ -7249,8 +8570,15 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.gearTitanHitCount++;
     this.gearTitanVulnerable = false;
+    this.gearTitanStunEndTime = 0; // 스턴 타이머 초기화
     const hitsNeeded = this.gearTitanHitsToKill || 4;
     const { skipSnakePush = false, bounceOverride = null, forceDirection = null, resumeDelay = 800 } = options;
+
+    // HIT 텍스트 제거
+    if (this.gearTitanHitText && this.gearTitanHitText.active) {
+      this.gearTitanHitText.destroy();
+      this.gearTitanHitText = null;
+    }
 
     // 히트 후 일시적 무적 (보스 충돌 무시)
     this.isInvincible = true;
@@ -7441,6 +8769,9 @@ export default class SnakeGame extends Phaser.Scene {
       if (this.gearTitanHitCount >= hitsNeeded) {
         this.showGearTitanVictory();
       } else {
+        // Steam Gauge UI 재생성 (난이도 증가 반영)
+        this.refreshSteamGaugeUI();
+
         // 게임 재개
         this.moveTimer.paused = false;
         // 다음 공격 패턴
@@ -7448,6 +8779,34 @@ export default class SnakeGame extends Phaser.Scene {
           this.advanceGearTitanPhase();
         });
       }
+    });
+  }
+
+  // Steam Gauge UI 재생성 (난이도 증가 시)
+  refreshSteamGaugeUI() {
+    // 기존 UI 정리
+    this.cleanupChargeUI();
+
+    // 새 난이도로 UI 재생성
+    this.showChargeUI();
+
+    // 난이도 증가 알림
+    const { width, height } = this.cameras.main;
+    const difficultyText = this.add.text(width / 2, height - 110, '⚠️ DIFFICULTY UP! ⚠️', {
+      fontSize: '16px',
+      fill: '#ff4444',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(1001);
+
+    this.tweens.add({
+      targets: difficultyText,
+      y: height - 130,
+      alpha: { from: 1, to: 0 },
+      duration: 1500,
+      ease: 'Power2',
+      onComplete: () => difficultyText.destroy()
     });
   }
 
@@ -8013,7 +9372,8 @@ export default class SnakeGame extends Phaser.Scene {
     }
 
     // 무적 깜빡임 중이면 일부 프레임에서 뱀 그리기 스킵
-    const skipSnakeDraw = this.invincibilityBlinkActive && this.invincibilityBlinkCount % 2 === 1;
+    // 대시 중에도 뱀 숨기기 (대시 애니메이션 표시)
+    const skipSnakeDraw = (this.invincibilityBlinkActive && this.invincibilityBlinkCount % 2 === 1) || this.dashingHideSnake;
 
     // 뱀 그리기 (무적 깜빡임 중에는 스킵)
     if (!skipSnakeDraw) {
@@ -16748,7 +18108,7 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 경고 단계
     this.laserPhase = 'warning';
-    this.showLaserWarning();
+    this.showLaserTurretWarning();
 
     // 경고 후 발사
     this.time.delayedCall(this.laserWarningDuration, () => {
@@ -16769,7 +18129,7 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
-  showLaserWarning() {
+  showLaserTurretWarning() {
     this.laserTurrets.forEach(turret => {
       turret.isWarning = true;
       turret.warningGraphics.setVisible(true);
@@ -23520,13 +24880,7 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.moveTimer.paused = true;
 
-    // 9탄 보스 BGM으로 변경
-    if (this.bgMusic && this.bgMusic.isPlaying) {
-      this.bgMusic.stop();
-    }
-    if (this.boss9Music) {
-      this.boss9Music.play();
-    }
+    // BGM은 showFogBossIntro에서 검은 배경이 되는 순간에 변경됨
 
     this.showFogBossIntro();
   }
@@ -23590,6 +24944,14 @@ export default class SnakeGame extends Phaser.Scene {
 
         // 🆕 DOM(브라우저 배경)도 함께 어두워지는 공포 연출!
         this.createBrowserDarkness();
+
+        // 9탄 보스 BGM으로 변경 (맵 바깥이 검정색이 되는 순간)
+        if (this.bgMusic && this.bgMusic.isPlaying) {
+          this.bgMusic.stop();
+        }
+        if (this.boss9Music) {
+          this.boss9Music.play();
+        }
 
         // 추가 공포 연출: 브라우저 전체 빨간 플래시
         this.flashBrowserRed();
@@ -29214,7 +30576,8 @@ export default class SnakeGame extends Phaser.Scene {
     // 보스 스테이지 여부
     const isBulletBoss = this.isBulletBossStage();
     const isFogBoss = this.isFogBossStage();
-    const isPoisonBoss = !isBulletBoss && !isFogBoss && !isMagnetarStage(this.currentStage) && !isMultiverseCollapseStage(this.currentStage) && (
+    const isGearTitan = this.isGearTitanStage();
+    const isPoisonBoss = !isBulletBoss && !isFogBoss && !isGearTitan && !isMagnetarStage(this.currentStage) && !isMultiverseCollapseStage(this.currentStage) && (
       this.currentStage === this.testBossStage ||
       (this.currentStage > this.testBossStage && this.currentStage % this.bossStageInterval === 0)
     );
@@ -29222,6 +30585,16 @@ export default class SnakeGame extends Phaser.Scene {
     // 보스 스테이지 진입 (독개구리/탄막/안개 보스만)
     if (isPoisonBoss || isBulletBoss || isFogBoss) {
       this.enterBossStage();
+    }
+
+    // 기어 타이탄 보스 (12탄) 직접 시작
+    if (isGearTitan) {
+      this.showDevModeCountdown(() => {
+        this.bossMode = true;
+        this.isBossStage = true;
+        this.startGearTitanDirectBattle();
+      });
+      return;
     }
 
     // 카운트다운 표시
@@ -29409,6 +30782,11 @@ export default class SnakeGame extends Phaser.Scene {
       this.cleanupBulletBoss();
     }
 
+    // 기어 타이탄 보스 정리
+    if (this.gearTitanMode) {
+      this.cleanupGearTitan();
+    }
+
     // 기존 보스 요소 정리
     if (this.bossElement) {
       this.bossElement.destroy();
@@ -29457,6 +30835,22 @@ export default class SnakeGame extends Phaser.Scene {
     this.fogBossHitCount = 0;
     this.fogBossPosition = null;
     this.fogIntroShown = false;
+
+    // 기어 타이탄 보스 상태 리셋
+    this.gearTitanMode = false;
+    this.gearTitanPhase = 'none';
+    this.gearTitanPosition = null;
+    this.gearTitanHitCount = 0;
+    this.gearTitanVulnerable = false;
+    this.gearTitanStunEndTime = 0;
+    this.canChargeDash = false;
+    this.isCharging = false;
+    this.chargeReady = false;
+    this.isDashing = false;
+    this.dashingHideSnake = false;
+    this.isOverheated = false;
+    this.overheatEndTime = 0;
+    this.isInvincible = false;
 
     // 기타 상태 리셋
     this.hasEatenFirstFood = false;
