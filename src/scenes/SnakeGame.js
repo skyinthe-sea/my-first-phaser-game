@@ -24,6 +24,16 @@ export default class SnakeGame extends Phaser.Scene {
     this.load.audio('moving', 'assets/sfx/moving.mp3');
     // 먹이 먹는 효과음 로드
     this.load.audio('eating', 'assets/sfx/eating.mp3');
+    // 6탄 보스 총알 발사 효과음
+    this.load.audio('boss6_effect', 'assets/sfx/6_boss_effect.mp3');
+    // 9탄 보스 공격 효과음
+    this.load.audio('boss9_effect', 'assets/sfx/9_boss_effect.mp3');
+    // 14탄 레이저 효과음
+    this.load.audio('laser14_effect', 'assets/sfx/14_razer_effect.mp3');
+    // 6탄 보스 대시 효과음
+    this.load.audio('dash_effect', 'assets/sfx/spear_3.mp3');
+    // 9탄 빛의조각 수집 효과음
+    this.load.audio('flare_collect', 'assets/sfx/Gacha_impact_2.mp3');
 
     // 뱀 머리 스프라이트 로드 (2개로 4방향 구현)
     this.load.image('snake_head_side', 'assets/sprite/snake_head_side.png'); // 좌우
@@ -921,13 +931,13 @@ export default class SnakeGame extends Phaser.Scene {
       //   this.startNexusDashCharge();
       // }
 
-      // 탄막 보스 모드에서 회피 가능
+      // 탄막 보스 모드에서 회피 가능 (6탄 - 대시 + QTE)
       if (this.bulletBossMode && this.bulletBossPhase !== 'intro' && this.bulletBossPhase !== 'victory') {
         this.handleDodge();
       }
-      // 안개 보스 모드에서도 회피 가능 (Shadow Strike 중)
-      if (this.fogBossMode && this.fogBossPhase === 'shadow') {
-        this.handleDodge();
+      // 9탄(안개 보스)에서는 QTE 회피만 가능 (대시 비활성화)
+      if (this.fogBossMode && this.dodgeQTEActive) {
+        this.handleDodgeQTEInput();
       }
     });
 
@@ -18192,6 +18202,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   activateLasers() {
+    // 14탄 레이저 효과음
+    this.sound.play('laser14_effect', { volume: 0.3 });
+
     this.laserTurrets.forEach(turret => {
       turret.isWarning = false;
       turret.isActive = true;
@@ -21512,6 +21525,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   performSideRoll() {
+    // 대시 효과음
+    this.sound.play('dash_effect', { volume: 0.3 });
+
     const head = this.snake[0];
     const direction = this.direction;
     let rollDx = 0;
@@ -22689,6 +22705,9 @@ export default class SnakeGame extends Phaser.Scene {
   fireSpiralBullets(bulletCount = 16, rotationOffset = 0, speed = 2.5, type = 'spiral') {
     if (!this.bulletBossPosition) return;
 
+    // 6탄 보스 총알 발사 효과음
+    this.sound.play('boss6_effect', { volume: 0.3 });
+
     const bossX = this.bulletBossPosition.x;
     const bossY = this.bulletBossPosition.y;
 
@@ -22709,6 +22728,9 @@ export default class SnakeGame extends Phaser.Scene {
   fireAimedBullet(speed = 4, type = 'tracker') {
     if (!this.bulletBossPosition || !this.snake[0]) return;
 
+    // 6탄 보스 총알 발사 효과음
+    this.sound.play('boss6_effect', { volume: 0.3 });
+
     const bossX = this.bulletBossPosition.x;
     const bossY = this.bulletBossPosition.y;
     const head = this.snake[0];
@@ -22726,6 +22748,9 @@ export default class SnakeGame extends Phaser.Scene {
   showBulletFireEffect(gridX, gridY) {
     const pixelX = gridX * this.gridSize + this.gridSize / 2;
     const pixelY = gridY * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+
+    // 6탄 보스 총알 발사 효과음
+    this.sound.play('boss6_effect', { volume: 0.3 });
 
     // === 화려한 발사 이펙트 ===
 
@@ -25781,6 +25806,9 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 조명탄 수집
   collectFlare(flare) {
+    // 빛의조각 수집 효과음
+    this.sound.play('flare_collect', { volume: 0.3 });
+
     const head = this.snake[0];
     const headX = head.x * this.gridSize + this.gridSize / 2;
     const headY = head.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
@@ -27147,7 +27175,7 @@ export default class SnakeGame extends Phaser.Scene {
     const baseTime = 700;
     const hitPenalty = this.fogBossHitCount * 90;  // HIT당 90ms 감소
     const attemptPenalty = Math.max(0, this.dodgeAttemptCount - 1) * 60;  // 시도당 60ms 감소
-    const dashDuration = Math.max(180, baseTime - hitPenalty - attemptPenalty);
+    const dashDuration = Math.max(300, baseTime - hitPenalty - attemptPenalty);
 
     // QTE 프롬프트 표시 (첫 공격은 10초로 충분히 길게 - 게임 방식 학습용)
     const useGraceWindow = !this.fogBossFirstDodgeGraceUsed;
@@ -27185,6 +27213,9 @@ export default class SnakeGame extends Phaser.Scene {
         }
       },
       onComplete: () => {
+        // 9탄 보스 공격 효과음 (뱀 위를 지나갈 때)
+        this.sound.play('boss9_effect', { volume: 0.3 });
+
         // QTE 창 종료
         this.dodgeQTEActive = false;
 
