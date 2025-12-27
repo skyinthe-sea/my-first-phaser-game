@@ -4,6 +4,9 @@ import { bankData, generateBankList, getRandomInRange } from '../data/banks.js';
 import { WORLD_CONFIG, getWorldByStage, getBossInfoForStage, shouldHaveSaws, shouldHaveGasZone, shouldHaveFog, shouldHaveFloatingMines, shouldHaveLaserTurrets, isMagnetarStage, isNexusStage, isMetaUniverseStage, shouldDisableCombo, isQuantumSplitStage, isMultiverseCollapseStage } from '../data/worlds.js';
 
 export default class SnakeGame extends Phaser.Scene {
+  // 정적 변수: 크레딧 후 타이틀 화면 표시 플래그
+  static showTitleOnRestart = false;
+
   constructor() {
     super({ key: 'SnakeGame' });
   }
@@ -31,6 +34,14 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 아이템 이미지 로드
     this.load.image('combo_shield', 'assets/items/combo_shield.png');
+
+    // 엔딩 비디오 로드
+    this.load.video('ending_video', 'assets/video/sujeong.mp4');
+    this.load.video('final_ending_video', 'assets/video/ending.mp4');
+
+    // 엔딩 BGM 로드
+    this.load.audio('rain_is_best_bgm', 'assets/bgm/RAIN_IS_BEST.mp3');
+    this.load.audio('픽셀스톰', 'assets/bgm/pixel_storm.mp3');
   }
 
   create() {
@@ -81,6 +92,18 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 18탄 보스 배경음악 (Multiverse Collapse)
     this.boss18Music = this.sound.add('boss18_bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 엔딩 배경음악 (RAIN_IS_BEST)
+    this.rainIsBestMusic = this.sound.add('rain_is_best_bgm', {
+      loop: true,
+      volume: 0.8
+    });
+
+    // 크레딧 배경음악 (픽셀 스톰)
+    this.pixelStormMusic = this.sound.add('픽셀스톰', {
       loop: true,
       volume: 0.8
     });
@@ -966,6 +989,12 @@ export default class SnakeGame extends Phaser.Scene {
       callbackScope: this,
       loop: true
     });
+
+    // 타이틀 화면 표시 (크레딧 후 복귀 시)
+    if (SnakeGame.showTitleOnRestart) {
+      SnakeGame.showTitleOnRestart = false;
+      this.showTitleScreen();
+    }
 
     this.startFogIntroIfNeeded();
 
@@ -38110,6 +38139,14 @@ export default class SnakeGame extends Phaser.Scene {
     this.runnerPhase = 'intro';
     const { width, height } = this.cameras.main;
 
+    // 기본 BGM 재생 (보스전 BGM 정지 후)
+    if (this.boss18Music && this.boss18Music.isPlaying) {
+      this.boss18Music.stop();
+    }
+    if (this.bgMusic && !this.bgMusic.isPlaying) {
+      this.bgMusic.play();
+    }
+
     // 지면 설정 (이미 설정되어 있을 수 있음)
     if (!this.runnerGroundY) {
       this.runnerGroundY = height - 80;
@@ -38394,6 +38431,11 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.runnerJumping = true;
     this.runnerJumpVelocity = this.runnerJumpPower;
+
+    // 점프 시 방향전환 sfx 재생
+    if (this.movingSound) {
+      this.movingSound.play();
+    }
   }
 
   /**
@@ -38474,6 +38516,31 @@ export default class SnakeGame extends Phaser.Scene {
   updateRunner() {
     if (!this.runnerMode) return;
 
+    // swimming, fertilizing phase에서는 별도 타이머가 처리하지만 drawRunner는 계속 호출
+    if (this.runnerPhase === 'swimming' || this.runnerPhase === 'fertilizing') {
+      this.drawRunner();
+      return;
+    }
+
+    // clear phase에서는 뱀이 계속 달리는 애니메이션 유지
+    if (this.runnerPhase === 'clear') {
+      // 플레이어 뱀 달리기 애니메이션 계속
+      const head = this.runnerPlayerSnake[0];
+
+      // 뱀 몸통 물결 애니메이션 유지
+      for (let i = this.runnerPlayerSnake.length - 1; i > 0; i--) {
+        const seg = this.runnerPlayerSnake[i];
+        const prev = this.runnerPlayerSnake[i - 1];
+        seg.y += (prev.y - seg.y) * 0.3;
+      }
+
+      // 배경 스크롤 효과 유지 (속도 서서히 감소)
+      this.runnerDistance += this.runnerSpeed;
+
+      this.drawRunner();
+      return;
+    }
+
     const { width, height } = this.cameras.main;
 
     // 거리 증가
@@ -38553,8 +38620,8 @@ export default class SnakeGame extends Phaser.Scene {
         continue;
       }
 
-      // 충돌 체크 (플레이어블 모드에서만)
-      if (this.runnerPhase === 'playing' && !obs.passed) {
+      // 충돌 체크 (플레이어블 모드에서만, 10개 통과 후에는 무적)
+      if (this.runnerPhase === 'playing' && !obs.passed && !this.runnerClearStarted) {
         if (this.checkRunnerCollision(obs)) {
           // 게임오버 대신 낑겨잡힘 상태로
           this.startRunnerTrapped(obs);
@@ -38849,6 +38916,19 @@ export default class SnakeGame extends Phaser.Scene {
 
     const { width, height } = this.cameras.main;
 
+    // BGM 페이드아웃 시작 (5초에 걸쳐 점점 줄어듦)
+    if (this.bgMusic && this.bgMusic.isPlaying) {
+      this.tweens.add({
+        targets: this.bgMusic,
+        volume: 0,
+        duration: 5000,
+        ease: 'Sine.easeIn',
+        onComplete: () => {
+          this.bgMusic.stop();
+        }
+      });
+    }
+
     // 난자 시작 위치 (화면 오른쪽 밖)
     const startX = width + 150;
     const targetX = width - 200;
@@ -39094,10 +39174,10 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   /**
-   * 러너 엔딩 화면 표시
+   * 러너 엔딩 화면 표시 - 역동적인 전환 효과 + 3배속 비디오 + RAIN_IS_BEST BGM
    */
   showRunnerEnding() {
-    console.log('🎬 Showing Runner Ending Screen');
+    console.log('🎬 Showing Runner Ending Screen - Dynamic Transition!');
 
     const { width, height } = this.cameras.main;
 
@@ -39106,87 +39186,1011 @@ export default class SnakeGame extends Phaser.Scene {
       this.runnerGraphics.clear();
     }
 
+    // ===== PHASE 1: 격동적인 전환 효과 (0-2초) =====
+
+    // 화면 떨림 시작
+    this.cameras.main.shake(1500, 0.03);
+
+    // 플래시 효과 연속
+    this.cameras.main.flash(300, 255, 255, 255);
+    this.time.delayedCall(400, () => this.cameras.main.flash(200, 255, 255, 255));
+    this.time.delayedCall(700, () => this.cameras.main.flash(150, 255, 255, 255));
+
+    // 줌 인/아웃 효과
+    this.cameras.main.zoomTo(1.5, 500, 'Sine.easeIn', false, () => {
+      this.cameras.main.zoomTo(0.8, 300, 'Sine.easeOut', false, () => {
+        this.cameras.main.zoomTo(1, 200);
+      });
+    });
+
+    // 격동적인 라인 이펙트 (수정 순간의 에너지)
+    for (let i = 0; i < 20; i++) {
+      this.time.delayedCall(i * 50, () => {
+        const angle = Math.random() * Math.PI * 2;
+        const length = 200 + Math.random() * 400;
+        const lineColor = Phaser.Utils.Array.GetRandom([0xffffff, 0xffffaa, 0xffff00, 0xffd700]);
+
+        const line = this.add.graphics().setDepth(9940);
+        line.lineStyle(3 + Math.random() * 5, lineColor, 0.8);
+        line.beginPath();
+        line.moveTo(width / 2, height / 2);
+        line.lineTo(
+          width / 2 + Math.cos(angle) * length,
+          height / 2 + Math.sin(angle) * length
+        );
+        line.stroke();
+        this.runnerElements.push(line);
+
+        this.tweens.add({
+          targets: line,
+          alpha: 0,
+          duration: 300,
+          onComplete: () => line.destroy()
+        });
+      });
+    }
+
+    // 파티클 폭발 효과
+    for (let i = 0; i < 50; i++) {
+      this.time.delayedCall(200 + Math.random() * 500, () => {
+        const particle = this.add.circle(
+          width / 2 + (Math.random() - 0.5) * 100,
+          height / 2 + (Math.random() - 0.5) * 100,
+          3 + Math.random() * 8,
+          Phaser.Utils.Array.GetRandom([0xffffff, 0xffffaa, 0xff6b6b, 0x00ffff]),
+          1
+        ).setDepth(9945);
+        this.runnerElements.push(particle);
+
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 100 + Math.random() * 300;
+
+        this.tweens.add({
+          targets: particle,
+          x: particle.x + Math.cos(angle) * speed,
+          y: particle.y + Math.sin(angle) * speed,
+          alpha: 0,
+          scale: 0,
+          duration: 800 + Math.random() * 400,
+          ease: 'Power2',
+          onComplete: () => particle.destroy()
+        });
+      });
+    }
+
+    // 원형 충격파
+    for (let i = 0; i < 3; i++) {
+      this.time.delayedCall(i * 300, () => {
+        const shockwave = this.add.circle(width / 2, height / 2, 10, 0xffffff, 0);
+        shockwave.setStrokeStyle(4, 0xffffff, 1);
+        shockwave.setDepth(9935);
+        this.runnerElements.push(shockwave);
+
+        this.tweens.add({
+          targets: shockwave,
+          radius: 500,
+          alpha: 0,
+          duration: 600,
+          ease: 'Power2',
+          onComplete: () => shockwave.destroy()
+        });
+      });
+    }
+
+    // ===== PHASE 2: 비디오 전환 준비 (1.5초 후) =====
+    this.time.delayedCall(1500, () => {
+      // 검은 배경으로 전환
+      const blackBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0);
+      blackBg.setDepth(9950);
+      this.runnerElements.push(blackBg);
+
+      this.tweens.add({
+        targets: blackBg,
+        alpha: 1,
+        duration: 500,
+        onComplete: () => {
+          // ===== PHASE 3: 비디오 재생 시작 =====
+          this.startEndingVideoSequence();
+        }
+      });
+    });
+  }
+
+  /**
+   * 엔딩 비디오 시퀀스 - 3배속 + RAIN_IS_BEST BGM
+   */
+  startEndingVideoSequence() {
+    console.log('🎬 Starting Ending Video Sequence - 3x Speed + RAIN_IS_BEST BGM');
+
+    const { width, height } = this.cameras.main;
+
+    // RAIN_IS_BEST BGM 시작 (볼륨 0.8로 바로 재생)
+    if (this.rainIsBestMusic) {
+      console.log('🎵 Playing RAIN_IS_BEST BGM');
+      if (this.rainIsBestMusic.isPlaying) {
+        this.rainIsBestMusic.stop();
+      }
+      this.rainIsBestMusic.setVolume(0.8);
+      this.rainIsBestMusic.play();
+    } else {
+      console.error('❌ rainIsBestMusic is not defined!');
+    }
+
+    // 엔딩 비디오 재생 (3배속)
+    const endingVideo = this.add.video(width / 2, height / 2, 'ending_video');
+    endingVideo.setDepth(9960);
+    endingVideo.setOrigin(0.5);
+    endingVideo.setAlpha(0);
+
+    // 비디오를 화면에 맞게 스케일 조정
+    endingVideo.on('play', () => {
+      const videoWidth = endingVideo.width;
+      const videoHeight = endingVideo.height;
+      const scaleX = width / videoWidth;
+      const scaleY = height / videoHeight;
+      const scale = Math.max(scaleX, scaleY);
+      endingVideo.setScale(scale);
+    });
+
+    // 루프 없이 재생 (false = 루프 안함)
+    endingVideo.play(false);
+    endingVideo.setPlaybackRate(3);
+
+    // 비디오 페이드 인
+    this.tweens.add({
+      targets: endingVideo,
+      alpha: 1,
+      duration: 500
+    });
+
+    this.runnerElements.push(endingVideo);
+    this.endingVideo = endingVideo;
+
+    // 비디오 종료 시 처리 - 다음 엔딩 비디오로 (네이티브 이벤트 사용)
+    if (endingVideo.video) {
+      endingVideo.video.onended = () => {
+        console.log('🎬 First ending video (sujeong) completed - starting final ending');
+        this.startFinalEndingVideo();
+      };
+    }
+
+    // 아무 키나 누르면 스킵 가능 (3초 후부터) - 다음 비디오로
+    this.time.delayedCall(3000, () => {
+      this.input.keyboard.once('keydown', () => {
+        if (this.endingVideo) {
+          this.endingVideo.stop();
+        }
+        this.startFinalEndingVideo();
+      });
+    });
+  }
+
+  /**
+   * 비디오 전환 효과 (분열영상 → 엔딩영상 사이)
+   */
+  showVideoTransitionEffect() {
+    // 이미 전환 중이면 무시
+    if (this.videoTransitionStarted) return;
+    this.videoTransitionStarted = true;
+
+    console.log('🎬 Video Transition Effect Starting');
+
+    const { width, height } = this.cameras.main;
+
+    // 첫 번째 비디오 정리
+    if (this.endingVideo) {
+      if (this.endingVideo.video) {
+        this.endingVideo.video.onended = null;
+      }
+      this.endingVideo.destroy();
+      this.endingVideo = null;
+    }
+
     // 검은 배경
-    const blackBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 1);
-    blackBg.setDepth(9950);
+    const blackBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000);
+    blackBg.setDepth(9960);
     this.runnerElements.push(blackBg);
 
-    // 엔딩 텍스트들
-    const titleText = this.add.text(width / 2, height / 3 - 30, 'THE END', {
-      fontSize: '64px',
-      fill: '#ffffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
-    this.runnerElements.push(titleText);
+    // 빛나는 파티클들 (우주적 느낌)
+    const particles = [];
+    for (let i = 0; i < 50; i++) {
+      const particle = this.add.circle(
+        Phaser.Math.Between(0, width),
+        Phaser.Math.Between(0, height),
+        Phaser.Math.Between(1, 3),
+        0xffffff,
+        0
+      );
+      particle.setDepth(9961);
+      particles.push(particle);
+      this.runnerElements.push(particle);
 
-    const subtitleText = this.add.text(width / 2, height / 3 + 40, 'A new life begins...', {
-      fontSize: '28px',
-      fill: '#ffffaa',
-      fontStyle: 'italic'
-    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
-    this.runnerElements.push(subtitleText);
+      // 파티클 페이드 인/아웃 애니메이션
+      this.tweens.add({
+        targets: particle,
+        alpha: { from: 0, to: Phaser.Math.FloatBetween(0.3, 1) },
+        scale: { from: 0.5, to: Phaser.Math.FloatBetween(1, 2) },
+        duration: Phaser.Math.Between(500, 1500),
+        delay: Phaser.Math.Between(0, 1000),
+        yoyo: true,
+        repeat: 1,
+        ease: 'Sine.easeInOut'
+      });
+    }
 
-    const creditText = this.add.text(width / 2, height / 2 + 50, 'Snake Game\nA Journey Through 18 Stages', {
-      fontSize: '20px',
-      fill: '#888888',
-      align: 'center'
-    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
-    this.runnerElements.push(creditText);
+    // 중앙 빛 효과 (생명의 시작을 암시) - scale로 크기 조절
+    const centerGlow = this.add.circle(width / 2, height / 2, 150, 0xffccaa, 0);
+    centerGlow.setDepth(9962);
+    centerGlow.setScale(0);
+    this.runnerElements.push(centerGlow);
 
-    const continueText = this.add.text(width / 2, height - 80, 'Press any key to continue...', {
-      fontSize: '18px',
-      fill: '#666666'
-    }).setOrigin(0.5).setDepth(9960).setAlpha(0);
-    this.runnerElements.push(continueText);
-
-    // 순차적으로 페이드인
+    // 중앙 빛 확장 (scale 사용)
     this.tweens.add({
-      targets: titleText,
-      alpha: 1,
-      y: height / 3 - 50,
+      targets: centerGlow,
+      scale: 1,
+      alpha: 0.6,
       duration: 1500,
-      ease: 'Sine.easeOut',
-      delay: 500
-    });
-
-    this.tweens.add({
-      targets: subtitleText,
-      alpha: 1,
-      duration: 1000,
-      delay: 1500
-    });
-
-    this.tweens.add({
-      targets: creditText,
-      alpha: 1,
-      duration: 1000,
-      delay: 2500
-    });
-
-    this.tweens.add({
-      targets: continueText,
-      alpha: { from: 0, to: 0.7 },
-      duration: 500,
-      delay: 4000,
+      delay: 500,
+      ease: 'Quad.easeOut',
       onComplete: () => {
-        // 깜빡임 효과
+        // 빛이 펄스 (centerGlow가 아직 존재하는지 확인)
+        if (centerGlow && centerGlow.active) {
+          this.tweens.add({
+            targets: centerGlow,
+            alpha: 0.3,
+            scale: 1.2,
+            yoyo: true,
+            duration: 800,
+            repeat: 1,
+            ease: 'Sine.easeInOut'
+          });
+        }
+      }
+    });
+
+    // "시간이 흐르다..." 텍스트
+    const timeText = this.add.text(width / 2, height / 2 - 50, '', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '24px',
+      color: '#ffffff',
+      alpha: 0
+    });
+    timeText.setOrigin(0.5);
+    timeText.setDepth(9963);
+    timeText.setAlpha(0);
+    this.runnerElements.push(timeText);
+
+    // 텍스트 타이핑 효과
+    const fullText = '...';
+    let charIndex = 0;
+    this.time.delayedCall(1000, () => {
+      this.tweens.add({
+        targets: timeText,
+        alpha: 1,
+        duration: 500
+      });
+
+      const typingTimer = this.time.addEvent({
+        delay: 600,
+        repeat: fullText.length - 1,
+        callback: () => {
+          charIndex++;
+          timeText.setText(fullText.substring(0, charIndex));
+        }
+      });
+      this.runnerElements.push(typingTimer);
+    });
+
+    // 화면 전환 (3초 후)
+    this.time.delayedCall(3500, () => {
+      // 모든 전환 요소 페이드 아웃
+      const allTransitionElements = [blackBg, centerGlow, timeText, ...particles];
+
+      // 기존 tweens 모두 중지
+      allTransitionElements.forEach(el => {
+        if (el) this.tweens.killTweensOf(el);
+      });
+
+      this.tweens.add({
+        targets: allTransitionElements.filter(el => el && el.active),
+        alpha: 0,
+        duration: 800,
+        onComplete: () => {
+          // 전환 요소 정리
+          allTransitionElements.forEach(el => {
+            if (el && el.destroy) el.destroy();
+          });
+          this.videoTransitionStarted = false;
+          // 최종 비디오 시작
+          this.startFinalEndingVideoActual();
+        }
+      });
+    });
+  }
+
+  /**
+   * 최종 엔딩 비디오 재생 (ending.mp4) - 음소거, BGM 유지
+   */
+  startFinalEndingVideo() {
+    // 전환 효과를 먼저 보여줌
+    this.showVideoTransitionEffect();
+  }
+
+  /**
+   * 실제 최종 엔딩 비디오 재생
+   */
+  startFinalEndingVideoActual() {
+    // 이미 최종 비디오 재생 중이면 무시
+    if (this.finalEndingStarted) return;
+    this.finalEndingStarted = true;
+
+    console.log('🎬 Starting Final Ending Video (ending.mp4) - Muted, BGM continues');
+
+    const { width, height } = this.cameras.main;
+
+    // 최종 엔딩 비디오 (음소거)
+    const finalVideo = this.add.video(width / 2, height / 2, 'final_ending_video');
+    finalVideo.setDepth(9960);
+    finalVideo.setOrigin(0.5);
+    finalVideo.setAlpha(0);
+    finalVideo.setMute(true); // 음소거 - RAIN_IS_BEST BGM만 들림
+
+    // 비디오를 화면에 맞게 스케일 조정
+    finalVideo.on('play', () => {
+      const videoWidth = finalVideo.width;
+      const videoHeight = finalVideo.height;
+      const scaleX = width / videoWidth;
+      const scaleY = height / videoHeight;
+      const scale = Math.max(scaleX, scaleY);
+      finalVideo.setScale(scale);
+    });
+
+    // 루프 없이 재생 (false = 루프 안함)
+    finalVideo.play(false);
+
+    // 비디오 페이드 인
+    this.tweens.add({
+      targets: finalVideo,
+      alpha: 1,
+      duration: 500
+    });
+
+    this.runnerElements.push(finalVideo);
+    this.finalEndingVideo = finalVideo;
+
+    // 비디오 종료 시 최종 엔딩 처리 (네이티브 이벤트 사용)
+    if (finalVideo.video) {
+      finalVideo.video.onended = () => {
+        console.log('🎬 Final ending video completed');
+        this.finalEndingStarted = false;
+        this.showPostVideoEnding();
+      };
+    }
+
+    // 아무 키나 누르면 스킵 가능 (2초 후부터)
+    this.time.delayedCall(2000, () => {
+      this.input.keyboard.once('keydown', () => {
+        if (this.finalEndingVideo) {
+          this.finalEndingVideo.stop();
+        }
+        this.finalEndingStarted = false;
+        this.showPostVideoEnding();
+      });
+    });
+  }
+
+  /**
+   * 비디오 종료 후 엔딩 처리 - 크레딧 롤 시작
+   */
+  showPostVideoEnding() {
+    // 이미 처리 중이면 무시
+    if (this.postVideoEndingStarted) return;
+    this.postVideoEndingStarted = true;
+
+    console.log('🎬 Post-video ending sequence - Starting Credits');
+
+    const { width, height } = this.cameras.main;
+
+    // 비디오 정리
+    if (this.endingVideo) {
+      this.endingVideo.destroy();
+      this.endingVideo = null;
+    }
+    if (this.finalEndingVideo) {
+      this.finalEndingVideo.destroy();
+      this.finalEndingVideo = null;
+    }
+
+    // RAIN_IS_BEST BGM 페이드아웃
+    if (this.rainIsBestMusic && this.rainIsBestMusic.isPlaying) {
+      this.tweens.add({
+        targets: this.rainIsBestMusic,
+        volume: 0,
+        duration: 1500,
+        onComplete: () => {
+          this.rainIsBestMusic.stop();
+        }
+      });
+    }
+
+    // 페이드 투 블랙
+    const fadeOverlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0);
+    fadeOverlay.setDepth(9970);
+    this.runnerElements.push(fadeOverlay);
+
+    this.tweens.add({
+      targets: fadeOverlay,
+      alpha: 1,
+      duration: 1000,
+      onComplete: () => {
+        // 2초 대기 후 철학적 메시지 시작
+        this.time.delayedCall(2000, () => {
+          this.showPhilosophicalMessages();
+        });
+      }
+    });
+  }
+
+  /**
+   * 철학적 메시지 시퀀스 (엔딩영상 → 크레딧 사이)
+   */
+  showPhilosophicalMessages() {
+    console.log('🌟 Showing Philosophical Messages');
+
+    const { width, height } = this.cameras.main;
+
+    // 메시지 요소들 저장
+    this.philosophyElements = [];
+
+    // 검은 배경 확보
+    const blackBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000);
+    blackBg.setDepth(9975);
+    this.philosophyElements.push(blackBg);
+
+    // 은은한 빛 파티클 배경
+    for (let i = 0; i < 20; i++) {
+      const particle = this.add.circle(
+        Phaser.Math.Between(0, width),
+        Phaser.Math.Between(0, height),
+        Phaser.Math.Between(1, 2),
+        0xffffff,
+        0
+      );
+      particle.setDepth(9976);
+      this.philosophyElements.push(particle);
+
+      // 천천히 나타났다 사라지는 효과
+      this.tweens.add({
+        targets: particle,
+        alpha: { from: 0, to: Phaser.Math.FloatBetween(0.1, 0.3) },
+        duration: Phaser.Math.Between(2000, 4000),
+        delay: Phaser.Math.Between(0, 3000),
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+    }
+
+    // 철학적 메시지들 (영어)
+    const messages = [
+      "You've come a long way.",
+      "You, who were born through such struggle...",
+      "You are valuable just as you are.",
+      "Thank you for being born.",
+      "Enjoy your day today."
+    ];
+
+    let currentIndex = 0;
+    const messageDuration = 3500; // 각 메시지 표시 시간
+    const fadeTime = 800; // 페이드 인/아웃 시간
+
+    const showNextMessage = () => {
+      if (currentIndex >= messages.length) {
+        // 모든 메시지 완료 - 크레딧으로 이동
+        this.time.delayedCall(1500, () => {
+          // 철학 메시지 요소 정리
+          this.philosophyElements.forEach(el => {
+            if (el) this.tweens.killTweensOf(el);
+            if (el && el.destroy) el.destroy();
+          });
+          this.philosophyElements = [];
+
+          // 크레딧 시작
+          this.showEndingCredits();
+        });
+        return;
+      }
+
+      const message = messages[currentIndex];
+
+      // 메시지 텍스트 생성
+      const messageText = this.add.text(width / 2, height / 2, message, {
+        fontSize: currentIndex === messages.length - 1 ? '28px' : '24px',
+        fontFamily: 'Georgia, serif',
+        fontStyle: 'italic',
+        color: '#ffffff',
+        align: 'center',
+        wordWrap: { width: width - 100 }
+      });
+      messageText.setOrigin(0.5);
+      messageText.setDepth(9980);
+      messageText.setAlpha(0);
+      this.philosophyElements.push(messageText);
+
+      // 부드러운 글로우 효과 (그림자로 표현)
+      messageText.setShadow(0, 0, '#ffffff', 10, false, true);
+
+      // 페이드 인
+      this.tweens.add({
+        targets: messageText,
+        alpha: 1,
+        y: height / 2 - 10,
+        duration: fadeTime,
+        ease: 'Power2',
+        onComplete: () => {
+          // 잠시 유지 후 페이드 아웃
+          this.time.delayedCall(messageDuration - fadeTime * 2, () => {
+            this.tweens.add({
+              targets: messageText,
+              alpha: 0,
+              y: height / 2 - 30,
+              duration: fadeTime,
+              ease: 'Power2',
+              onComplete: () => {
+                messageText.destroy();
+                currentIndex++;
+                // 다음 메시지
+                this.time.delayedCall(500, showNextMessage);
+              }
+            });
+          });
+        }
+      });
+
+      // 마지막 메시지는 특별한 효과
+      if (currentIndex === messages.length - 1) {
+        messageText.setColor('#ffffaa');
+        messageText.setFontSize('28px');
+
+        // 부드러운 펄스 효과
         this.tweens.add({
-          targets: continueText,
-          alpha: { from: 0.7, to: 0.3 },
-          duration: 800,
+          targets: messageText,
+          scale: 1.05,
+          duration: 1500,
           yoyo: true,
-          repeat: -1
+          repeat: 1,
+          ease: 'Sine.easeInOut'
+        });
+      }
+    };
+
+    // 첫 메시지 시작 (1초 후)
+    this.time.delayedCall(1000, showNextMessage);
+  }
+
+  /**
+   * 영화 스타일 엔딩 크레딧
+   */
+  showEndingCredits() {
+    console.log('🎬 Starting Ending Credits Roll');
+
+    const { width, height } = this.cameras.main;
+
+    // 크레딧 요소들 저장
+    this.creditsElements = [];
+
+    // 검은 배경 (이미 있을 수 있지만 확실히)
+    const creditsBg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000);
+    creditsBg.setDepth(9980);
+    this.creditsElements.push(creditsBg);
+
+    // 픽셀 스톰 BGM 시작
+    if (this.pixelStormMusic) {
+      console.log('🎵 Playing Pixel Storm BGM');
+      this.pixelStormMusic.setVolume(0);
+      this.pixelStormMusic.play();
+      this.tweens.add({
+        targets: this.pixelStormMusic,
+        volume: 0.8,
+        duration: 2000
+      });
+    }
+
+    // 크레딧 내용 정의
+    const creditsContent = [
+      { type: 'title', text: 'SNAKE GAME 2026' },
+      { type: 'space', height: 80 },
+      { type: 'subtitle', text: 'THE END' },
+      { type: 'space', height: 120 },
+
+      { type: 'category', text: 'CREATED BY' },
+      { type: 'name', text: 'dorongnyong' },
+      { type: 'space', height: 60 },
+
+      { type: 'category', text: 'GAME DESIGN' },
+      { type: 'name', text: 'Snake Game Team' },
+      { type: 'space', height: 60 },
+
+      { type: 'category', text: 'PROGRAMMING' },
+      { type: 'name', text: 'Phaser 3 Engine' },
+      { type: 'space', height: 60 },
+
+      { type: 'category', text: 'ART & ANIMATION' },
+      { type: 'name', text: 'Pixel Art Studio' },
+      { type: 'space', height: 60 },
+
+      { type: 'category', text: 'MUSIC' },
+      { type: 'name', text: '픽셀 스톰' },
+      { type: 'name', text: 'RAIN IS BEST' },
+      { type: 'name', text: 'Original Soundtrack' },
+      { type: 'space', height: 60 },
+
+      { type: 'category', text: 'SOUND EFFECTS' },
+      { type: 'name', text: 'Game Audio Design' },
+      { type: 'space', height: 60 },
+
+      { type: 'category', text: 'SPECIAL THANKS' },
+      { type: 'name', text: 'Claude AI' },
+      { type: 'name', text: 'Anthropic' },
+      { type: 'name', text: 'All Players' },
+      { type: 'space', height: 100 },
+
+      { type: 'category', text: 'STAGES' },
+      { type: 'name', text: 'Basic World - Stages 1~3' },
+      { type: 'name', text: 'Deadzone World - Stages 4~6' },
+      { type: 'name', text: 'Darkness World - Stages 7~9' },
+      { type: 'name', text: 'Machine World - Stages 10~12' },
+      { type: 'name', text: 'Cyber World - Stages 13~15' },
+      { type: 'name', text: 'Quantum World - Stages 16~18' },
+      { type: 'space', height: 100 },
+
+      { type: 'category', text: 'BOSS BATTLES' },
+      { type: 'name', text: '독개구리 - Stage 3' },
+      { type: 'name', text: 'Bullet Hell - Stage 6' },
+      { type: 'name', text: 'Nocturne - Stage 9' },
+      { type: 'name', text: 'Gear Boss - Stage 12' },
+      { type: 'name', text: 'NEXUS - Stage 15' },
+      { type: 'name', text: 'Meta Universe - Stage 18' },
+      { type: 'space', height: 120 },
+
+      { type: 'subtitle', text: 'THANK YOU FOR PLAYING' },
+      { type: 'space', height: 60 },
+      { type: 'name', text: '© 2026 Snake Game' },
+      { type: 'space', height: 200 },
+    ];
+
+    // 크레딧 텍스트 생성 (화면 아래에서 시작)
+    const creditsContainer = this.add.container(width / 2, height + 50);
+    creditsContainer.setDepth(9985);
+    this.creditsElements.push(creditsContainer);
+
+    let yOffset = 0;
+    const textElements = [];
+
+    creditsContent.forEach(item => {
+      if (item.type === 'space') {
+        yOffset += item.height;
+        return;
+      }
+
+      let fontSize, color, fontStyle;
+      switch (item.type) {
+        case 'title':
+          fontSize = '48px';
+          color = '#ffffff';
+          fontStyle = 'bold';
+          break;
+        case 'subtitle':
+          fontSize = '36px';
+          color = '#ffcc00';
+          fontStyle = 'bold';
+          break;
+        case 'category':
+          fontSize = '20px';
+          color = '#888888';
+          fontStyle = 'normal';
+          break;
+        case 'name':
+          fontSize = '24px';
+          color = '#ffffff';
+          fontStyle = 'normal';
+          break;
+        default:
+          fontSize = '20px';
+          color = '#ffffff';
+          fontStyle = 'normal';
+      }
+
+      const text = this.add.text(0, yOffset, item.text, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: fontSize,
+        fontStyle: fontStyle,
+        color: color,
+        align: 'center'
+      });
+      text.setOrigin(0.5, 0);
+      textElements.push(text);
+      creditsContainer.add(text);
+
+      yOffset += parseInt(fontSize) + 15;
+    });
+
+    // 빛나는 별 파티클 효과 (배경)
+    for (let i = 0; i < 30; i++) {
+      const star = this.add.circle(
+        Phaser.Math.Between(0, width),
+        Phaser.Math.Between(0, height),
+        Phaser.Math.Between(1, 2),
+        0xffffff,
+        Phaser.Math.FloatBetween(0.2, 0.6)
+      );
+      star.setDepth(9981);
+      this.creditsElements.push(star);
+
+      // 반짝임 효과
+      this.tweens.add({
+        targets: star,
+        alpha: Phaser.Math.FloatBetween(0.1, 0.3),
+        duration: Phaser.Math.Between(1000, 3000),
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+    }
+
+    // 크레딧 스크롤 (위로 올라감)
+    const totalHeight = yOffset + height;
+    const scrollDuration = totalHeight * 35; // 속도 조절 (높을수록 느림)
+
+    this.tweens.add({
+      targets: creditsContainer,
+      y: -yOffset - 50,
+      duration: scrollDuration,
+      ease: 'Linear',
+      onComplete: () => {
+        console.log('🎬 Credits completed');
+        // 크레딧 종료 후 타이틀로
+        this.time.delayedCall(2000, () => {
+          this.endCreditsAndReturnToTitle();
         });
       }
     });
 
-    // 아무 키나 누르면 진행
-    this.time.delayedCall(4000, () => {
+    // 스킵 가능 안내 (5초 후)
+    this.time.delayedCall(5000, () => {
+      const skipText = this.add.text(width - 20, height - 20, 'Press any key to skip', {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: '#666666'
+      });
+      skipText.setOrigin(1, 1);
+      skipText.setDepth(9990);
+      skipText.setAlpha(0);
+      this.creditsElements.push(skipText);
+
+      this.tweens.add({
+        targets: skipText,
+        alpha: 0.7,
+        duration: 500
+      });
+
+      // 스킵 키 리스너
       this.input.keyboard.once('keydown', () => {
+        this.endCreditsAndReturnToTitle();
+      });
+    });
+  }
+
+  /**
+   * 크레딧 종료 후 타이틀 화면으로
+   */
+  endCreditsAndReturnToTitle() {
+    // 이미 처리 중이면 무시
+    if (this.returningToTitle) return;
+    this.returningToTitle = true;
+
+    console.log('🎬 Ending credits - Returning to title');
+
+    const { width, height } = this.cameras.main;
+
+    // 픽셀 스톰 BGM 페이드아웃
+    if (this.pixelStormMusic && this.pixelStormMusic.isPlaying) {
+      this.tweens.add({
+        targets: this.pixelStormMusic,
+        volume: 0,
+        duration: 2000,
+        onComplete: () => {
+          this.pixelStormMusic.stop();
+        }
+      });
+    }
+
+    // 페이드 투 화이트 (새로운 시작 암시)
+    const fadeWhite = this.add.rectangle(width / 2, height / 2, width, height, 0xffffff, 0);
+    fadeWhite.setDepth(9995);
+
+    this.tweens.add({
+      targets: fadeWhite,
+      alpha: 1,
+      duration: 2000,
+      onComplete: () => {
+        // 크레딧 요소 정리
+        if (this.creditsElements) {
+          this.creditsElements.forEach(el => {
+            if (el && el.destroy) el.destroy();
+          });
+          this.creditsElements = [];
+        }
+
+        // 러너 모드 정리
         this.cleanupRunner();
         this.cleanupMultiverseCollapse();
-        this.stageClear();
+
+        // 게임 상태 완전 초기화
+        this.postVideoEndingStarted = false;
+        this.returningToTitle = false;
+        this.runnerMode = false;
+        this.multiverseCollapseMode = false;
+
+        // 타이틀 화면으로 (씬 재시작)
+        this.time.delayedCall(500, () => {
+          fadeWhite.destroy();
+          // 타이틀 화면 표시 플래그 설정
+          SnakeGame.showTitleOnRestart = true;
+          this.scene.restart();
+        });
+      }
+    });
+  }
+
+  /**
+   * 타이틀 화면 표시
+   */
+  showTitleScreen() {
+    console.log('🎮 Showing Title Screen');
+
+    const { width, height } = this.cameras.main;
+
+    // 게임 일시정지
+    this.moveTimer.paused = true;
+
+    // 타이틀 요소들 저장
+    this.titleElements = [];
+
+    // 반투명 오버레이
+    const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.85);
+    overlay.setDepth(9900);
+    this.titleElements.push(overlay);
+
+    // 빛나는 별 배경
+    for (let i = 0; i < 50; i++) {
+      const star = this.add.circle(
+        Phaser.Math.Between(0, width),
+        Phaser.Math.Between(0, height),
+        Phaser.Math.Between(1, 3),
+        0xffffff,
+        Phaser.Math.FloatBetween(0.2, 0.8)
+      );
+      star.setDepth(9901);
+      this.titleElements.push(star);
+
+      // 반짝임
+      this.tweens.add({
+        targets: star,
+        alpha: Phaser.Math.FloatBetween(0.1, 0.4),
+        duration: Phaser.Math.Between(1000, 3000),
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
       });
+    }
+
+    // 게임 타이틀
+    const titleText = this.add.text(width / 2, height / 2 - 100, 'SNAKE GAME', {
+      fontSize: '64px',
+      fontFamily: 'Arial, sans-serif',
+      fontStyle: 'bold',
+      color: '#00ff00',
+      stroke: '#004400',
+      strokeThickness: 8
+    });
+    titleText.setOrigin(0.5);
+    titleText.setDepth(9910);
+    titleText.setAlpha(0);
+    this.titleElements.push(titleText);
+
+    // 타이틀 페이드 인
+    this.tweens.add({
+      targets: titleText,
+      alpha: 1,
+      y: height / 2 - 80,
+      duration: 1000,
+      ease: 'Back.easeOut'
+    });
+
+    // 부제
+    const subtitleText = this.add.text(width / 2, height / 2 - 20, 'The Journey of Life', {
+      fontSize: '20px',
+      fontFamily: 'Arial, sans-serif',
+      fontStyle: 'italic',
+      color: '#88ff88'
+    });
+    subtitleText.setOrigin(0.5);
+    subtitleText.setDepth(9910);
+    subtitleText.setAlpha(0);
+    this.titleElements.push(subtitleText);
+
+    // 부제 페이드 인 (딜레이)
+    this.tweens.add({
+      targets: subtitleText,
+      alpha: 1,
+      duration: 800,
+      delay: 500,
+      ease: 'Power2'
+    });
+
+    // 시작 안내
+    const startText = this.add.text(width / 2, height / 2 + 80, '[ Press SPACE or ENTER to START ]', {
+      fontSize: '18px',
+      fontFamily: 'monospace',
+      color: '#ffffff'
+    });
+    startText.setOrigin(0.5);
+    startText.setDepth(9910);
+    startText.setAlpha(0);
+    this.titleElements.push(startText);
+
+    // 시작 텍스트 페이드 인 + 깜빡임
+    this.tweens.add({
+      targets: startText,
+      alpha: 1,
+      duration: 500,
+      delay: 1000,
+      onComplete: () => {
+        // 깜빡임 효과
+        this.tweens.add({
+          targets: startText,
+          alpha: 0.4,
+          duration: 600,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        });
+      }
+    });
+
+    // 저작권
+    const copyrightText = this.add.text(width / 2, height - 50, '© 2026 dorongnyong', {
+      fontSize: '12px',
+      fontFamily: 'Arial, sans-serif',
+      color: '#666666'
+    });
+    copyrightText.setOrigin(0.5);
+    copyrightText.setDepth(9910);
+    this.titleElements.push(copyrightText);
+
+    // 시작 키 입력 대기 (1.5초 후)
+    this.time.delayedCall(1500, () => {
+      const startGame = () => {
+        // 모든 타이틀 요소 제거
+        this.titleElements.forEach(el => {
+          if (el) this.tweens.killTweensOf(el);
+          if (el && el.destroy) el.destroy();
+        });
+        this.titleElements = [];
+
+        // 게임 시작
+        this.moveTimer.paused = false;
+
+        // BGM 시작
+        if (!this.musicStarted && this.bgMusic) {
+          this.bgMusic.play();
+          this.musicStarted = true;
+        }
+      };
+
+      this.input.keyboard.once('keydown-SPACE', startGame);
+      this.input.keyboard.once('keydown-ENTER', startGame);
     });
   }
 
@@ -39414,6 +40418,11 @@ export default class SnakeGame extends Phaser.Scene {
     this.runnerMode = false;
     this.runnerPhase = 'none';
 
+    // BGM 정리
+    if (this.rainIsBestMusic && this.rainIsBestMusic.isPlaying) {
+      this.rainIsBestMusic.stop();
+    }
+
     // 타이머 정리
     this.runnerTimers.forEach(timer => {
       if (timer && timer.destroy) timer.destroy();
@@ -39431,6 +40440,18 @@ export default class SnakeGame extends Phaser.Scene {
       this.runnerDistanceText.destroy();
       this.runnerDistanceText = null;
     }
+
+    // 엔딩 비디오 정리
+    if (this.endingVideo) {
+      this.endingVideo.destroy();
+      this.endingVideo = null;
+    }
+    if (this.finalEndingVideo) {
+      this.finalEndingVideo.destroy();
+      this.finalEndingVideo = null;
+    }
+    this.finalEndingStarted = false;
+    this.postVideoEndingStarted = false;
 
     // 빛 오브 정리
     if (this.runnerLightOrb) {
