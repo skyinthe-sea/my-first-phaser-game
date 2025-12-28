@@ -4250,8 +4250,9 @@ export default class SnakeGame extends Phaser.Scene {
     // 스테이지 클리어 중에는 충돌 무시
     if (this.isStageClearingAnimation) return;
 
-    const hitSnake = this.snake.some(segment => segment.x === saw.x && segment.y === saw.y);
-    if (hitSnake) {
+    // 뱀 머리에만 충돌 (몸통은 무시)
+    const head = this.snake[0];
+    if (head.x === saw.x && head.y === saw.y) {
       this.endGame();
     }
   }
@@ -11191,17 +11192,19 @@ export default class SnakeGame extends Phaser.Scene {
       duration: 500,
       ease: 'Back.easeOut',
       onComplete: () => {
-        // 상점 조건이면 바로 상점 열기 (카운트다운은 완료 후)
-        // Stage 3 클리어 후 상점 오픈
-        if (this.currentStage >= 3) {
-          this.time.delayedCall(500, () => {
-            clearText.destroy();
-            this.openShop();
-          });
-        } else {
-          // 상점 없으면 기존대로 카운트다운
-          this.startStageClearCountdown(clearText);
-        }
+        // 🚧 상점 임시 폐쇄 - 나중에 아이템 정리 후 다시 오픈 예정
+        // Stage 3 클리어 후 상점 오픈 (임시 비활성화)
+        // if (this.currentStage >= 3) {
+        //   this.time.delayedCall(500, () => {
+        //     clearText.destroy();
+        //     this.openShop();
+        //   });
+        // } else {
+        //   this.startStageClearCountdown(clearText);
+        // }
+
+        // 상점 폐쇄 중 - 바로 다음 스테이지로
+        this.startStageClearCountdown(clearText);
       }
     });
   }
@@ -17001,12 +17004,13 @@ export default class SnakeGame extends Phaser.Scene {
                 this.bgMusic.play();
               }
 
-              // 기존 스테이지 클리어 플로우 (상점 열기)
-              if (this.currentStage >= 3) {
-                this.openShop();
-              } else {
-                this.showStageClearText();
-              }
+              // 🚧 상점 임시 폐쇄 - 바로 다음 스테이지로
+              // if (this.currentStage >= 3) {
+              //   this.openShop();
+              // } else {
+              //   this.showStageClearText();
+              // }
+              this.showStageClearText();
             }
           });
         });
@@ -24890,12 +24894,13 @@ export default class SnakeGame extends Phaser.Scene {
 
         this.cleanupBulletBoss();
 
-        // 상점 오픈 또는 다음 스테이지
-        if (this.currentStage >= 3) {
-          this.openShop();
-        } else {
-          this.showStageClearText();
-        }
+        // 🚧 상점 임시 폐쇄 - 바로 다음 스테이지로
+        // if (this.currentStage >= 3) {
+        //   this.openShop();
+        // } else {
+        //   this.showStageClearText();
+        // }
+        this.showStageClearText();
       });
     });
   }
@@ -25141,6 +25146,11 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 2. 속삭임 텍스트
     this.time.delayedCall(1000, () => {
+      // 기존 BGM 끄기 (... 표시 직전)
+      if (this.bgMusic && this.bgMusic.isPlaying) {
+        this.bgMusic.stop();
+      }
+
       const whisperText = this.add.text(width / 2, height / 2 - 50, '', {
         fontSize: '28px',
         fill: '#666666',
@@ -25181,10 +25191,7 @@ export default class SnakeGame extends Phaser.Scene {
         // 🆕 DOM(브라우저 배경)도 함께 어두워지는 공포 연출!
         this.createBrowserDarkness();
 
-        // 9탄 보스 BGM으로 변경 (맵 바깥이 검정색이 되는 순간)
-        if (this.bgMusic && this.bgMusic.isPlaying) {
-          this.bgMusic.stop();
-        }
+        // 9탄 보스 BGM 시작 (맵 바깥이 검정색이 되는 순간)
         if (this.boss9Music) {
           this.boss9Music.play();
         }
@@ -27846,10 +27853,15 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
+    // 부활 가능 여부 체크 - 가능하면 endGame()으로 부활 시퀀스 진행
+    if (this.canRevive()) {
+      this.endGame();
+      return;
+    }
+
+    // 부활 불가 - 잡아먹히는 애니메이션!
     this.gameOver = true;
     if (this.moveTimer) this.moveTimer.paused = true;
-
-    // 🆕 잡아먹히는 애니메이션!
     this.showBossEatingAnimation();
   }
 
@@ -29345,6 +29357,13 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 보스에게 죽음
   handleFogBossKill() {
+    // 부활 가능 여부 체크 - 가능하면 endGame()으로 부활 시퀀스 진행
+    if (this.canRevive()) {
+      this.endGame();
+      return;
+    }
+
+    // 부활 불가 - 보스에게 죽는 연출
     this.gameOver = true;
     this.moveTimer.paused = true;
 
