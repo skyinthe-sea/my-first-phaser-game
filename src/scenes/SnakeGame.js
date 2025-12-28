@@ -220,7 +220,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.gearTitanElement = null;
     this.gearTitanContainer = null;
     this.gearTitanHitCount = 0;
-    this.gearTitanHitsToKill = 6;
+    this.gearTitanHitsToKill = 4;
     this.gearTitanHP = this.gearTitanHitsToKill;
     this.gearTitanGears = [];
     this.gearTitanCore = null;
@@ -229,6 +229,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.gearTitanAnimTimer = null;
     this.gearTitanVulnerable = false;
     this.gearTitanStunEndTime = 0;
+    this.isEnrageAttacking = false; // enrage 모드 공격 중 플래그
 
     // Steam Overheat System (기어 타이탄 보스용)
     this.isCharging = false;
@@ -1952,18 +1953,13 @@ export default class SnakeGame extends Phaser.Scene {
     }
 
     // 기어 타이탄 보스 몸 충돌 체크 (대시/무적 상태가 아닐 때)
+    // 대시 없이 보스에 부딪히면 무조건 죽음! (퍼펙트 대시로만 HIT 가능)
     if (this.gearTitanMode && this.gearTitanPosition && !this.isDashing && !this.isInvincible) {
       const distToBoss = Math.abs(newHead.x - this.gearTitanPosition.x) + Math.abs(newHead.y - this.gearTitanPosition.y);
       if (distToBoss <= 2) {
-        // vulnerable 상태면 HIT 처리
-        if (this.gearTitanVulnerable) {
-          this.handleGearTitanHit();
-          return;
-        } else {
-          // vulnerable 아니면 게임 오버
-          this.endGame();
-          return;
-        }
+        // 대시 없이 보스에 닿으면 무조건 게임 오버 (vulnerable 상태라도)
+        this.endGame();
+        return;
       }
     }
 
@@ -5054,8 +5050,8 @@ export default class SnakeGame extends Phaser.Scene {
     bubble.lineBetween(10, 17, 0, 28);
     bubbleContainer.add(bubble);
 
-    // 대사 텍스트
-    const snakeDialogue = "Good riddance! Now where's the big boss?";
+    // 대사 텍스트 (말풍선 크기에 맞게 축소)
+    const snakeDialogue = "Finally! Where's the boss?";
     const dialogueText = this.add.text(0, 0, '', {
       fontSize: '12px',
       fill: '#222222',
@@ -6058,49 +6054,39 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   // 난이도에 따른 존 크기 조정 (HIT 수가 올라갈수록 어려워짐)
+  // 4hit 클리어 기준으로 조정 - 마지막도 너무 어렵지 않게
   getSteamDashDifficulty() {
     const hitCount = this.gearTitanHitCount || 0;
 
-    // 기본값
+    // 기본값 (0 HIT - 첫번째 시도)
     let perfectStart = 0.35;
-    let perfectEnd = 0.55;
+    let perfectEnd = 0.55;     // 20% 구간
     let dangerStart = 0.75;
     let overheatThreshold = 0.95;
     let gaugeDuration = 2500;
 
-    // 히트 수에 따라 점점 어려워짐
+    // 히트 수에 따라 점점 어려워짐 (4hit 기준 완만한 곡선)
     if (hitCount >= 1) {
-      perfectStart = 0.38;
-      perfectEnd = 0.52;
+      // 2번째 시도
+      perfectStart = 0.36;
+      perfectEnd = 0.52;       // 16% 구간
+      dangerStart = 0.72;
+      gaugeDuration = 2300;
+    }
+    if (hitCount >= 2) {
+      // 3번째 시도 (폭주 시작) - 살짝 어려워지지만 충분히 클리어 가능
+      perfectStart = 0.36;
+      perfectEnd = 0.52;       // 16% 구간 (완화)
       dangerStart = 0.72;
       gaugeDuration = 2200;
     }
-    if (hitCount >= 2) {
-      perfectStart = 0.40;
-      perfectEnd = 0.50;
-      dangerStart = 0.68;
-      gaugeDuration = 2000;
-    }
     if (hitCount >= 3) {
-      perfectStart = 0.42;
-      perfectEnd = 0.48;
-      dangerStart = 0.65;
-      overheatThreshold = 0.90;
-      gaugeDuration = 1800;
-    }
-    if (hitCount >= 4) {
-      perfectStart = 0.43;
-      perfectEnd = 0.47;
-      dangerStart = 0.62;
-      overheatThreshold = 0.88;
-      gaugeDuration = 1600;
-    }
-    if (hitCount >= 5) {
-      perfectStart = 0.44;
-      perfectEnd = 0.46;
-      dangerStart = 0.60;
-      overheatThreshold = 0.85;
-      gaugeDuration = 1400;
+      // 마지막 4번째 시도 - 도전적이지만 무리하지 않게
+      perfectStart = 0.37;
+      perfectEnd = 0.53;       // 16% 구간 (완화)
+      dangerStart = 0.72;
+      overheatThreshold = 0.94;
+      gaugeDuration = 2200;
     }
 
     // 값 업데이트
@@ -6956,6 +6942,71 @@ export default class SnakeGame extends Phaser.Scene {
     });
   }
 
+  // 보스에 닿았지만 퍼펙트가 아니어서 MISS
+  showBossMissEffect(x, y) {
+    const { width, height } = this.cameras.main;
+
+    // 카메라 흔들림 (약하게)
+    this.cameras.main.shake(150, 0.01);
+
+    // 스파크 효과 (약한 충돌)
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const spark = this.add.graphics().setDepth(5003);
+      spark.fillStyle(0xff8800, 1);
+      spark.fillCircle(0, 0, 3);
+      spark.x = x;
+      spark.y = y;
+
+      this.tweens.add({
+        targets: spark,
+        x: x + Math.cos(angle) * 40,
+        y: y + Math.sin(angle) * 40,
+        alpha: 0,
+        duration: 300,
+        ease: 'Power2',
+        onComplete: () => spark.destroy()
+      });
+    }
+
+    // MISS 텍스트
+    const missText = this.add.text(width / 2, height / 2, 'MISS!', {
+      fontSize: '48px',
+      fill: '#ff4444',
+      fontStyle: 'bold',
+      stroke: '#660000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(5010).setAlpha(0).setScale(2);
+
+    this.tweens.add({
+      targets: missText,
+      alpha: 1,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 150,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        // 서브텍스트
+        const subText = this.add.text(width / 2, height / 2 + 40, 'Need PERFECT charge!', {
+          fontSize: '18px',
+          fill: '#ffcc00'
+        }).setOrigin(0.5).setDepth(5010);
+
+        this.tweens.add({
+          targets: [missText, subText],
+          alpha: 0,
+          y: '-=30',
+          duration: 600,
+          delay: 400,
+          onComplete: () => {
+            missText.destroy();
+            subText.destroy();
+          }
+        });
+      }
+    });
+  }
+
   // Steam Dash 실행 (파워 레벨에 따라 다른 효과)
   performSteamDash(power) {
     if (this.isDashing) return;
@@ -6969,6 +7020,7 @@ export default class SnakeGame extends Phaser.Scene {
     const startPos = { x: head.x, y: head.y };
 
     // 파워에 따른 대시 거리 및 속도
+    // 퍼펙트만 보스 히트 가능, 그 외는 MISS
     let dashDist, canHitBoss, dashDuration;
     switch (power) {
       case 'perfect':
@@ -6978,7 +7030,7 @@ export default class SnakeGame extends Phaser.Scene {
         break;
       case 'strong':
         dashDist = 6;
-        canHitBoss = true;
+        canHitBoss = false; // MISS - 퍼펙트만 히트
         dashDuration = 130;
         break;
       case 'weak':
@@ -7029,15 +7081,23 @@ export default class SnakeGame extends Phaser.Scene {
 
     const actualDashDist = Math.min(dashDist, maxTravel);
 
-    // 보스 충돌 판정
+    // 보스 충돌 판정 (히트 범위 확대: ±1 타일 허용)
     const alignedWithCore = this.gearTitanMode && this.gearTitanPosition && (
-      (vec.dx !== 0 && head.y === this.gearTitanPosition.y) ||
-      (vec.dy !== 0 && head.x === this.gearTitanPosition.x)
+      (vec.dx !== 0 && Math.abs(head.y - this.gearTitanPosition.y) <= 1) ||
+      (vec.dy !== 0 && Math.abs(head.x - this.gearTitanPosition.x) <= 1)
     );
     let hitBoss = false;
-    if (this.gearTitanMode && this.gearTitanPosition && canHitBoss) {
+    let missBoss = false; // 퍼펙트 아닌 대시로 보스에 닿았을 때
+    if (this.gearTitanMode && this.gearTitanPosition) {
       const distToCore = Math.abs(head.x - this.gearTitanPosition.x) + Math.abs(head.y - this.gearTitanPosition.y);
-      if (alignedWithCore && distToCore <= actualDashDist) hitBoss = true;
+      // 정렬 상태에서 대시 거리 내에 있으면 히트 (핵 크기 +1 고려)
+      if (alignedWithCore && distToCore <= actualDashDist + 1) {
+        if (canHitBoss) {
+          hitBoss = true;
+        } else {
+          missBoss = true; // 퍼펙트가 아니면 MISS
+        }
+      }
     }
 
     // 게임 틱 멈춤
@@ -7296,6 +7356,20 @@ export default class SnakeGame extends Phaser.Scene {
       if (hitBoss && this.gearTitanMode) {
         this.time.delayedCall(30, () => {
           this.performBossImpact(newHead, startPos, returnDir);
+        });
+      } else if (missBoss && this.gearTitanMode) {
+        // 퍼펙트가 아닌 대시로 보스에 닿음 - MISS!
+        this.time.delayedCall(30, () => {
+          this.showBossMissEffect(endPixelX, endPixelY);
+          // HIT처럼 튕겨나감 (안전하게 복귀)
+          this.bounceSnakeBack(newHead, startPos, returnDir, () => {
+            this.isDashing = false;
+            this.direction = returnDir;
+            this.inputQueue = [];
+            this.isInvincible = false;
+            if (this.moveTimer) this.moveTimer.paused = false;
+            this.draw();
+          });
         });
       } else {
         this.time.delayedCall(50, () => {
@@ -8461,6 +8535,8 @@ export default class SnakeGame extends Phaser.Scene {
 
   makeGearTitanVulnerable() {
     if (!this.gearTitanMode) return;
+    // 이미 취약 상태면 중복 호출 방지 (여러 공격이 동시에 끝날 때)
+    if (this.gearTitanVulnerable) return;
 
     this.gearTitanVulnerable = true;
     this.gearTitanPhase = 'vulnerable';
@@ -8497,8 +8573,8 @@ export default class SnakeGame extends Phaser.Scene {
       this.gearTitanCore.fillCircle(0, -this.gridSize * 2 * 0.05, this.gridSize * 2 * 0.1);
     }
 
-    // 짧은 취약 창 (더 어려운 난이도)
-    this.time.delayedCall(1800, () => {
+    // 취약 시간 (히트 가능 시간)
+    this.time.delayedCall(2500, () => {
       if (this.gearTitanHitText && this.gearTitanHitText.active) {
         this.gearTitanHitText.destroy();
         this.gearTitanHitText = null;
@@ -8632,6 +8708,8 @@ export default class SnakeGame extends Phaser.Scene {
           enrageText.destroy();
 
           // 광폭화 공격 (모든 패턴 동시)
+          // Phase3(대시)가 가장 빨리 끝나서 먼저 취약상태가 됨
+          // makeGearTitanVulnerable()이 중복 호출을 방지하므로 안전함
           this.gearTitanPhase1Attack();
           this.time.delayedCall(500, () => this.gearTitanPhase2Attack());
           this.time.delayedCall(900, () => this.gearTitanPhase3Attack());
@@ -8767,9 +8845,12 @@ export default class SnakeGame extends Phaser.Scene {
         yoyo: true,
         repeat: 5,
         onComplete: () => {
-          this.gearTitanContainer.iterate(child => {
-            if (child.clearTint) child.clearTint();
-          });
+          // 승리 처리 중 컨테이너가 파괴될 수 있음
+          if (this.gearTitanContainer) {
+            this.gearTitanContainer.iterate(child => {
+              if (child.clearTint) child.clearTint();
+            });
+          }
         }
       });
     }
@@ -30862,6 +30943,10 @@ export default class SnakeGame extends Phaser.Scene {
 
     // 스테이지 리셋 (개발 모드용)
     this.resetForDevMode();
+
+    // 개발자 모드 보너스: 10000 점수 지급
+    this.score += 10000;
+    this.scoreText.setText(this.score.toString());
 
     // 18탄 phase 직접 진입
     if (targetStage === 18 && targetPhase) {
