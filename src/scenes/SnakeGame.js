@@ -546,6 +546,7 @@ export default class SnakeGame extends Phaser.Scene {
     // 스테이지 시스템
     this.currentStage = 1; // 현재 스테이지 (1~100)
     this.maxStages = 100; // 최대 스테이지
+    this.isTransitioningStage = false; // 스테이지 전환 중 플래그 (중복 방지)
 
     // 뱀 머리 스프라이트 생성 (현재 미사용)
     this.snakeHeadSprite = this.add.sprite(0, 0, 'snake_head_side');
@@ -659,8 +660,8 @@ export default class SnakeGame extends Phaser.Scene {
     this.speedBoostAngle = 0; // 궤도 회전 각도
     this.speedBoostOrbitalTimer = null; // 궤도 업데이트 타이머
 
-    // 부활 시스템 (500원 부활)
-    this.reviveCost = 500; // 부활 비용
+    // 부활 시스템 (300원 부활)
+    this.reviveCost = 300; // 부활 비용
     this.isReviving = false; // 부활 처리 중 플래그
     this.reviveElements = []; // 부활 UI 요소들 (정리용)
 
@@ -1900,22 +1901,25 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
-    // 데드존 충돌 체크
-    const hitDeadZone = this.deadZones.some(dz =>
-      dz.x === newHead.x && dz.y === newHead.y
-    );
-    if (hitDeadZone) {
+    // 데드존 충돌 체크 (무적 상태에서는 무시)
+    if (!this.isInvincible) {
+      const hitDeadZone = this.deadZones.some(dz =>
+        dz.x === newHead.x && dz.y === newHead.y
+      );
+      if (hitDeadZone) {
+        this.endGame();
+        return;
+      }
+    }
+
+    // 무적 상태가 아닐 때만 톱니 충돌 체크
+    if (!this.isInvincible && this.isSawTileDanger(newHead.x, newHead.y)) {
       this.endGame();
       return;
     }
 
-    if (this.isSawTileDanger(newHead.x, newHead.y)) {
-      this.endGame();
-      return;
-    }
-
-    // 독가스 영역 충돌 체크
-    if (this.isInGasZone(newHead.x, newHead.y)) {
+    // 독가스 영역 충돌 체크 (무적 상태에서는 무시)
+    if (!this.isInvincible && this.isInGasZone(newHead.x, newHead.y)) {
       this.endGame();
       return;
     }
@@ -4249,6 +4253,8 @@ export default class SnakeGame extends Phaser.Scene {
     if (!saw || !saw.canKill) return;
     // 스테이지 클리어 중에는 충돌 무시
     if (this.isStageClearingAnimation) return;
+    // 무적 상태에서는 충돌 무시
+    if (this.isInvincible) return;
 
     // 뱀 머리에만 충돌 (몸통은 무시)
     const head = this.snake[0];
@@ -4585,8 +4591,8 @@ export default class SnakeGame extends Phaser.Scene {
       duration: saw.moveDelay * 0.4,
       ease: 'Power2',
       onComplete: () => {
-        // 충돌 체크 (스테이지 클리어 중에는 무시)
-        if (!this.isStageClearingAnimation && saw.canKill && this.checkEnhancedSawCollision(saw)) {
+        // 충돌 체크 (스테이지 클리어 중 또는 무적 상태에서는 무시)
+        if (!this.isStageClearingAnimation && !this.isInvincible && saw.canKill && this.checkEnhancedSawCollision(saw)) {
           this.endGame();
         }
       }
@@ -8884,6 +8890,10 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   showGearTitanVictory() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     this.gearTitanPhase = 'victory';
 
     const { width, height } = this.cameras.main;
@@ -9010,8 +9020,8 @@ export default class SnakeGame extends Phaser.Scene {
                 this.bgMusic.play();
               }
 
-              // 상점 오픈 (뱀 점프 애니메이션 포함)
-              this.stageClear();
+              // 다음 스테이지로 (상점 폐쇄 중)
+              this.shopCountdownAndStart();
             });
           }
         });
@@ -10457,11 +10467,10 @@ export default class SnakeGame extends Phaser.Scene {
     this.showReviveFailedSequence();
   }
 
-  // 부활 가능 여부 체크
+  // 부활 가능 여부 체크 (점수에서 차감)
   canRevive() {
     if (this.isReviving) return false; // 이미 부활 처리 중
-    const totalAssets = this.money + this.score;
-    return totalAssets >= this.reviveCost;
+    return this.score >= this.reviveCost;
   }
 
   // 기존 게임오버 처리 (부활 실패 후 또는 직접 호출)
@@ -10570,7 +10579,7 @@ export default class SnakeGame extends Phaser.Scene {
     const { width, height } = this.cameras.main;
     const centerX = width / 2;
     const centerY = height / 2;
-    const totalAssets = this.money + this.score;
+    const totalAssets = this.score; // 점수에서만 차감
 
     // Phase 1: 슬로우모션 + 어둡게
     this.time.timeScale = 0.3;
@@ -10615,8 +10624,8 @@ export default class SnakeGame extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(1001);
     this.reviveElements.push(assetText);
 
-    // -$500 표시
-    const minusText = this.add.text(centerX + 80, centerY + 20, '-$500', {
+    // -$300 표시
+    const minusText = this.add.text(centerX + 80, centerY + 20, '-$300', {
       fontSize: '28px',
       fill: '#ff4444',
       fontStyle: 'bold'
@@ -10724,7 +10733,7 @@ export default class SnakeGame extends Phaser.Scene {
       onComplete: () => {
         this.cleanupReviveElements();
         this.time.timeScale = 1;
-        this.money = remaining;
+        this.score = remaining; // 점수에서 차감
         this.restartCurrentStage();
       }
     });
@@ -10738,7 +10747,7 @@ export default class SnakeGame extends Phaser.Scene {
     const { width, height } = this.cameras.main;
     const centerX = width / 2;
     const centerY = height / 2;
-    const totalAssets = this.money + this.score;
+    const totalAssets = this.score; // 점수에서만 차감
 
     // 슬로우모션 없이 빠르게
     const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7)
@@ -10756,8 +10765,8 @@ export default class SnakeGame extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(1001);
     this.reviveElements.push(assetText);
 
-    // NEED $500 표시
-    const needText = this.add.text(centerX, centerY + 60, 'NEED $500', {
+    // NEED $300 표시
+    const needText = this.add.text(centerX, centerY + 60, 'NEED $300', {
       fontSize: '24px',
       fill: '#ff6666',
       fontStyle: 'bold'
@@ -10881,10 +10890,10 @@ export default class SnakeGame extends Phaser.Scene {
       this.snakePoisoned = false;
     }
 
-    // 게임 상태 리셋 (스테이지는 유지)
+    // 게임 상태 리셋 (스테이지는 유지, score는 누적)
     this.gameOver = false;
     this.isReviving = false;
-    this.score = 0;
+    // this.score는 누적되므로 리셋하지 않음
     this.foodCount = 0;
 
     // 뱀 초기화 (3칸)
@@ -10924,8 +10933,8 @@ export default class SnakeGame extends Phaser.Scene {
       this.food = this.generateFood();
     }
 
-    // UI 업데이트
-    this.scoreText.setText('0');
+    // UI 업데이트 (score는 누적)
+    this.scoreText.setText(this.score.toString());
     this.foodCountText.setText('0');
     this.updateMoneyDisplay();
 
@@ -10940,18 +10949,22 @@ export default class SnakeGame extends Phaser.Scene {
     }
     this.speedText.setText(startSpeed + 'ms');
 
-    // 뱀 반짝임 효과 (부활 표시)
+    // 뱀 반짝임 효과 (부활 표시) + 1초 무적
     this.showReviveSpawnEffect();
+    this.isInvincible = true;
+    this.time.delayedCall(1000, () => {
+      this.isInvincible = false;
+    });
 
-    // 탄막보스 스테이지: 보스 재시작
-    if (this.isBulletBossStage()) {
+    // 탄막보스 스테이지: 보스가 이미 진행 중이 아닐 때만 재시작
+    if (this.isBulletBossStage() && !this.bulletBossMode) {
       this.time.delayedCall(800, () => {
         this.startBulletBoss();
       });
     }
 
-    // 기어 타이탄 스테이지: 보스 시작
-    if (this.isGearTitanStage()) {
+    // 기어 타이탄 스테이지: 보스가 이미 진행 중이 아닐 때만 시작
+    if (this.isGearTitanStage() && !this.gearTitanMode) {
       this.time.delayedCall(800, () => {
         this.startGearTitan();
       });
@@ -11005,6 +11018,10 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   stageClear() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     // 게임 일시정지
     this.moveTimer.paused = true;
 
@@ -11283,6 +11300,9 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   showNextStage() {
+    // 스테이지 전환 플래그 리셋 (다음 클리어 준비)
+    this.isTransitioningStage = false;
+
     const { width, height } = this.cameras.main;
 
     const { stage: nextStage } = this.getNextStageAfterClear();
@@ -11478,9 +11498,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.foodCount = 0;
     this.foodCountText.setText('0');
 
-    // 스코어 리셋 (매 스테이지 0에서 시작)
-    this.score = 0;
-    this.scoreText.setText('0');
+    // 스코어는 누적 (리셋하지 않음)
+    // this.score = 0; // 삭제 - 스코어 누적
+    this.scoreText.setText(this.score.toString());
 
     // 콤보는 유지 (스테이지 넘어가도 이어짐)
     this.directionChangesCount = 0;
@@ -16907,11 +16927,15 @@ export default class SnakeGame extends Phaser.Scene {
   }
 
   showBossVictory() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     const { width, height } = this.cameras.main;
     this.bossPhase = 'victory';
 
-    // 보너스 점수 추가 (보스전은 1000점 보너스만)
-    this.score = 1000;
+    // 보너스 점수 추가 (보스전은 기존 점수 + 1000점 보너스)
+    this.score += 1000;
     this.scoreText.setText(this.score.toString());
 
     // 보스 클리어 텍스트
@@ -17010,7 +17034,7 @@ export default class SnakeGame extends Phaser.Scene {
               // } else {
               //   this.showStageClearText();
               // }
-              this.showStageClearText();
+              this.shopCountdownAndStart();
             }
           });
         });
@@ -21251,6 +21275,10 @@ export default class SnakeGame extends Phaser.Scene {
 
   // ========== NEXUS 승리 연출 ==========
   showNexusVictory() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     console.log('[NEXUS] Victory!');
     this.nexusPhase = 'victory';
     this.moveTimer.paused = true;
@@ -21441,7 +21469,8 @@ export default class SnakeGame extends Phaser.Scene {
 
                   this.cleanupNexus();
                   this.nexusMode = false;
-                  this.stageClear();
+                  // 다음 스테이지로 (상점 폐쇄 중)
+                  this.shopCountdownAndStart();
                 });
               });
             });
@@ -24612,6 +24641,10 @@ export default class SnakeGame extends Phaser.Scene {
   // ========== 승리 처리 ==========
 
   showBulletBossVictory() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     // 이미 파이널 히트에서 phase를 victory로 설정했으므로 다시 확인
     this.bulletBossPhase = 'victory';
     const { width, height } = this.cameras.main;
@@ -24804,16 +24837,19 @@ export default class SnakeGame extends Phaser.Scene {
         }
       });
 
-      // 점수 카운트업 효과
-      this.score = 0;
+      // 점수 카운트업 효과 (기존 점수에 +1000 보너스)
+      const baseScore = this.score;
+      const bonusAmount = 1000;
+      let addedBonus = 0;
       const scoreCountUp = this.time.addEvent({
         delay: 20,
         callback: () => {
-          this.score += 50;
-          if (this.score >= 1000) {
-            this.score = 1000;
+          addedBonus += 50;
+          if (addedBonus >= bonusAmount) {
+            addedBonus = bonusAmount;
             scoreCountUp.remove();
           }
+          this.score = baseScore + addedBonus;
           this.scoreText.setText(this.score.toString());
         },
         repeat: 20
@@ -24900,7 +24936,7 @@ export default class SnakeGame extends Phaser.Scene {
         // } else {
         //   this.showStageClearText();
         // }
-        this.showStageClearText();
+        this.shopCountdownAndStart();
       });
     });
   }
@@ -29925,6 +29961,10 @@ export default class SnakeGame extends Phaser.Scene {
 
   // 승리 시퀀스 (Dawn Breaking) - 드라마틱 버전
   showFogBossVictory() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     const { width, height } = this.cameras.main;
     const victoryElements = [];
 
@@ -30351,9 +30391,9 @@ export default class SnakeGame extends Phaser.Scene {
       this.comboShieldCount = this.savedFogBossShieldCount;
       this.updateItemStatusUI();
 
-      // 6-6. 상점 오픈 또는 다음 스테이지
+      // 6-6. 다음 스테이지로 (상점 폐쇄 중)
       this.time.delayedCall(1200, () => {
-        this.stageClear();
+        this.shopCountdownAndStart();
       });
     });
   }
@@ -31063,9 +31103,9 @@ export default class SnakeGame extends Phaser.Scene {
     this.direction = 'RIGHT';
     this.inputQueue = [];
 
-    // 점수/먹이 리셋
-    this.score = 0;
-    this.scoreText.setText('0');
+    // 점수는 누적, 먹이만 리셋
+    // this.score = 0; // 삭제 - 스코어 누적
+    this.scoreText.setText(this.score.toString());
     this.foodCount = 0;
     this.foodCountText.setText('0');
 
@@ -36900,6 +36940,10 @@ export default class SnakeGame extends Phaser.Scene {
    * Fourth Wall 승리 시퀀스
    */
   showFourthWallVictory() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     console.log('🏆 Fourth Wall Victory!');
     this.fourthWallPhase = 'victory';
     this.multiverseCollapsePhase = 'victory';
@@ -37779,6 +37823,10 @@ export default class SnakeGame extends Phaser.Scene {
    * Multiverse Collapse 승리!
    */
   showMultiverseCollapseVictory() {
+    // 중복 호출 방지
+    if (this.isTransitioningStage) return;
+    this.isTransitioningStage = true;
+
     console.log('🏆 Multiverse Collapse Victory!');
 
     this.multiverseCollapsePhase = 'victory';
