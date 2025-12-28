@@ -52,6 +52,17 @@ export default class SnakeGame extends Phaser.Scene {
     this.load.audio('meta_crush', 'assets/sfx/16_crush.mp3');
     // 16탄 카운트다운 효과음
     this.load.audio('meta_count', 'assets/sfx/16_count.mp3');
+    // 18탄 Phase1 어택 효과음
+    this.load.audio('attack18_effect', 'assets/sfx/18_attack.mp3');
+    // 18탄 Phase2 게임 메뉴 공격 효과음
+    this.load.audio('game_attack18', 'assets/sfx/18_game_attack.mp3');
+    // 18탄 Phase2 electric shock 효과음 (1~4)
+    this.load.audio('electric_shock1', 'assets/sfx/Electric_shock_1.mp3');
+    this.load.audio('electric_shock2', 'assets/sfx/Electric_shock_2.mp3');
+    this.load.audio('electric_shock3', 'assets/sfx/Electric_shock_3.mp3');
+    this.load.audio('electric_shock4', 'assets/sfx/Electric_shock_4.mp3');
+    // 18탄 Phase2 GAME OVER 글자 먹기 효과음
+    this.load.audio('gurio_sound', 'assets/sfx/Guiro_sound_2.mp3');
 
     // 뱀 머리 스프라이트 로드 (2개로 4방향 구현)
     this.load.image('snake_head_side', 'assets/sprite/snake_head_side.png'); // 좌우
@@ -361,7 +372,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.foodUniverse = 1; // 먹이가 있는 Universe
     this.wormholePassCount = 0; // 웜홀 통과 횟수
     this.metaUniverseFoodCount = 0; // 먹은 먹이 수
-    this.metaUniverseTargetFood = 20; // 클리어 조건: 20개
+    this.metaUniverseTargetFood = 5; // 클리어 조건: 20개 (테스트용 5개)
     this.universeTitle = null; // "Universe X" 타이틀 텍스트
     this.metaUniverseIntroShown = false; // 인트로 표시 여부
     this.comboDisabled = false; // 콤보 비활성화 여부
@@ -440,7 +451,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.fusionInputQueue1 = [];             // 첫 번째 머리 입력 큐
     this.fusionInputQueue2 = [];             // 두 번째 머리 입력 큐
     this.fusionFoodCount = 0;                // 성공한 먹이 수
-    this.fusionTargetFood = 5;               // 클리어 조건
+    this.fusionTargetFood = 20;               // 클리어 조건
     this.fusionFood = null;                  // 현재 먹이 위치
     this.fusionFoodGraphics = null;          // 먹이 그래픽
 
@@ -1666,8 +1677,8 @@ export default class SnakeGame extends Phaser.Scene {
       return;
     }
 
-    // 0~4번째 먹이가 아니면 리턴 (첫 번째 먹이부터 5번째 먹이까지)
-    if (this.foodCount >= 5) {
+    // 0~19번째 먹이가 아니면 리턴 (첫 번째 먹이부터 20번째 먹이까지)
+    if (this.foodCount >= 20) {
       return;
     }
 
@@ -2310,13 +2321,12 @@ export default class SnakeGame extends Phaser.Scene {
       }
 
       // 6번째부터 먹이 파티클 효과 (마지막 먹이 제외)
-      if (this.foodCount >= 5 && this.foodCount < 19) {
+      if (this.foodCount >= 6 && this.foodCount < 19) {
         this.createFoodParticles();
       }
 
       // 스테이지 클리어 체크 - 보스전 중에는 비활성화
-      // TODO: 테스트 완료 후 20으로 원복
-      if (!this.bossMode && this.foodCount >= 5) {
+      if (!this.bossMode && this.foodCount >= 20) {
         this.stageClear();
         return; // 클리어 시퀀스 시작하므로 여기서 리턴
       }
@@ -32059,12 +32069,12 @@ export default class SnakeGame extends Phaser.Scene {
     };
 
     const hintFlashEvent = this.time.addEvent({
-      delay: 60,
+      delay: 50,
       callback: () => {
         flashCount++;
         if (flashCount % 2 === 1) flashHint();
         else hintGraphics.clear();
-        if (flashCount >= 12) {  // 6 → 12 (720ms로 2배 연장)
+        if (flashCount >= 10) {  // 50ms × 10 = 500ms
           hintFlashEvent.destroy();
           hintGraphics.destroy();
         }
@@ -32072,8 +32082,8 @@ export default class SnakeGame extends Phaser.Scene {
       loop: true
     });
 
-    // 3. 머리만 먼저 등장 후 즉시 게임 시작! (180ms 후)
-    this.time.delayedCall(180, () => {
+    // 3. 방향 힌트가 끝난 후 머리 등장 (500ms 힌트 + 100ms 여유)
+    this.time.delayedCall(600, () => {
       // 뱀 초기화 - 머리만!
       this.snake = [{ x: wormholeX, y: wormholeY }];
       this.direction = exitDirection;
@@ -34887,6 +34897,9 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.ghostSnakesDefeated++;
 
+    // 어택 성공 효과음
+    this.sound.play('attack18_effect', { volume: 0.4 });
+
     // 화려한 제거 효과
     this.showGhostDefeatEffect(ghost, index);
 
@@ -35848,12 +35861,20 @@ export default class SnakeGame extends Phaser.Scene {
     // 벽 좁히기 타이머 (1초마다, 총 6번 - 더 빠르고 더 많이)
     let shrinkCount = 0;
     const maxShrinks = 6;
+    this.electricShockSounds = []; // electric_shock 사운드 저장 (나중에 끄기 위해)
 
     const shrinkTimer = this.time.addEvent({
       delay: 1000,
       callback: () => {
         shrinkCount++;
         this.shrinkWalls();
+
+        // electric_shock 효과음 겹쳐서 재생 (1~4번까지)
+        if (shrinkCount <= 4) {
+          const shockSound = this.sound.add(`electric_shock${shrinkCount}`, { volume: 0.25, loop: true });
+          shockSound.play();
+          this.electricShockSounds.push(shockSound);
+        }
 
         // 경고 텍스트 (빠르게) - 숫자 표시 제거
         const warningText = this.add.text(
@@ -35923,6 +35944,17 @@ export default class SnakeGame extends Phaser.Scene {
    */
   shatterWalls() {
     const { width, height } = this.cameras.main;
+
+    // electric_shock 사운드 전부 끄기
+    if (this.electricShockSounds) {
+      this.electricShockSounds.forEach(sound => {
+        if (sound && sound.isPlaying) sound.stop();
+      });
+      this.electricShockSounds = [];
+    }
+
+    // 벽 깨지는 효과음
+    this.sound.play('meta_crush', { volume: 0.4 });
 
     // 대형 플래시
     this.cameras.main.flash(500, 255, 255, 255);
@@ -36151,6 +36183,7 @@ export default class SnakeGame extends Phaser.Scene {
       rotation: Math.PI * 2,
       duration: 600,
       onComplete: () => {
+        this.sound.play('game_attack18', { volume: 0.3 });
         this.createExplosionEffect(uiProjectile.x, uiProjectile.y, 0xff00ff, 5);
         uiProjectile.destroy();
       }
@@ -36785,6 +36818,9 @@ export default class SnakeGame extends Phaser.Scene {
         this.nextExpectedLetterIndex++;
 
         // 2초 셔플 타이머는 리셋하지 않음 - 계속 진행
+
+        // 글자 먹기 효과음
+        this.sound.play('gurio_sound', { volume: 0.35 });
 
         // 효과 (빠르게)
         this.cameras.main.flash(80, 0, 255, 0);
