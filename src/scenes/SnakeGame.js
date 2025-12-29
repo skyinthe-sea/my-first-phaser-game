@@ -265,7 +265,7 @@ export default class SnakeGame extends Phaser.Scene {
     this.gasZoneRadius = 0; // 현재 안전 영역 반경 (타일 단위)
     this.gasZoneMinRadius = 4; // 최소 반경 (게임 가능 영역)
     this.gasZoneTimer = null; // 확장 타이머
-    this.gasZoneExpandInterval = 10000; // 10초마다 확장 (NEXUS v2 - 더 여유있게)
+    this.gasZoneExpandInterval = 3500; // 3.5초마다 확장
     this.gasZoneGraphics = this.add.graphics();
     this.gasZoneGraphics.setDepth(50); // 뱀보다 아래, 그리드보다 위
     this.gasZoneParticles = []; // EMP 파티클들
@@ -303,12 +303,16 @@ export default class SnakeGame extends Phaser.Scene {
     ];
     this.laserRotationSpeed = 0.015; // 레이저 회전 속도 완화
     this.laserLength = 22; // 레이저 길이 (타일) 소폭 감소
-    this.laserFireInterval = 8000; // 발사 주기 8초
+    this.laserFireInterval = 7000; // 발사 주기 7초
     this.laserWarningDuration = 1500; // 경고 1.5초
     this.laserActiveDuration = 1500; // 레이저 활성 시간 단축
     this.laserAnimTimer = null; // 60fps 애니메이션 타이머
     this.laserFireTimer = null; // 발사 타이머
     this.laserPhase = 'idle'; // 'idle' | 'warning' | 'firing'
+    this.laserDelayedCalls = []; // 레이저 사이클 타이머들 (취소용)
+    this.laserCancelItem = null; // 레이저 취소 느낌표 아이템
+    this.laserCancelItemActive = false; // 느낌표 활성화 여부
+    this.laserCancelItemTween = null; // 떠다니는 애니메이션
 
     // ===== Floating Mines (Stage 14: Flux Maze) =====
     this.floatingMines = []; // [{x, y, element, dx, dy, moveTimer}]
@@ -1935,6 +1939,14 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.checkMineCollision(newHead.x, newHead.y)) {
       // checkMineCollision handles the damage/death internally
       if (this.gameOver) return;
+    }
+
+    // 레이저 취소 느낌표 아이템 충돌 체크 (Stage 14)
+    if (this.laserCancelItemActive && this.laserCancelItem) {
+      if (newHead.x === this.laserCancelItem.gridX && newHead.y === this.laserCancelItem.gridY) {
+        this.collectLaserCancelItem();
+        // 수집 후 계속 이동 진행
+      }
     }
 
     // 레이저 터렛 충돌 체크 (Flux Maze - Stage 14)
@@ -17160,6 +17172,11 @@ export default class SnakeGame extends Phaser.Scene {
 
     this.gasZoneEnabled = true;
 
+    // 스테이지별 자기장 축소 주기 설정
+    if (this.currentStage === 14) {
+      this.gasZoneExpandInterval = 7000; // 14탄: 7초
+    }
+
     // 원 중심 계산 (맵 중앙)
     this.gasZoneCenterX = this.cols / 2;
     this.gasZoneCenterY = this.rows / 2;
@@ -18290,27 +18307,48 @@ export default class SnakeGame extends Phaser.Scene {
     if (this.laserTurrets.length === 0) return;
     if (this.gameOver || this.bossPhase === 'victory') return;
 
+    // 이전 타이머들 정리
+    this.clearLaserDelayedCalls();
+
     // 경고 단계
     this.laserPhase = 'warning';
     this.showLaserTurretWarning();
 
     // 경고 후 발사
-    this.time.delayedCall(this.laserWarningDuration, () => {
+    const warningCall = this.time.delayedCall(this.laserWarningDuration, () => {
       if (this.gameOver) return;
+      if (this.laserPhase !== 'warning') return; // 느낌표로 취소됐으면 중단
+
+      // 느낌표 아이템 제거 (못 먹었으면)
+      this.removeLaserCancelItem();
+
       this.laserPhase = 'firing';
       this.activateLasers();
 
       // 발사 종료
-      this.time.delayedCall(this.laserActiveDuration, () => {
+      const firingCall = this.time.delayedCall(this.laserActiveDuration, () => {
+        if (this.laserPhase !== 'firing') return; // 상태 체크
+
         this.deactivateLasers();
         this.laserPhase = 'idle';
 
         // 다음 발사 사이클
-        this.time.delayedCall(this.laserFireInterval - this.laserWarningDuration - this.laserActiveDuration, () => {
+        const nextCall = this.time.delayedCall(this.laserFireInterval - this.laserWarningDuration - this.laserActiveDuration, () => {
           this.fireLaserSequence();
         });
+        this.laserDelayedCalls.push(nextCall);
       });
+      this.laserDelayedCalls.push(firingCall);
     });
+    this.laserDelayedCalls.push(warningCall);
+  }
+
+  // 레이저 타이머 전체 취소
+  clearLaserDelayedCalls() {
+    this.laserDelayedCalls.forEach(call => {
+      if (call && call.destroy) call.destroy();
+    });
+    this.laserDelayedCalls = [];
   }
 
   showLaserTurretWarning() {
@@ -18344,6 +18382,9 @@ export default class SnakeGame extends Phaser.Scene {
       duration: 250,
       onComplete: () => warningText.destroy()
     });
+
+    // 레이저 취소 느낌표 아이템 생성 (비활성화)
+    // this.createLaserCancelItem();
   }
 
   activateLasers() {
@@ -18463,6 +18504,7 @@ export default class SnakeGame extends Phaser.Scene {
 
   checkLaserCollision(headX, headY) {
     if (this.laserPhase !== 'firing') return false;
+    if (this.isInvincible) return false; // 무적 상태면 레이저 무시
 
     const gs = this.gridSize;
     const headPixelX = headX * gs + gs / 2;
@@ -18530,6 +18572,157 @@ export default class SnakeGame extends Phaser.Scene {
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  // 레이저 취소 느낌표 아이템 생성
+  createLaserCancelItem() {
+    if (this.laserCancelItem) return; // 이미 존재하면 생성하지 않음
+
+    // 안전 영역 내 랜덤 위치 계산
+    const safePositions = [];
+    const margin = 3; // 가장자리 여유
+
+    for (let x = margin; x < this.cols - margin; x++) {
+      for (let y = margin; y < this.rows - margin; y++) {
+        // 뱀 위치 체크
+        const isSnake = this.snake.some(seg => seg.x === x && seg.y === y);
+        // 먹이 위치 체크
+        const isFood = this.food && this.food.x === x && this.food.y === y;
+        // 가스존 밖인지 체크
+        const distFromCenter = Math.sqrt(
+          Math.pow(x - this.gasZoneCenterX, 2) + Math.pow(y - this.gasZoneCenterY, 2)
+        );
+        const isInSafeZone = distFromCenter < this.gasZoneRadius - 1;
+
+        if (!isSnake && !isFood && isInSafeZone) {
+          safePositions.push({ x, y });
+        }
+      }
+    }
+
+    if (safePositions.length === 0) return;
+
+    // 랜덤 위치 선택
+    const pos = safePositions[Math.floor(Math.random() * safePositions.length)];
+    const gridSize = 20;
+    const pixelX = pos.x * gridSize + gridSize / 2;
+    const pixelY = pos.y * gridSize + gridSize / 2 + 60; // UI offset
+
+    // 느낌표 컨테이너 생성
+    const container = this.add.container(pixelX, pixelY);
+    container.setDepth(100);
+
+    // 글로우 효과
+    const glow = this.add.graphics();
+    glow.fillStyle(0xffff00, 0.3);
+    glow.fillCircle(0, 0, gridSize);
+    container.add(glow);
+
+    // 느낌표 텍스트
+    const exclamation = this.add.text(0, 0, '!', {
+      fontSize: '24px',
+      fontFamily: 'Arial Black',
+      color: '#ffff00',
+      stroke: '#ff8800',
+      strokeThickness: 3
+    }).setOrigin(0.5);
+    container.add(exclamation);
+
+    // 떠다니는 애니메이션
+    this.laserCancelItemTween = this.tweens.add({
+      targets: container,
+      y: pixelY - 5,
+      duration: 400,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    // 펄스 애니메이션
+    this.tweens.add({
+      targets: glow,
+      alpha: { from: 0.3, to: 0.7 },
+      duration: 300,
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.laserCancelItem = {
+      container,
+      gridX: pos.x,
+      gridY: pos.y
+    };
+    this.laserCancelItemActive = true;
+
+    console.log('[LaserCancel] 느낌표 아이템 생성:', pos.x, pos.y);
+  }
+
+  // 느낌표 아이템 제거
+  removeLaserCancelItem() {
+    if (this.laserCancelItemTween) {
+      this.laserCancelItemTween.stop();
+      this.laserCancelItemTween = null;
+    }
+
+    if (this.laserCancelItem && this.laserCancelItem.container) {
+      this.laserCancelItem.container.destroy(true);
+    }
+
+    this.laserCancelItem = null;
+    this.laserCancelItemActive = false;
+  }
+
+  // 느낌표 수집 시 레이저 취소 처리
+  collectLaserCancelItem() {
+    console.log('[LaserCancel] 느낌표 수집! 레이저 주기 초기화');
+
+    // 느낌표 제거
+    this.removeLaserCancelItem();
+
+    // 모든 레이저 타이머 취소
+    this.clearLaserDelayedCalls();
+
+    // 현재 레이저 경고 숨김
+    this.laserTurrets.forEach(turret => {
+      turret.isWarning = false;
+      if (turret.warningGraphics) turret.warningGraphics.setVisible(false);
+    });
+
+    // 레이저 페이즈 리셋
+    this.laserPhase = 'idle';
+
+    // 수집 효과
+    this.cameras.main.flash(200, 255, 255, 0, true); // 노란색 플래시
+
+    // 취소 메시지 표시
+    const cancelText = this.add.text(
+      this.cameras.main.width / 2,
+      this.cameras.main.height / 2 - 50,
+      'LASER RESET!',
+      {
+        fontSize: '28px',
+        fontFamily: 'Arial Black',
+        color: '#00ff00',
+        stroke: '#004400',
+        strokeThickness: 4
+      }
+    ).setOrigin(0.5).setDepth(200);
+
+    this.tweens.add({
+      targets: cancelText,
+      alpha: 0,
+      y: cancelText.y - 30,
+      duration: 1000,
+      onComplete: () => cancelText.destroy()
+    });
+
+    // 주기 초기화 - 원래 주기(10초) 후 새 사이클 시작
+    const resetCall = this.time.delayedCall(this.laserFireInterval, () => {
+      if (!this.gameOver && this.laserTurrets.length > 0) {
+        this.fireLaserSequence();
+      }
+    });
+    this.laserDelayedCalls.push(resetCall);
+  }
+
   cleanupLaserTurrets() {
     this.laserTurrets.forEach(turret => {
       if (turret.container) turret.container.destroy(true);
@@ -18547,6 +18740,12 @@ export default class SnakeGame extends Phaser.Scene {
     }
 
     this.laserPhase = 'idle';
+
+    // 레이저 타이머 정리
+    this.clearLaserDelayedCalls();
+
+    // 느낌표 아이템도 정리
+    this.removeLaserCancelItem();
 
     console.log('[LaserTurrets] Cleaned up');
   }
@@ -18835,56 +19034,58 @@ export default class SnakeGame extends Phaser.Scene {
     // 카메라 쉐이크
     this.cameras.main.shake(150, 0.015);
 
-    // 몸통 1칸 제거
-    if (this.snake.length > 3) {
-      const removedSegment = this.snake.pop();
+    // 레이저 리셋 기능
+    this.resetLaserByMine();
+  }
 
-      // 제거된 세그먼트 플래시
-      const segX = removedSegment.x * this.gridSize + this.gridSize / 2;
-      const segY = removedSegment.y * this.gridSize + this.gridSize / 2 + this.gameAreaY;
+  // 기뢰 수집 시 레이저 리셋
+  resetLaserByMine() {
+    console.log('[Mines] LASER RESET!');
 
-      const segFlash = this.add.graphics().setDepth(150);
-      segFlash.fillStyle(0xff0000, 0.8);
-      segFlash.fillRect(
-        removedSegment.x * this.gridSize,
-        removedSegment.y * this.gridSize + this.gameAreaY,
-        this.gridSize,
-        this.gridSize
-      );
+    // 모든 레이저 타이머 취소
+    this.clearLaserDelayedCalls();
 
-      this.tweens.add({
-        targets: segFlash,
-        alpha: 0,
-        duration: 300,
-        onComplete: () => segFlash.destroy()
-      });
+    // 현재 레이저 경고 숨김
+    this.laserTurrets.forEach(turret => {
+      turret.isWarning = false;
+      if (turret.warningGraphics) turret.warningGraphics.setVisible(false);
+    });
 
-      // 경고 텍스트
-      const warningText = this.add.text(segX, segY - 20, '-1 SEGMENT!', {
-        fontSize: '14px',
-        fill: '#ff4400',
-        fontStyle: 'bold',
-        stroke: '#000000',
-        strokeThickness: 2
-      }).setOrigin(0.5).setDepth(200);
+    // 레이저 비활성화
+    this.deactivateLasers();
 
-      this.tweens.add({
-        targets: warningText,
-        y: segY - 50,
-        alpha: 0,
-        duration: 800,
-        onComplete: () => warningText.destroy()
-      });
+    // 레이저 페이즈 리셋
+    this.laserPhase = 'idle';
 
-      // 뱀 다시 그리기
-      this.draw();
+    // "LASER RESET!" 텍스트 표시
+    const resetText = this.add.text(
+      this.cameras.main.width / 2,
+      this.cameras.main.height / 2 - 50,
+      'LASER RESET!',
+      {
+        fontSize: '28px',
+        fontFamily: 'Arial Black',
+        color: '#00ffff',
+        stroke: '#004444',
+        strokeThickness: 4
+      }
+    ).setOrigin(0.5).setDepth(200);
 
-      console.log('[Mines] Snake hit! Length:', this.snake.length);
-    } else {
-      // 뱀이 너무 짧으면 즉사
-      console.log('[Mines] Snake too short - game over!');
-      this.endGame();
-    }
+    this.tweens.add({
+      targets: resetText,
+      alpha: 0,
+      y: resetText.y - 30,
+      duration: 1000,
+      onComplete: () => resetText.destroy()
+    });
+
+    // 원래 주기(10초) 후 다음 사이클 시작
+    const resetCall = this.time.delayedCall(this.laserFireInterval, () => {
+      if (!this.gameOver && this.laserTurrets.length > 0) {
+        this.fireLaserSequence();
+      }
+    });
+    this.laserDelayedCalls.push(resetCall);
   }
 
   destroyMine(mine, index) {
