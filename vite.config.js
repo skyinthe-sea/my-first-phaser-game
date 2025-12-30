@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  // itch.io 등 서브디렉토리 배포용 상대경로
+  base: './',
+
   // 개발 서버 설정
   server: {
     port: 5173,
